@@ -243,12 +243,17 @@ func (h *Header) Hash() common.Hash {
     hasher.Write(h.TxHash[:])
     hasher.Write(h.ReceiptHash[:])
 
-    // Bloom filter (empty for now)
-    if h.Bloom != nil {
-        hasher.Write(h.Bloom)
-    } else {
-        hasher.Write(make([]byte, 256))
+    // Bloom filter must be serialized as fixed 256 bytes.
+    // IMPORTANT: nil bloom and empty bloom must hash identically.
+    bloomBytes := make([]byte, 256)
+    if len(h.Bloom) > 0 {
+        copyLen := len(h.Bloom)
+        if copyLen > len(bloomBytes) {
+            copyLen = len(bloomBytes)
+        }
+        copy(bloomBytes, h.Bloom[:copyLen])
     }
+    hasher.Write(bloomBytes)
 
     // Number as fixed 32 bytes
     hasher.Write(safeBigIntToBytes(h.Number, 32))
@@ -763,4 +768,3 @@ func safeBigIntToBytes(value *big.Int, size int) []byte {
         }
         return bytes
 }
-
