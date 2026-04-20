@@ -291,6 +291,20 @@ log.Printf("[blockchain] Warning: failed to update head block hash: %v", err)
 bc.latest.Store(b)
 bc.lastCanonicalHeight.Store(blockHeight)
 
+// Commit state after block acceptance
+root, err := bc.state.Commit(b.Header.Number.Uint64())
+if err != nil {
+return fmt.Errorf("failed to commit state for block %d: %w", blockHeight, err)
+}
+if root != b.Header.Root {
+return fmt.Errorf("committed state root mismatch: %s != %s", root.Hex(), b.Header.Root.Hex())
+}
+// Refresh the state reference to the new root
+if err := bc.state.Reset(root); err != nil {
+return fmt.Errorf("failed to reset state to new root: %w", err)
+}
+log.Printf("[blockchain] State committed for block %d (root: %s)", blockHeight, root.Hex()[:12])
+
 // Update cache
 bc.cacheMu.Lock()
 bc.blockByNumberCache.Add(blockHeight, b)
@@ -374,6 +388,23 @@ bc.stateMu.Lock()
 // Update latest block pointer
 bc.latest.Store(b)
 bc.lastCanonicalHeight.Store(blockHeight)
+
+// Commit state after block acceptance
+root, err := bc.state.Commit(b.Header.Number.Uint64())
+if err != nil {
+bc.stateMu.Unlock()
+return fmt.Errorf("failed to commit state for block %d: %w", blockHeight, err)
+}
+if root != b.Header.Root {
+bc.stateMu.Unlock()
+return fmt.Errorf("committed state root mismatch: %s != %s", root.Hex(), b.Header.Root.Hex())
+}
+// Refresh the state reference to the new root
+if err := bc.state.Reset(root); err != nil {
+bc.stateMu.Unlock()
+return fmt.Errorf("failed to reset state to new root: %w", err)
+}
+log.Printf("[blockchain] State committed for block %d (root: %s)", blockHeight, root.Hex()[:12])
 
 // Update cache
 bc.cacheMu.Lock()
