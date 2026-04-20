@@ -342,10 +342,8 @@ return nil
 func (bc *Blockchain) handleSyncModeBlock(b *block.Block, blockHeight uint64, parentBlock *block.Block) error {
 blockHash := b.Hash() // Declare blockHash here
 
-// Validate and execute block
-if err := bc.validateAndExecuteBlock(b, parentBlock); err != nil {
-return fmt.Errorf("sync block validation and execution failed: %w", err)
-}
+// NOTE: AddBlock already calls validateAndExecuteBlock before dispatching here.
+// Re-running execution would mutate state twice and cause nonce/root mismatches.
 
 // Add to database first
 if err := bc.db.WriteBlock(b); err != nil {
