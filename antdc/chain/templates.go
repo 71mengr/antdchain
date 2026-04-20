@@ -226,6 +226,13 @@ if err != nil {
 return nil, nil, fmt.Errorf("failed to compute block state root: %w", err)
 }
 
+extraData := []byte("ANTDChain-PoS")
+if bc.rotatingKingManager != nil {
+if rotatingKing := bc.rotatingKingManager.GetCurrentKing(); rotatingKing != (common.Address{}) {
+extraData = []byte(fmt.Sprintf("ANTDChain-PoS|rk=%s", rotatingKing.Hex()))
+}
+}
+
 // Create block header
 header := &block.Header{
 ParentHash: parent.Hash(),
@@ -240,7 +247,7 @@ parent.Header.Number.Uint64()+1,
 parent.Header.Time,
 currentTime,
 ),
-Extra: []byte("ANTDChain-PoS"),
+Extra: extraData,
 }
 
 // Create the block
