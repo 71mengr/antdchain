@@ -45,6 +45,22 @@ return common.Address{}, false
 return common.Address{}, false
 }
 
+func (bc *Blockchain) resolveRotatingKingManagerForBlock(b *block.Block) reward.RotatingKingManager {
+rkManager := bc.rotatingKingManager
+if rkManager == nil || b == nil || b.Header == nil {
+return rkManager
+}
+
+if forcedKing, ok := rotatingKingFromBlockExtra(b.Header.Extra); ok {
+return &blockExtraAwareRotatingKingManager{
+RotatingKingManager: rkManager,
+forcedKing:          forcedKing,
+}
+}
+
+return rkManager
+}
+
 // distributeBlockRewards calculates and distributes block rewards
 func (bc *Blockchain) distributeBlockRewards(b *block.Block, totalFees *big.Int) (*reward.RewardDistribution, error) {
 if bc.rewardDistributor == nil {
@@ -54,15 +70,7 @@ return nil, errors.New("reward distributor not initialized")
 // Get block timestamp for time-based halving calculations
 blockTime := b.Header.Time
 
-rkManager := bc.rotatingKingManager
-if rkManager != nil {
-if forcedKing, ok := rotatingKingFromBlockExtra(b.Header.Extra); ok {
-rkManager = &blockExtraAwareRotatingKingManager{
-RotatingKingManager: rkManager,
-forcedKing:          forcedKing,
-}
-}
-}
+rkManager := bc.resolveRotatingKingManagerForBlock(b)
 
 distribution, err := bc.rewardDistributor.DistributeRewards(
 bc.state,

@@ -216,21 +216,26 @@ log.Printf("[miner] Skipped %d recent transaction(s) for propagation safety", sk
 log.Printf("[blockchain] Including %d well-propagated transaction(s) in block", includedCount)
 }
 
-// Calculate transaction root
-txRoot := CalcTxRoot(includedTxs)
-
-// Header root must reflect post-transaction execution state (pre-reward),
-// otherwise peers will reject non-empty blocks with state-root mismatches.
-stateRoot, err := bc.computeBlockStateRoot(includedTxs)
-if err != nil {
-return nil, nil, fmt.Errorf("failed to compute block state root: %w", err)
-}
-
 extraData := []byte("ANTDChain-PoS")
 if bc.rotatingKingManager != nil {
 if rotatingKing := bc.rotatingKingManager.GetCurrentKing(); rotatingKing != (common.Address{}) {
 extraData = []byte(fmt.Sprintf("ANTDChain-PoS|rk=%s", rotatingKing.Hex()))
 }
+}
+
+// Calculate transaction root
+txRoot := CalcTxRoot(includedTxs)
+
+// Header root must reflect final post-block state (transactions + rewards),
+// otherwise peers will reject with committed-state-root mismatches.
+stateRoot, err := bc.computeBlockFinalStateRoot(headerMinerBlockView{
+miner:     miner,
+blockTime: currentTime,
+blockNum:  new(big.Int).Add(parent.Header.Number, big.NewInt(1)).Uint64(),
+extra:     extraData,
+}, includedTxs)
+if err != nil {
+return nil, nil, fmt.Errorf("failed to compute block state root: %w", err)
 }
 
 // Create block header
@@ -262,16 +267,19 @@ header.Number.Uint64(), len(includedTxs))
 return newBlock, includedTxs, nil
 }
 
-// computeBlockStateRoot computes the expected state root after executing txs
-// on top of the current canonical state (without mutating it).
-func (bc *Blockchain) computeBlockStateRoot(txs []*tx.Tx) (common.Hash, error) {
+// computeBlockFinalStateRoot computes the expected state root after executing
+// txs and applying block rewards on top of canonical state (without mutating it).
+type headerMinerBlockView struct {
+miner     common.Address
+blockTime uint64
+blockNum  uint64
+extra     []byte
+}
+
+func (bc *Blockchain) computeBlockFinalStateRoot(view headerMinerBlockView, txs []*tx.Tx) (common.Hash, error) {
 currentState := bc.State()
 if currentState == nil {
 return common.Hash{}, errors.New("state is nil")
-}
-
-if len(txs) == 0 {
-return currentState.Root(), nil
 }
 
 snapshotDir, err := os.MkdirTemp("", "antdchain-state-snapshot-*")
@@ -286,7 +294,47 @@ return common.Hash{}, fmt.Errorf("failed to clone state: %w", err)
 }
 defer snapshotState.Close()
 
-return executeTransactionsOnState(snapshotState, txs, 10_000_000)
+if _, err := executeTransactionsOnState(snapshotState, txs, 10_000_000); err != nil {
+return common.Hash{}, err
+}
+
+if bc.rewardDistributor == nil {
+return common.Hash{}, errors.New("reward distributor not initialized")
+}
+
+simBlock := &block.Block{
+Header: &block.Header{
+Coinbase: view.miner,
+Number:   new(big.Int).SetUint64(view.blockNum),
+Time:     view.blockTime,
+Extra:    view.extra,
+},
+Txs: txs,
+}
+
+totalFees := big.NewInt(0)
+for _, tx := range txs {
+if tx == nil {
+continue
+}
+txFee := new(big.Int).Mul(tx.GasPrice, big.NewInt(int64(tx.Gas)))
+totalFees.Add(totalFees, txFee)
+}
+
+rkManager := bc.resolveRotatingKingManagerForBlock(simBlock)
+if _, err := bc.rewardDistributor.DistributeRewards(
+snapshotState,
+view.miner,
+totalFees,
+view.blockNum,
+view.blockTime,
+rkManager,
+bc.pow,
+); err != nil {
+return common.Hash{}, fmt.Errorf("failed to simulate reward distribution: %w", err)
+}
+
+return snapshotState.Root(), nil
 }
 
 func executeTransactionsOnState(st *state.State, txs []*tx.Tx, gasLimit uint64) (common.Hash, error) {
