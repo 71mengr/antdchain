@@ -276,6 +276,11 @@ if err := bc.db.WriteBlock(b); err != nil {
 return fmt.Errorf("failed to write block to database: %w", err)
 }
 
+// Mark this height as canonical for direct extension.
+if err := bc.db.WriteCanonicalHash(blockHeight, blockHash); err != nil {
+return fmt.Errorf("failed to write canonical hash: %w", err)
+}
+
 // Update canonical tip in database
 if err := bc.db.WriteHeadBlockHash(blockHash); err != nil {
 log.Printf("[blockchain] Warning: failed to update head block hash: %v", err)
@@ -345,6 +350,11 @@ return fmt.Errorf("sync block validation and execution failed: %w", err)
 // Add to database first
 if err := bc.db.WriteBlock(b); err != nil {
 return fmt.Errorf("failed to write sync block to database: %w", err)
+}
+
+// Keep canonical mapping aligned with accepted sync chain progression.
+if err := bc.db.WriteCanonicalHash(blockHeight, blockHash); err != nil {
+return fmt.Errorf("failed to write canonical hash during sync: %w", err)
 }
 
 // Update canonical tip if this advances the chain

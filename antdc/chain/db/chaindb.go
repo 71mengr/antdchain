@@ -182,8 +182,9 @@ func (d *ChainDB) WriteBlock(b *block.Block) error {
     batch.Set(HeaderByNumberKey(num), headerData, pebble.Sync) // Use HeaderByNumberKey
     batch.Set(HeaderByHashKey(hash), headerData, pebble.Sync) // Use HeaderByHashKey
 
-    // Canonical pointer
-    batch.Set(CanonicalHashKey(num), hash[:], pebble.Sync) // Use CanonicalHashKey
+    // IMPORTANT: Do not update canonical mapping here.
+    // A block can be persisted as a side-branch/fork candidate.
+    // Canonical selection must be performed explicitly by chain logic.
 
     return batch.Commit(pebble.Sync)
 }
