@@ -100,10 +100,11 @@ func (bc *Blockchain) validateAndExecuteBlock(b *block.Block, parent *block.Bloc
             return fmt.Errorf("gas used mismatch for empty block: header=%d executed=%d",
                 b.Header.GasUsed, gasUsed)
         }
-        if b.Header.Root != parent.Header.Root {
+        expectedRoot := bc.state.Root()
+        if b.Header.Root != expectedRoot {
             validationFailures.WithLabelValues("state_root_mismatch").Inc()
-            return fmt.Errorf("state root mismatch for empty block: header=%s expected_parent_root=%s",
-                b.Header.Root.Hex(), parent.Header.Root.Hex())
+            return fmt.Errorf("state root mismatch for empty block: header=%s expected_current_root=%s",
+                b.Header.Root.Hex(), expectedRoot.Hex())
         }
     } else {
         // Execute transactions
