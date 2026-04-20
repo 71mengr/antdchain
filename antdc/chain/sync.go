@@ -131,9 +131,17 @@ if err == nil && correctParent != nil {
 log.Printf("[blockchain] ⚠️ Parent lookup returned non-matching block: requested=%s returned=%s",
 parentHash.Hex()[:12], correctParent.Hash().Hex()[:12])
 }
+// If the incoming block advances beyond our tip, prefer sync over
+// hard fork rejection so we can fetch the missing parent branch.
+if blockHeight > currentHeight {
+log.Printf("[blockchain] Parent branch missing for height %d (current=%d) — triggering sync",
+blockHeight, currentHeight)
+go bc.triggerSyncFromBlock(b)
+return fmt.Errorf("parent branch missing at height %d; syncing", blockHeight-1)
+}
+
 // This is a fork - different block at same height
 log.Printf("[blockchain] ❌ FORK DETECTED at height %d", blockHeight-1)
-
 return fmt.Errorf("fork detected: different block at height %d", blockHeight-1)
 }
 }
@@ -143,6 +151,11 @@ log.Printf("[blockchain] Parent not found at height %d", blockHeight-1)
 // Try to get parent by hash
 parentBlock, err := bc.db.ReadBlockByHash(parentHash)
 if err != nil || parentBlock == nil {
+if blockHeight > currentHeight {
+log.Printf("[blockchain] Missing parent %s for height %d — triggering sync",
+parentHash.Hex()[:12], blockHeight)
+go bc.triggerSyncFromBlock(b)
+}
 return fmt.Errorf("parent block at height %d not found", blockHeight-1)
 }
 if parentBlock.Hash() != parentHash {
