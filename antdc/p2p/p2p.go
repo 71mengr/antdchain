@@ -14,6 +14,7 @@ import (
     "fmt"
     "io"
     "math"
+    "regexp"
     "os"
     "path/filepath"
     "strings"
@@ -1826,6 +1827,22 @@ func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
                 n.logger.Debugf("Block %d added via gossip while syncing — skipping", height)
                 continue
             }
+            if ancestorHeight, ok := parseParentBranchMissingAncestor(err); ok {
+                localHeightNow := n.currentHeight()
+                if localHeightNow > ancestorHeight {
+                    n.logger.Warnf("Detected branch mismatch while syncing block %d; rewinding local chain from %d to %d",
+                        height, localHeightNow, ancestorHeight)
+                    if truncErr := n.chain.TruncateTo(ancestorHeight); truncErr != nil {
+                        n.logger.Warnf("Failed to truncate chain to %d after branch mismatch: %v", ancestorHeight, truncErr)
+                    } else {
+                        // Restart fetching from the ancestor height (loop increments by 1).
+                        height = ancestorHeight
+                        time.Sleep(150 * time.Millisecond)
+                        continue
+                    }
+                }
+            }
+
             n.logger.Warnf("AddBlock failed for %d: %v", height, err)
             time.Sleep(200 * time.Millisecond)
             height-- // retry
@@ -1855,6 +1872,29 @@ func min(a, b time.Duration) time.Duration {
         return a
     }
     return b
+}
+
+var parentBranchMissingErrRE = regexp.MustCompile(`parent branch missing at height ([0-9]+)`)
+
+func parseParentBranchMissingAncestor(err error) (uint64, bool) {
+    if err == nil {
+        return 0, false
+    }
+
+    matches := parentBranchMissingErrRE.FindStringSubmatch(strings.ToLower(err.Error()))
+    if len(matches) != 2 {
+        return 0, false
+    }
+
+    var missingHeight uint64
+    if _, scanErr := fmt.Sscanf(matches[1], "%d", &missingHeight); scanErr != nil {
+        return 0, false
+    }
+
+    if missingHeight == 0 {
+        return 0, true
+    }
+    return missingHeight - 1, true
 }
 
 // Finds common ancestor when chains diverge
