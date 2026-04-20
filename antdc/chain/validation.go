@@ -91,11 +91,20 @@ func (bc *Blockchain) validateAndExecuteBlock(b *block.Block, parent *block.Bloc
     var execErr error
 
     if len(b.Txs) == 0 {
-        // Empty block fast path
+        // Empty block fast path (do not mutate header fields; hash must remain stable)
         totalFees = big.NewInt(0)
         gasUsed = 0
-        b.Header.GasUsed = 0
-        b.Header.Root = parent.Header.Root
+
+        if b.Header.GasUsed != 0 {
+            validationFailures.WithLabelValues("gas_used_mismatch").Inc()
+            return fmt.Errorf("gas used mismatch for empty block: header=%d executed=%d",
+                b.Header.GasUsed, gasUsed)
+        }
+        if b.Header.Root != parent.Header.Root {
+            validationFailures.WithLabelValues("state_root_mismatch").Inc()
+            return fmt.Errorf("state root mismatch for empty block: header=%s expected_parent_root=%s",
+                b.Header.Root.Hex(), parent.Header.Root.Hex())
+        }
     } else {
         // Execute transactions
         totalFees, gasUsed, execErr = bc.executeBlockTransactions(b)
@@ -104,9 +113,18 @@ func (bc *Blockchain) validateAndExecuteBlock(b *block.Block, parent *block.Bloc
             return fmt.Errorf("transaction execution failed: %w", execErr)
         }
 
-        // Update block header with execution results
-        b.Header.GasUsed = gasUsed
-        b.Header.Root = bc.state.Root()
+        // Validate execution results against committed header fields
+        if b.Header.GasUsed != gasUsed {
+            validationFailures.WithLabelValues("gas_used_mismatch").Inc()
+            return fmt.Errorf("gas used mismatch: header=%d executed=%d", b.Header.GasUsed, gasUsed)
+        }
+
+        executedRoot := bc.state.Root()
+        if b.Header.Root != executedRoot {
+            validationFailures.WithLabelValues("state_root_mismatch").Inc()
+            return fmt.Errorf("state root mismatch: header=%s executed=%s",
+                b.Header.Root.Hex(), executedRoot.Hex())
+        }
 
         // Verify gas usage doesn't exceed limit
         if gasUsed > b.Header.GasLimit {
@@ -316,5 +334,4 @@ func (bc *Blockchain) validateBlockForSync(b *block.Block, parent *block.Block) 
 
     return nil
 }
-
 
