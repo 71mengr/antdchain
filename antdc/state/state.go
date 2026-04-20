@@ -5,6 +5,7 @@
 package state
 
 import (
+"bytes"
 "crypto/sha256"
 "encoding/binary"
 "errors"
@@ -150,11 +151,15 @@ Value []byte
 }
 iter := s.db.NewIterator(nil, nil)
 for iter.Next() {
+key := iter.Key()
+if bytes.HasPrefix(key, []byte("meta:")) {
+continue
+}
 kvs = append(kvs, struct {
 Key   []byte
 Value []byte
 }{
-append([]byte{}, iter.Key()...),
+append([]byte{}, key...),
 append([]byte{}, iter.Value()...),
 })
 }
