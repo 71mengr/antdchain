@@ -3808,7 +3808,7 @@ func (n *Node) handleKingRotation(msg *pubsub.Message) {
 
 // Handles king list update messages
 func (n *Node) handleKingListUpdate(msg *pubsub.Message) {
-    if len(msg.Data) < 100 {
+    if len(msg.Data) < 2 {
         return
     }
     if !n.allowEventFromPeer(msg.GetFrom()) {
@@ -3819,13 +3819,6 @@ func (n *Node) handleKingListUpdate(msg *pubsub.Message) {
     if err := json.Unmarshal(msg.Data[1:], &event); err != nil {
         n.logger.Warnf("Failed to unmarshal king list update from %s: %v",
             msg.GetFrom().String()[:8], err)
-        return
-    }
-
-    // Reject height 0 - list updates must match actual block height
-    if event.BlockHeight == 0 {
-        n.logger.Warnf("❌ Rejecting king list update with invalid height 0 from %s",
-            msg.GetFrom().String()[:8])
         return
     }
 
@@ -3843,18 +3836,20 @@ func (n *Node) handleKingListUpdate(msg *pubsub.Message) {
 
     currentHeight := n.currentHeight()
 
-    // Validate height - must be close to our current height
-    if event.BlockHeight < currentHeight-100 {
-        n.logger.Warnf("Ignoring very old king list update (height %d vs current %d)",
-            event.BlockHeight, currentHeight)
-        return
-    }
+    // Validate height - allow zero-height bootstrap updates before chain starts.
+    if event.BlockHeight > 0 {
+        if event.BlockHeight < currentHeight-100 {
+            n.logger.Warnf("Ignoring very old king list update (height %d vs current %d)",
+                event.BlockHeight, currentHeight)
+            return
+        }
 
-    // If it's from the future, it's likely invalid
-    if event.BlockHeight > currentHeight+10 {
-        n.logger.Warnf("Rejecting future king list update (height %d > our %d + 10)",
-            event.BlockHeight, currentHeight)
-        return
+        // If it's from the future, it's likely invalid
+        if event.BlockHeight > currentHeight+10 {
+            n.logger.Warnf("Rejecting future king list update (height %d > our %d + 10)",
+                event.BlockHeight, currentHeight)
+            return
+        }
     }
 
     // Get current local list
