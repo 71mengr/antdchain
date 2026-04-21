@@ -1,3 +1,7 @@
+// Copyright © 2025 ANTDChain Contributors
+// Licensed under the MIT License (MIT). See LICENSE in the repository root
+// for more information.
+
 package tx
 
 import (
