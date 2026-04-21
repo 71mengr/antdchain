@@ -396,6 +396,8 @@ func (c *Console) StartWalletClient(config *RPCAuthConfig) {
 
 		case "listwallets":
 			c.handleListWallets()
+		case "listaddresses":
+			c.handleListWallets()
 
 		case "checkeligibility":
 			c.handleCheckEligibility(parts)
@@ -900,9 +902,10 @@ func (c *Console) printWalletHelp() {
 	fmt.Println("  nonce <address>          - Show nonce for address")
 	fmt.Println("  address                  - Show wallet addresses")
 	fmt.Println("  createaddress            - Create new wallet")
-	fmt.Println("  import <key>             - Import private key")
+        fmt.Println("  import <key>             - Import ML-DSA-65 private key")
 	fmt.Println("  export <address>         - Export private key")
-	fmt.Println("  listwallets              - List all wallets")
+	fmt.Println("  listwallets              - List all quantum wallets")
+	fmt.Println("  listaddresses            - Alias for listwallets")
 	fmt.Println("")
 	fmt.Println("Rotating King Commands (via RPC):")
 	fmt.Println("  rk status                - Show rotation status")
@@ -1191,13 +1194,14 @@ func (c *Console) Start() {
 	fmt.Println("  stopmining               - Stop mining")
 	fmt.Println("  createaddress            - Create new wallet")
 	fmt.Println("  send <from> <to> <amount>- Send transaction")
-	fmt.Println("  import <privateKey>      - Import wallet")
+	fmt.Println("  import <privateKey>      - Import ML-DSA-65 wallet")
 	fmt.Println("  export <address>         - Export private key")
 	fmt.Println("  getblockinfo <number>    - Get block info")
 	fmt.Println("  gettx <hash>             - Get transaction")
 	fmt.Println("  lock <address>           - Lock wallet")
 	fmt.Println("  unlock <address>         - Unlock wallet")
-	fmt.Println("  listwallets              - List all wallets")
+	fmt.Println("  listwallets              - List all quantum wallets")
+	fmt.Println("  listaddresses            - Alias for listwallets")
 	fmt.Println("  balance <address>        - Check balance")
 	fmt.Println("  status                   - Show node status")
 	fmt.Println("  debugchain               - Debug chain hashes")
@@ -1327,6 +1331,8 @@ func (c *Console) Start() {
 		case "listwallets":
 			c.handleListWallets()
 
+		case "listaddresses":
+			c.handleListWallets()
 		case "register-worker":
 			if len(parts) != 3 {
 				fmt.Println("Usage: register-worker <address> <amount>")
@@ -1568,28 +1574,17 @@ func (c *Console) handleStopMining() {
 }
 
 func (c *Console) handleCreateAddress() {
-	password, err := c.readPassword("Enter password for new wallet (leave empty to skip encryption): ")
-	if err != nil {
-		fmt.Printf("Failed to read password: %v\n", err)
-		return
-	}
-
-	account, err := c.node.Keystore().NewAccount(password)
+	w, err := c.node.walletManager.CreateNewWallet()
 	if err != nil {
 		fmt.Printf("Failed to create wallet: %v\n", err)
 		return
 	}
 
-	addr := account.Address.Hex()
+	addr := w.Address().String()
 	fmt.Printf("New wallet created!\n")
 	fmt.Printf("Address: %s\n", addr)
 
-	if password == "" {
-		fmt.Printf("Warning: Wallet is NOT encrypted! Private key is stored in plaintext.\n")
-	} else {
-		fmt.Printf("Keystore file saved to: %s\n", c.getKeystoreFilePath(addr))
-		fmt.Printf("Your wallet is securely encrypted.\n")
-	}
+	fmt.Printf("Type: quantum address (0q Base58Check)\n")
 }
 
 func (c *Console) handleSend(parts []string) {
@@ -2705,24 +2700,17 @@ func (n *Node) GetUnlockedPrivateKey(addr common.Address) (*ecdsa.PrivateKey, er
 	return key.PrivateKey, nil
 }
 
-// List wallets from keystore
+// List wallets from wallet manager
 func (c *Console) handleListWallets() {
-	accounts := c.node.Keystore().Accounts()
-	if len(accounts) == 0 {
-		fmt.Println("No wallets found in keystore")
-		fmt.Printf("Keystore path: %s\n", c.node.GetKeystoreDir())
+	wallets := c.node.walletManager.ListWallets()
+	if len(wallets) == 0 || (len(wallets) == 1 && wallets[0] == "No wallets found") {
+		fmt.Println("No wallets found")
 		return
 	}
 
-	fmt.Printf("Found %d wallet(s) in keystore:\n", len(accounts))
-	for i, acc := range accounts {
-		file := c.getKeystoreFilePath(acc.Address.Hex())
-		info, _ := os.Stat(file)
-		timestamp := "unknown"
-		if info != nil {
-			timestamp = info.ModTime().Format("2006-01-02 15:04")
-		}
-		fmt.Printf("  %d. %s (created: %s)\n", i+1, acc.Address.Hex(), timestamp)
+	fmt.Printf("Found %d wallet(s):\n", len(wallets))
+	for i, entry := range wallets {
+		fmt.Printf("  %d. %s\n", i+1, entry)
 	}
 }
 
@@ -2833,38 +2821,19 @@ func formatBalance(amount *big.Int) string {
 
 func (c *Console) handleImport(parts []string) {
 	if len(parts) < 2 {
-		fmt.Println("Usage: import <private-key-hex>")
+		fmt.Println("Usage: import <ml-dsa-65-private-key-hex>")
 		return
 	}
 
-	keyHex := strings.TrimPrefix(parts[1], "0x")
-	keyBytes, err := hex.DecodeString(keyHex)
-	if err != nil {
-		fmt.Printf("Invalid hex private key: %v\n", err)
-		return
-	}
-
-	privateKey, err := crypto.ToECDSA(keyBytes)
-	if err != nil {
-		fmt.Printf("Invalid private key: %v\n", err)
-		return
-	}
-
-	password, err := c.readPassword("Enter password to encrypt imported wallet: ")
-	if err != nil {
-		fmt.Printf("Failed to read password: %v\n", err)
-		return
-	}
-
-	account, err := c.node.Keystore().ImportECDSA(privateKey, password)
+	imported, err := c.node.walletManager.ImportWallet(parts[1])
 	if err != nil {
 		fmt.Printf("Failed to import wallet: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Wallet imported and encrypted!\n")
-	fmt.Printf("Address: %s\n", account.Address.Hex())
-	fmt.Printf("Keystore: %s\n", c.getKeystoreFilePath(account.Address.Hex()))
+	fmt.Printf("Wallet imported.\n")
+	fmt.Printf("Address: %s\n", imported.Address().String())
+	fmt.Printf("Type: quantum address (0q Base58Check)\n")
 }
 
 func (c *Console) handleExport(parts []string) {
@@ -3420,13 +3389,14 @@ func (c *Console) handleHelp() {
 	fmt.Println("  stopmining               - Stop mining")
 	fmt.Println("  createaddress            - Create new wallet")
 	fmt.Println("  send <from> <to> <amount>- Send transaction (auto-unlocks wallet)")
-	fmt.Println("  import <privateKey>      - Import wallet from private key")
+	fmt.Println("  import <privateKey>      - Import ML-DSA-65 wallet from private key")
 	fmt.Println("  export <address>         - Export private key (unlocks wallet temporarily)")
 	fmt.Println("  getblockinfo <number>    - Get block information")
 	fmt.Println("  gettx <hash>             - Get transaction details")
 	fmt.Println("  lock <address>           - Lock wallet manually")
 	fmt.Println("  unlock <address>         - Unlock wallet with password")
-	fmt.Println("  listwallets              - List all wallets with lock status")
+	fmt.Println("  listwallets              - List all quantum wallets with lock status")
+	fmt.Println("  listaddresses            - Alias for listwallets")
 	fmt.Println("  localproposals           - List proposals")
 	fmt.Println("  balance <address>        - Check account balance")
 	fmt.Println("  status                   - Show node and wallet status")
