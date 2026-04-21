@@ -8,7 +8,6 @@ package wallet
 import (
     "crypto/aes"
     "crypto/cipher"
-    "crypto/ecdsa"
     "crypto/rand"
     "crypto/sha256"
     "encoding/hex"
@@ -26,10 +25,10 @@ import (
 
     "golang.org/x/crypto/scrypt"
 
-    "github.com/ethereum/go-ethereum/common"
-    "github.com/ethereum/go-ethereum/crypto"
     "github.com/antdaza/antdchain/antdc/chain"
+    "github.com/antdaza/antdchain/antdc/crypto/quantum"
     "github.com/antdaza/antdchain/antdc/tx"
+    "github.com/antdaza/antdchain/common"
 )
 
 // Security constants
@@ -80,8 +79,9 @@ type WalletSecurity struct {
 
 // Wallet manages keys and transaction creation
 type Wallet struct {
-    privKey  *ecdsa.PrivateKey
-    addr     common.Address
+    privKey  []byte
+    pubKey   []byte
+    addr     common.QuantumAddress
     bc       *chain.Blockchain
     isLocked bool
     security *WalletSecurity
@@ -184,13 +184,17 @@ func calculateChecksum(data []byte) string {
 
 // NewWallet creates a new wallet with a generated keypair
 func NewWallet(bc *chain.Blockchain, dataDir string) (*Wallet, error) {
-    privKey, err := crypto.GenerateKey()
+    privKeyBytes, pubKeyBytes, err := quantum.GenerateKeyPair()
     if err != nil {
         return nil, fmt.Errorf("failed to generate key: %w", err)
     }
-    addr := crypto.PubkeyToAddress(privKey.PublicKey)
+    addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKeyBytes))
+    if err != nil {
+        return nil, fmt.Errorf("failed to parse address: %w", err)
+    }
     return &Wallet{
-        privKey:  privKey,
+        privKey:  privKeyBytes,
+        pubKey:   pubKeyBytes,
         addr:     addr,
         bc:       bc,
         dataDir:  dataDir, // Store dataDir
@@ -200,13 +204,21 @@ func NewWallet(bc *chain.Blockchain, dataDir string) (*Wallet, error) {
 }
 
 // NewWalletWithKey creates a wallet with an existing private key
-func NewWalletWithKey(bc *chain.Blockchain, privKey *ecdsa.PrivateKey, dataDir string) (*Wallet, error) {
-    if privKey == nil {
+func NewWalletWithKey(bc *chain.Blockchain, privKey []byte, dataDir string) (*Wallet, error) {
+    if len(privKey) == 0 {
         return nil, errors.New("private key cannot be nil")
     }
-    addr := crypto.PubkeyToAddress(privKey.PublicKey)
+    pubKey, err := quantum.DerivePublicKey(privKey)
+    if err != nil {
+        return nil, fmt.Errorf("failed to derive public key: %w", err)
+    }
+    addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+    if err != nil {
+        return nil, fmt.Errorf("failed to parse address: %w", err)
+    }
     return &Wallet{
-        privKey:  privKey,
+        privKey:  append([]byte(nil), privKey...),
+        pubKey:   pubKey,
         addr:     addr,
         bc:       bc,
         dataDir:  dataDir, // Store dataDir
@@ -216,16 +228,16 @@ func NewWalletWithKey(bc *chain.Blockchain, privKey *ecdsa.PrivateKey, dataDir s
 }
 
 // Address returns the wallet address
-func (w *Wallet) Address() common.Address {
+func (w *Wallet) Address() common.QuantumAddress {
     return w.addr
 }
 
 // PrivateKey returns the wallet's private key if unlocked
-func (w *Wallet) PrivateKey() (*ecdsa.PrivateKey, error) {
+func (w *Wallet) PrivateKey() ([]byte, error) {
     if w.isLocked {
         return nil, errors.New("wallet is locked")
     }
-    return w.privKey, nil
+    return append([]byte(nil), w.privKey...), nil
 }
 
 // IsLocked returns whether the wallet is locked
@@ -237,18 +249,27 @@ func (w *Wallet) IsLocked() bool {
 func (w *Wallet) Lock() {
     w.isLocked = true
     w.privKey = nil // Clear private key from memory
-    w.security.clearSecurityState(w.addr.Hex())
+    w.security.clearSecurityState(w.addr.String())
 }
 
 // Unlock unlocks the wallet with a private key
-func (w *Wallet) Unlock(privKey *ecdsa.PrivateKey) error {
-    if privKey == nil {
+func (w *Wallet) Unlock(privKey []byte) error {
+    if len(privKey) == 0 {
         return errors.New("private key cannot be nil")
     }
-    if crypto.PubkeyToAddress(privKey.PublicKey) != w.addr {
+    pubKey, err := quantum.DerivePublicKey(privKey)
+    if err != nil {
+        return fmt.Errorf("failed to derive public key: %w", err)
+    }
+    addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+    if err != nil {
+        return fmt.Errorf("failed to parse address: %w", err)
+    }
+    if addr != w.addr {
         return errors.New("private key does not match wallet address")
     }
-    w.privKey = privKey
+    w.privKey = append([]byte(nil), privKey...)
+    w.pubKey = pubKey
     w.isLocked = false
     return nil
 }
@@ -290,19 +311,19 @@ func (w *Wallet) Nonce() uint64 {
             nextNonce = stateNonce
         }
         log.Printf("🔍 Wallet.Nonce() for %s: state=%d, pending=%d, using=%d", 
-            w.addr.Hex(), stateNonce, len(pendingTxs), nextNonce)
+            w.addr.String(), stateNonce, len(pendingTxs), nextNonce)
     } else {
         // No pending transactions - use state nonce
         nextNonce = stateNonce
         log.Printf("🔍 Wallet.Nonce() for %s: state=%d, no pending, using=%d", 
-            w.addr.Hex(), stateNonce, nextNonce)
+         w.addr.String(), stateNonce, nextNonce)
     }
 
     return nextNonce
 }
 
 // CreateTx creates and signs a transaction with proper nonce handling
-func (w *Wallet) CreateTx(to common.Address, value *big.Int, data []byte, gas uint64, gasPrice *big.Int) (*tx.Tx, error) {
+func (w *Wallet) CreateTx(to common.QuantumAddress, value *big.Int, data []byte, gas uint64, gasPrice *big.Int) (*tx.Tx, error) {
     if w.isLocked {
         return nil, errors.New("wallet is locked")
     }
@@ -310,7 +331,7 @@ func (w *Wallet) CreateTx(to common.Address, value *big.Int, data []byte, gas ui
     // Get the correct nonce considering both state and pending transactions
     nonce := w.Nonce()
     log.Printf("🔍 Creating transaction: from=%s, to=%s, nonce=%d, value=%s",
-        w.addr.Hex(), to.Hex(), nonce, value.String())
+        w.addr.String(), to.String(), nonce, value.String())
 
     if gas == 0 {
         gas = 21000
@@ -320,7 +341,7 @@ func (w *Wallet) CreateTx(to common.Address, value *big.Int, data []byte, gas ui
     }
 
     t := tx.NewTx(w.addr, to, value, data, nonce, gas, gasPrice)
-    if err := t.Sign(w.privKey); err != nil {
+    if err := t.Sign(w.privKey, w.pubKey); err != nil {
         return nil, fmt.Errorf("failed to sign transaction: %w", err)
     }
 
@@ -351,13 +372,13 @@ func (w *Wallet) Encrypt(password string) (*EncryptedWallet, error) {
 
         var encrypted *EncryptedWallet
         for _, ew := range encryptedWallets {
-            if ew.Address == w.addr.Hex() {
+            if ew.Address == w.addr.String() {
                 encrypted = &ew
                 break
             }
         }
         if encrypted == nil {
-            return nil, fmt.Errorf("no encrypted wallet found for %s", w.addr.Hex())
+            return nil, fmt.Errorf("no encrypted wallet found for %s", w.addr.String())
         }
 
         decryptedWallet, err := Decrypt(encrypted, password, w.bc, w.dataDir)
@@ -367,7 +388,7 @@ func (w *Wallet) Encrypt(password string) (*EncryptedWallet, error) {
         privKey = decryptedWallet.privKey
     }
 
-    privKeyBytes := crypto.FromECDSA(privKey)
+    privKeyBytes := append([]byte(nil), privKey...)
     salt := make([]byte, saltLength)
     if _, err := rand.Read(salt); err != nil {
         return nil, fmt.Errorf("failed to generate salt: %w", err)
@@ -384,7 +405,7 @@ func (w *Wallet) Encrypt(password string) (*EncryptedWallet, error) {
     }
 
     encrypted := &EncryptedWallet{
-        Address:      w.addr.Hex(),
+        Address:      w.addr.String(),
         EncryptedKey: hex.EncodeToString(ciphertext),
         Salt:         hex.EncodeToString(salt),
         Nonce:        hex.EncodeToString(nonce),
@@ -433,18 +454,22 @@ func Decrypt(encrypted *EncryptedWallet, password string, bc *chain.Blockchain, 
         return nil, errors.New("decryption failed: wrong password or corrupted data")
     }
 
-    privKey, err := crypto.ToECDSA(privKeyBytes)
+    pubKey, err := quantum.DerivePublicKey(privKeyBytes)
     if err != nil {
-        return nil, fmt.Errorf("failed to parse private key: %w", err)
+        return nil, fmt.Errorf("failed to derive public key: %w", err)
     }
 
-    addr := crypto.PubkeyToAddress(privKey.PublicKey)
-    if addr.Hex() != encrypted.Address {
+    addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+    if err != nil {
+        return nil, fmt.Errorf("failed to parse address: %w", err)
+    }
+    if addr.String() != encrypted.Address {
         return nil, errors.New("address verification failed")
     }
 
     return &Wallet{
-        privKey:  privKey,
+        privKey:  privKeyBytes,
+        pubKey:   pubKey,
         addr:     addr,
         bc:       bc,
         dataDir:  dataDir,
@@ -644,7 +669,7 @@ func (wm *WalletManager) LoadWallets(chainInterface interface{}, password string
 }
 
 // GetBalance returns the balance of an address
-func (wm *WalletManager) GetBalance(addr common.Address) *big.Int {
+func (wm *WalletManager) GetBalance(addr common.QuantumAddress) *big.Int {
     if wm.blockchain == nil {
         log.Printf("⚠️  Blockchain not initialized in GetBalance")
         return big.NewInt(0)
@@ -669,7 +694,7 @@ func (wm *WalletManager) CreateNewWallet() (*Wallet, error) {
     if err != nil {
         return nil, fmt.Errorf("failed to create wallet: %w", err)
     }
-    addr := w.Address().Hex()
+    addr := w.Address().String()
     wm.AddWallet(addr, w)
     return w, nil
 }
@@ -680,7 +705,7 @@ func (wm *WalletManager) ImportWallet(privateKeyHex string) (*Wallet, error) {
         return nil, fmt.Errorf("blockchain not initialized")
     }
 
-    privKey, err := crypto.HexToECDSA(privateKeyHex)
+    privKey, err := hex.DecodeString(strings.TrimPrefix(privateKeyHex, "0x"))
     if err != nil {
         return nil, fmt.Errorf("invalid private key: %w", err)
     }
@@ -688,7 +713,7 @@ func (wm *WalletManager) ImportWallet(privateKeyHex string) (*Wallet, error) {
     if err != nil {
         return nil, fmt.Errorf("failed to import wallet: %w", err)
     }
-    addr := w.Address().Hex()
+    addr := w.Address().String()
     wm.AddWallet(addr, w)
     return w, nil
 }
@@ -708,7 +733,7 @@ func (wm *WalletManager) ExportWallet(addr, password string) (string, error) {
     if err != nil {
         return "", fmt.Errorf("failed to get private key: %w", err)
     }
-    return hex.EncodeToString(crypto.FromECDSA(privKey)), nil
+    return hex.EncodeToString(privKey), nil
 }
 
 // GetOrCreateMinerWallet returns any existing wallet or creates a new one
@@ -802,8 +827,8 @@ func (wm *WalletManager) SetBlockchain(bc *chain.Blockchain) {
 }
 
 // SendTransactionWithNonce sends transaction with proper nonce management
-func (wm *WalletManager) SendTransactionWithNonce(from, to common.Address, amount *big.Int, password string, nonce uint64) (*tx.Tx, error) {
-    addr := from.Hex()
+func (wm *WalletManager) SendTransactionWithNonce(from, to common.QuantumAddress, amount *big.Int, password string, nonce uint64) (*tx.Tx, error) {
+    addr := from.String()
     w := wm.GetWallet(addr)
     if w == nil {
         return nil, fmt.Errorf("wallet not found: %s", addr)
@@ -830,7 +855,7 @@ func (wm *WalletManager) SendTransactionWithNonce(from, to common.Address, amoun
         nextNonce = nonce
     }
 
-    log.Printf("🔍 SendTransaction: from=%s, using nonce=%d", from.Hex(), nextNonce)
+    log.Printf("�� SendTransaction: from=%s, using nonce=%d", from.String(), nextNonce)
 
     // Create transaction with the specified nonce
     transaction, err := w.CreateTx(to, amount, nil, 0, nil)
@@ -845,7 +870,7 @@ func (wm *WalletManager) SendTransactionWithNonce(from, to common.Address, amoun
 
         // Recreate transaction with correct nonce
         transaction = tx.NewTx(from, to, amount, nil, nextNonce, 21000, big.NewInt(1e9))
-        if err := transaction.Sign(w.privKey); err != nil {
+        if err := transaction.Sign(w.privKey, w.pubKey); err != nil {
             return nil, fmt.Errorf("failed to sign corrected transaction: %w", err)
         }
         log.Printf("✅ Recreated transaction with correct nonce: %d", nextNonce)
@@ -866,6 +891,6 @@ func (wm *WalletManager) SendTransactionWithNonce(from, to common.Address, amoun
 }
 
 // Override the original SendTransaction to use the new nonce management
-func (wm *WalletManager) SendTransaction(from, to common.Address, amount *big.Int, password string) (*tx.Tx, error) {
+func (wm *WalletManager) SendTransaction(from, to common.QuantumAddress, amount *big.Int, password string) (*tx.Tx, error) {
     return wm.SendTransactionWithNonce(from, to, amount, password, 0)
 }

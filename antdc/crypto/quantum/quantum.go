@@ -52,6 +52,18 @@ return false
 return pubKey.Verify(message, signature, nil)
 }
 
+func DerivePublicKey(privKeyBytes []byte) ([]byte, error) {
+privKey := new(mldsa65.PrivateKey)
+if err := privKey.UnmarshalBinary(privKeyBytes); err != nil {
+return nil, err
+}
+pub, ok := privKey.Public().(*mldsa65.PublicKey)
+if !ok {
+return nil, errors.New("invalid derived public key type")
+}
+return pub.MarshalBinary()
+}
+
 func PubKeyToAddress(pubKey []byte) string {
 sha := sha3.Sum256(pubKey)
 r := ripemd160.New()

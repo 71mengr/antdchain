@@ -108,7 +108,10 @@ return errors.New("invalid gas price")
 if tx.Value == nil || tx.Value.Sign() < 0 {
 return errors.New("invalid value")
 }
-if len(tx.Signature) == 0 || len(tx.Signature) > MaxQuantumSignatureSize {
+if len(tx.PubKey) != quantum.MLDSA65PublicKeySize {
+return errors.New("invalid public key length")
+}
+if len(tx.Signature) != MaxQuantumSignatureSize {
 return errors.New("invalid signature length")
 }
 return nil
