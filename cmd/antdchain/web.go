@@ -5,43 +5,42 @@
 package main
 
 import (
-    "embed"
-    "encoding/hex"
-    "encoding/json"
-    "fmt"
-    "math/big"
-    "net/http"
-    "strconv"
-    "strings"
-    "time"
+"embed"
+"encoding/hex"
+"encoding/json"
+"fmt"
+"math/big"
+"net/http"
+"strconv"
+"strings"
+"time"
 
-    "github.com/ethereum/go-ethereum/common"
-    "github.com/gorilla/mux"
+"github.com/ethereum/go-ethereum/common"
+"github.com/gorilla/mux"
 )
 
 //go:embed static/* templates/*
 var webContent embed.FS
 
-
 func (ws *WebServer) setupRoutes() {
-    // Static files
-    ws.router.PathPrefix("/static/").Handler(http.FileServer(http.FS(webContent)))
-    
-    // API endpoints
-    ws.router.HandleFunc("/api/health", ws.apiHealth).Methods("GET")
-    ws.router.HandleFunc("/api/chain/status", ws.apiChainStatus).Methods("GET")
-    ws.router.HandleFunc("/api/blocks", ws.apiBlocks).Methods("GET")
-    ws.router.HandleFunc("/api/blocks/{height:[0-9]+}", ws.apiBlockByHeight).Methods("GET")
-    ws.router.HandleFunc("/api/transactions", ws.apiTransactions).Methods("GET")
-    ws.router.HandleFunc("/api/mempool", ws.apiMempool).Methods("GET")
-    ws.router.HandleFunc("/api/wallet/list", ws.apiListWallets).Methods("GET")
-    ws.router.HandleFunc("/api/wallet/balance/{address}", ws.apiWalletBalance).Methods("GET")
-    
-    // Web pages
-    ws.router.HandleFunc("/", ws.pageDashboard).Methods("GET")
-    ws.router.HandleFunc("/blocks", ws.pageBlocks).Methods("GET")
-    ws.router.HandleFunc("/blocks/{height}", ws.pageBlock).Methods("GET")
-    ws.router.HandleFunc("/wallet", ws.pageWallet).Methods("GET")
+// Static files
+ws.router.PathPrefix("/static/").Handler(http.FileServer(http.FS(webContent)))
+
+// API endpoints
+ws.router.HandleFunc("/api/health", ws.apiHealth).Methods("GET")
+ws.router.HandleFunc("/api/chain/status", ws.apiChainStatus).Methods("GET")
+ws.router.HandleFunc("/api/blocks", ws.apiBlocks).Methods("GET")
+ws.router.HandleFunc("/api/blocks/{height:[0-9]+}", ws.apiBlockByHeight).Methods("GET")
+ws.router.HandleFunc("/api/transactions", ws.apiTransactions).Methods("GET")
+ws.router.HandleFunc("/api/mempool", ws.apiMempool).Methods("GET")
+ws.router.HandleFunc("/api/wallet/list", ws.apiListWallets).Methods("GET")
+ws.router.HandleFunc("/api/wallet/balance/{address}", ws.apiWalletBalance).Methods("GET")
+
+// Web pages
+ws.router.HandleFunc("/", ws.pageDashboard).Methods("GET")
+ws.router.HandleFunc("/blocks", ws.pageBlocks).Methods("GET")
+ws.router.HandleFunc("/blocks/{height}", ws.pageBlock).Methods("GET")
+ws.router.HandleFunc("/wallet", ws.pageWallet).Methods("GET")
 }
 
 // ============================================================================
@@ -49,283 +48,288 @@ func (ws *WebServer) setupRoutes() {
 // ============================================================================
 
 func (ws *WebServer) apiHealth(w http.ResponseWriter, r *http.Request) {
-    height := uint64(0)
-    if latest := ws.node.Blockchain().Latest(); latest != nil {
-        height = latest.Header.Number.Uint64()
-    }
+height := uint64(0)
+if latest := ws.node.Blockchain().Latest(); latest != nil {
+height = latest.Header.Number.Uint64()
+}
 
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "status":    "online",
-        "version":   "1.0.0",
-        "height":    height,
-        "timestamp": time.Now().Unix(),
-        "uptime":    time.Since(startTime).Seconds(),
-    })
+json.NewEncoder(w).Encode(map[string]interface{}{
+"status":    "online",
+"version":   "1.0.0",
+"height":    height,
+"timestamp": time.Now().Unix(),
+"uptime":    time.Since(startTime).Seconds(),
+})
 }
 
 func (ws *WebServer) apiChainStatus(w http.ResponseWriter, r *http.Request) {
-    bc := ws.node.Blockchain()
-    latest := bc.Latest()
+bc := ws.node.Blockchain()
+latest := bc.Latest()
 
-    status := map[string]interface{}{
-        "height":      uint64(0),
-        "hash":        "",
-        "difficulty":  "0",
-        "total_tx":    0,
-        "total_blocks": 0,
-        "syncing":     bc.IsSyncing(),
-        "sync_target": bc.GetSyncTarget(),
-    }
+status := map[string]interface{}{
+"height":       uint64(0),
+"hash":         "",
+"difficulty":   "0",
+"total_tx":     0,
+"total_blocks": 0,
+"syncing":      bc.IsSyncing(),
+"sync_target":  bc.GetSyncTarget(),
+}
 
-    if latest != nil && latest.Header != nil {
-        status["height"] = latest.Header.Number.Uint64()
-        status["hash"] = latest.Hash().Hex()
-        status["difficulty"] = latest.Header.Difficulty.String()
+if latest != nil && latest.Header != nil {
+status["height"] = latest.Header.Number.Uint64()
+status["hash"] = latest.Hash().Hex()
+status["difficulty"] = latest.Header.Difficulty.String()
 
-        // Count total transactions
-        totalTx := 0
-        totalBlocks := 0
-        for i := uint64(0); i <= latest.Header.Number.Uint64(); i++ {
-            if blk := bc.GetBlock(i); blk != nil {
-                totalTx += len(blk.Txs)
-                totalBlocks++
-            }
-        }
-        status["total_tx"] = totalTx
-        status["total_blocks"] = totalBlocks
-    }
+// Count total transactions
+totalTx := 0
+totalBlocks := 0
+for i := uint64(0); i <= latest.Header.Number.Uint64(); i++ {
+if blk := bc.GetBlock(i); blk != nil {
+totalTx += len(blk.Txs)
+totalBlocks++
+}
+}
+status["total_tx"] = totalTx
+status["total_blocks"] = totalBlocks
+}
 
-    json.NewEncoder(w).Encode(status)
+json.NewEncoder(w).Encode(status)
 }
 
 func (ws *WebServer) apiBlocks(w http.ResponseWriter, r *http.Request) {
-    limitStr := r.URL.Query().Get("limit")
-    
-    limit := 20
-    if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
-        limit = l
-    }
+limitStr := r.URL.Query().Get("limit")
 
-    bc := ws.node.Blockchain()
-    latest := bc.Latest()
-    if latest == nil {
-        json.NewEncoder(w).Encode([]interface{}{})
-        return
-    }
+limit := 20
+if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+limit = l
+}
 
-    maxHeight := latest.Header.Number.Uint64()
-    var blocks []map[string]interface{}
+bc := ws.node.Blockchain()
+latest := bc.Latest()
+if latest == nil {
+json.NewEncoder(w).Encode([]interface{}{})
+return
+}
 
-    for height := maxHeight; height > maxHeight-uint64(limit) && height <= maxHeight; height-- {
-        blk := bc.GetBlock(height)
-        if blk == nil {
-            continue
-        }
+maxHeight := latest.Header.Number.Uint64()
+var blocks []map[string]interface{}
 
-        blockData := map[string]interface{}{
-            "height":     height,
-            "hash":       blk.Hash().Hex(),
-            "parent_hash": blk.Header.ParentHash.Hex(),
-            "miner":      blk.Header.Coinbase.Hex(),
-            "timestamp":  blk.Header.Time,
-            "difficulty": blk.Header.Difficulty.String(),
-            "gas_limit":  blk.Header.GasLimit,
-            "gas_used":   blk.Header.GasUsed,
-            "tx_count":   len(blk.Txs),
-        }
-        blocks = append(blocks, blockData)
-    }
+for height := maxHeight; height > maxHeight-uint64(limit) && height <= maxHeight; height-- {
+blk := bc.GetBlock(height)
+if blk == nil {
+continue
+}
 
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "blocks": blocks,
-        "total":  maxHeight + 1,
-    })
+blockData := map[string]interface{}{
+"height":      height,
+"hash":        blk.Hash().Hex(),
+"parent_hash": blk.Header.ParentHash.Hex(),
+"miner":       blk.Header.Coinbase.Hex(),
+"timestamp":   blk.Header.Time,
+"difficulty":  blk.Header.Difficulty.String(),
+"gas_limit":   blk.Header.GasLimit,
+"gas_used":    blk.Header.GasUsed,
+"tx_count":    len(blk.Txs),
+}
+blocks = append(blocks, blockData)
+}
+
+json.NewEncoder(w).Encode(map[string]interface{}{
+"blocks": blocks,
+"total":  maxHeight + 1,
+})
 }
 
 func (ws *WebServer) apiBlockByHeight(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    heightStr := vars["height"]
+vars := mux.Vars(r)
+heightStr := vars["height"]
 
-    height, err := strconv.ParseUint(heightStr, 10, 64)
-    if err != nil {
-        http.Error(w, "Invalid block height", http.StatusBadRequest)
-        return
-    }
+height, err := strconv.ParseUint(heightStr, 10, 64)
+if err != nil {
+http.Error(w, "Invalid block height", http.StatusBadRequest)
+return
+}
 
-    blk := ws.node.Blockchain().GetBlock(height)
-    if blk == nil {
-        http.Error(w, "Block not found", http.StatusNotFound)
-        return
-    }
+blk := ws.node.Blockchain().GetBlock(height)
+if blk == nil {
+http.Error(w, "Block not found", http.StatusNotFound)
+return
+}
 
-    blockData := map[string]interface{}{
-        "height":        height,
-        "hash":          blk.Hash().Hex(),
-        "parent_hash":   blk.Header.ParentHash.Hex(),
-        "miner":         blk.Header.Coinbase.Hex(),
-        "timestamp":     blk.Header.Time,
-        "difficulty":    blk.Header.Difficulty.String(),
-        "nonce":         hex.EncodeToString(blk.Header.Nonce[:]),
-        "mix_hash":      blk.Header.MixDigest.Hex(),
-        "gas_limit":     blk.Header.GasLimit,
-        "gas_used":      blk.Header.GasUsed,
-        "extra_data":    string(blk.Header.Extra),
-    }
+blockData := map[string]interface{}{
+"height":      height,
+"hash":        blk.Hash().Hex(),
+"parent_hash": blk.Header.ParentHash.Hex(),
+"miner":       blk.Header.Coinbase.Hex(),
+"timestamp":   blk.Header.Time,
+"difficulty":  blk.Header.Difficulty.String(),
+"nonce":       hex.EncodeToString(blk.Header.Nonce[:]),
+"mix_hash":    blk.Header.MixDigest.Hex(),
+"gas_limit":   blk.Header.GasLimit,
+"gas_used":    blk.Header.GasUsed,
+"extra_data":  string(blk.Header.Extra),
+}
 
-    // Add transactions
-    var txs []map[string]interface{}
-    for _, tx := range blk.Txs {
-        to := ""
-        if tx.To != nil {
-            to = tx.To.Hex()
-        }
+// Add transactions
+var txs []map[string]interface{}
+for _, tx := range blk.Txs {
+to := ""
+if tx.To != nil {
+to = tx.To.String()
+}
 
-        txData := map[string]interface{}{
-            "hash":      tx.Hash().Hex(),
-            "from":      tx.From.Hex(),
-            "to":        to,
-            "value":     tx.Value.String(),
-            "gas":       tx.Gas,
-            "gas_price": tx.GasPrice.String(),
-            "nonce":     tx.Nonce,
-            "data":      hex.EncodeToString(tx.Data),
-        }
-        txs = append(txs, txData)
-    }
-    blockData["transactions"] = txs
+txData := map[string]interface{}{
+"hash":      tx.Hash().Hex(),
+"from":      tx.From.String(),
+"to":        to,
+"value":     tx.Value.String(),
+"gas":       tx.Gas,
+"gas_price": tx.GasPrice.String(),
+"nonce":     tx.Nonce,
+"data":      hex.EncodeToString(tx.Data),
+}
+txs = append(txs, txData)
+}
+blockData["transactions"] = txs
 
-    json.NewEncoder(w).Encode(blockData)
+json.NewEncoder(w).Encode(blockData)
 }
 
 func (ws *WebServer) apiTransactions(w http.ResponseWriter, r *http.Request) {
-    limitStr := r.URL.Query().Get("limit")
-    address := r.URL.Query().Get("address")
-    
-    limit := 50
-    if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
-        limit = l
-    }
+limitStr := r.URL.Query().Get("limit")
+address := r.URL.Query().Get("address")
 
-    bc := ws.node.Blockchain()
-    latest := bc.Latest()
-    if latest == nil {
-        json.NewEncoder(w).Encode([]interface{}{})
-        return
-    }
+limit := 50
+if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+limit = l
+}
 
-    var allTxs []map[string]interface{}
-    
-    // Collect transactions from blocks
-    for height := latest.Header.Number.Uint64(); height >= 0 && len(allTxs) < limit; height-- {
-        blk := bc.GetBlock(height)
-        if blk == nil {
-            continue
-        }
+bc := ws.node.Blockchain()
+latest := bc.Latest()
+if latest == nil {
+json.NewEncoder(w).Encode([]interface{}{})
+return
+}
 
-        for _, tx := range blk.Txs {
-            // Filter by address if specified
-            if address != "" {
-                addr := common.HexToAddress(address)
-                if tx.From != addr && (tx.To == nil || *tx.To != addr) {
-                    continue
-                }
-            }
+var allTxs []map[string]interface{}
 
-            to := ""
-            if tx.To != nil {
-                to = tx.To.Hex()
-            }
+// Collect transactions from blocks
+for height := latest.Header.Number.Uint64(); height >= 0 && len(allTxs) < limit; height-- {
+blk := bc.GetBlock(height)
+if blk == nil {
+continue
+}
 
-            txData := map[string]interface{}{
-                "hash":      tx.Hash().Hex(),
-                "from":      tx.From.Hex(),
-                "to":        to,
-                "value":     tx.Value.String(),
-                "gas":       tx.Gas,
-                "gas_price": tx.GasPrice.String(),
-                "nonce":     tx.Nonce,
-                "block":     height,
-                "timestamp": blk.Header.Time,
-                "status":    "confirmed",
-            }
+for _, tx := range blk.Txs {
+// Filter by address if specified
+if address != "" {
+addr := common.HexToAddress(address)
+txFrom := common.BytesToAddress(tx.From.Bytes())
+txTo := common.Address{}
+if tx.To != nil {
+txTo = common.BytesToAddress(tx.To.Bytes())
+}
+if txFrom != addr && (tx.To == nil || txTo != addr) {
+continue
+}
+}
 
-            allTxs = append(allTxs, txData)
-            if len(allTxs) >= limit {
-                break
-            }
-        }
-    }
+to := ""
+if tx.To != nil {
+to = tx.To.String()
+}
 
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "transactions": allTxs,
-        "count":        len(allTxs),
-    })
+txData := map[string]interface{}{
+"hash":      tx.Hash().Hex(),
+"from":      tx.From.String(),
+"to":        to,
+"value":     tx.Value.String(),
+"gas":       tx.Gas,
+"gas_price": tx.GasPrice.String(),
+"nonce":     tx.Nonce,
+"block":     height,
+"timestamp": blk.Header.Time,
+"status":    "confirmed",
+}
+
+allTxs = append(allTxs, txData)
+if len(allTxs) >= limit {
+break
+}
+}
+}
+
+json.NewEncoder(w).Encode(map[string]interface{}{
+"transactions": allTxs,
+"count":        len(allTxs),
+})
 }
 
 func (ws *WebServer) apiMempool(w http.ResponseWriter, r *http.Request) {
-    pending := ws.node.Blockchain().TxPool().GetPending()
+pending := ws.node.Blockchain().TxPool().GetPending()
 
-    var txs []map[string]interface{}
-    for _, tx := range pending {
-        to := ""
-        if tx.To != nil {
-            to = tx.To.Hex()
-        }
+var txs []map[string]interface{}
+for _, tx := range pending {
+to := ""
+if tx.To != nil {
+to = tx.To.String()
+}
 
-        txData := map[string]interface{}{
-            "hash":      tx.Hash().Hex(),
-            "from":      tx.From.Hex(),
-            "to":        to,
-            "value":     tx.Value.String(),
-            "gas":       tx.Gas,
-            "gas_price": tx.GasPrice.String(),
-            "nonce":     tx.Nonce,
-        }
-        txs = append(txs, txData)
-    }
+txData := map[string]interface{}{
+"hash":      tx.Hash().Hex(),
+"from":      tx.From.String(),
+"to":        to,
+"value":     tx.Value.String(),
+"gas":       tx.Gas,
+"gas_price": tx.GasPrice.String(),
+"nonce":     tx.Nonce,
+}
+txs = append(txs, txData)
+}
 
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "count":        len(txs),
-        "transactions": txs,
-    })
+json.NewEncoder(w).Encode(map[string]interface{}{
+"count":        len(txs),
+"transactions": txs,
+})
 }
 
 func (ws *WebServer) apiListWallets(w http.ResponseWriter, r *http.Request) {
-    // Get accounts from node's keystore instead of wallet manager
-    var walletList []map[string]interface{}
-    
-    // Try to get accounts from the node's keystore
-    if keystore := ws.node.Keystore(); keystore != nil {
-        accounts := keystore.Accounts()
-        for _, acc := range accounts {
-            balance := ws.node.Blockchain().GetAccountBalance(acc.Address)
-            
-            walletData := map[string]interface{}{
-                "address":     acc.Address.Hex(),
-                "name":        "Wallet", // You might need to get the actual name
-                "balance":     balance.String(),
-                "balance_antd": formatBalance(balance),
-                "nonce":       ws.node.Blockchain().State().GetNonce(acc.Address),
-            }
-            walletList = append(walletList, walletData)
-        }
-    }
+// Get accounts from node's keystore instead of wallet manager
+var walletList []map[string]interface{}
 
-    json.NewEncoder(w).Encode(walletList)
+// Try to get accounts from the node's keystore
+if keystore := ws.node.Keystore(); keystore != nil {
+accounts := keystore.Accounts()
+for _, acc := range accounts {
+balance := ws.node.Blockchain().GetAccountBalance(acc.Address)
+
+walletData := map[string]interface{}{
+"address":      acc.Address.Hex(),
+"name":         "Wallet", // You might need to get the actual name
+"balance":      balance.String(),
+"balance_antd": formatBalance(balance),
+"nonce":        ws.node.Blockchain().State().GetNonce(acc.Address),
+}
+walletList = append(walletList, walletData)
+}
+}
+
+json.NewEncoder(w).Encode(walletList)
 }
 
 func (ws *WebServer) apiWalletBalance(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    address := vars["address"]
+vars := mux.Vars(r)
+address := vars["address"]
 
-    addr := common.HexToAddress(address)
-    balance := ws.node.Blockchain().GetAccountBalance(addr)
+addr := common.HexToAddress(address)
+balance := ws.node.Blockchain().GetAccountBalance(addr)
 
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "address":     address,
-        "balance":     balance.String(),
-        "balance_antd": formatBalance(balance),
-    })
+json.NewEncoder(w).Encode(map[string]interface{}{
+"address":      address,
+"balance":      balance.String(),
+"balance_antd": formatBalance(balance),
+})
 }
 
 // ============================================================================
@@ -333,9 +337,9 @@ func (ws *WebServer) apiWalletBalance(w http.ResponseWriter, r *http.Request) {
 // ============================================================================
 
 func (ws *WebServer) pageDashboard(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "text/html")
-    
-    html := `<!DOCTYPE html>
+w.Header().Set("Content-Type", "text/html")
+
+html := `<!DOCTYPE html>
 <html>
 <head>
     <title>ANTDChain Dashboard</title>
@@ -462,14 +466,14 @@ func (ws *WebServer) pageDashboard(w http.ResponseWriter, r *http.Request) {
     </script>
 </body>
 </html>`
-    
-    w.Write([]byte(html))
+
+w.Write([]byte(html))
 }
 
 func (ws *WebServer) pageBlocks(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "text/html")
-    
-    html := `<!DOCTYPE html>
+w.Header().Set("Content-Type", "text/html")
+
+html := `<!DOCTYPE html>
 <html>
 <head>
     <title>ANTDChain Blocks</title>
@@ -533,17 +537,17 @@ func (ws *WebServer) pageBlocks(w http.ResponseWriter, r *http.Request) {
     </script>
 </body>
 </html>`
-    
-    w.Write([]byte(html))
+
+w.Write([]byte(html))
 }
 
 func (ws *WebServer) pageBlock(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    height := vars["height"]
-    
-    w.Header().Set("Content-Type", "text/html")
-    
-    html := fmt.Sprintf(`<!DOCTYPE html>
+vars := mux.Vars(r)
+height := vars["height"]
+
+w.Header().Set("Content-Type", "text/html")
+
+html := fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
     <title>ANTDChain Block %s</title>
@@ -636,14 +640,14 @@ func (ws *WebServer) pageBlock(w http.ResponseWriter, r *http.Request) {
     </script>
 </body>
 </html>`, height, height, height)
-    
-    w.Write([]byte(html))
+
+w.Write([]byte(html))
 }
 
 func (ws *WebServer) pageWallet(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "text/html")
-    
-    html := `<!DOCTYPE html>
+w.Header().Set("Content-Type", "text/html")
+
+html := `<!DOCTYPE html>
 <html>
 <head>
     <title>ANTDChain Wallet</title>
@@ -713,38 +717,38 @@ func (ws *WebServer) pageWallet(w http.ResponseWriter, r *http.Request) {
     </script>
 </body>
 </html>`
-    
-    w.Write([]byte(html))
+
+w.Write([]byte(html))
 }
 
 func formatBalance(amount *big.Int) string {
-    if amount == nil {
-        return "0"
-    }
+if amount == nil {
+return "0"
+}
 
-    oneANTD := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
-    whole := new(big.Int).Div(amount, oneANTD)
-    remainder := new(big.Int).Mod(amount, oneANTD)
+oneANTD := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+whole := new(big.Int).Div(amount, oneANTD)
+remainder := new(big.Int).Mod(amount, oneANTD)
 
-    if remainder.Sign() == 0 {
-        return whole.String()
-    }
+if remainder.Sign() == 0 {
+return whole.String()
+}
 
-    fractional := new(big.Float).SetInt(remainder)
-    divisor := new(big.Float).SetInt(oneANTD)
-    fractional.Quo(fractional, divisor)
+fractional := new(big.Float).SetInt(remainder)
+divisor := new(big.Float).SetInt(oneANTD)
+fractional.Quo(fractional, divisor)
 
-    fractionalStr := fractional.Text('f', 6)
-    if len(fractionalStr) > 2 && fractionalStr[:2] == "0." {
-        fractionalStr = fractionalStr[2:]
-    }
+fractionalStr := fractional.Text('f', 6)
+if len(fractionalStr) > 2 && fractionalStr[:2] == "0." {
+fractionalStr = fractionalStr[2:]
+}
 
-    fractionalStr = strings.TrimRight(fractionalStr, "0")
-    if fractionalStr == "" {
-        return whole.String()
-    }
+fractionalStr = strings.TrimRight(fractionalStr, "0")
+if fractionalStr == "" {
+return whole.String()
+}
 
-    return whole.String() + "." + fractionalStr
+return whole.String() + "." + fractionalStr
 }
 
 // Global start time - make sure this is defined in main.go
