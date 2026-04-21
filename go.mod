@@ -3,6 +3,7 @@ module github.com/antdaza/antdchain
 go 1.24.11
 
 require (
+	github.com/cloudflare/circl v1.6.1
 	github.com/ethereum/go-ethereum v1.16.7
 	github.com/gorilla/mux v1.8.0
 	github.com/ipfs/go-cid v0.4.1
