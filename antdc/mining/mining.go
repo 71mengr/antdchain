@@ -316,11 +316,23 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.Address, p
             continue
         }
 
-        // Check if the expected miner has a loaded private key in this node
-        var eligiblePrivKey *ecdsa.PrivateKey
+        // Check if the expected miner has a loaded private key in this node.
+        // We accept either:
+        //   1) a configured miner address match, or
+        //   2) a direct match with the address derived from the loaded key.
+        // This prevents false "waiting" states when minerAddress and key address drift.
+        var (
+            eligiblePrivKey  *ecdsa.PrivateKey
+            configuredMiner  common.Address
+            loadedKeyAddress common.Address
+        )
         ms.mu.RLock()
-        if expectedMiner == ms.minerAddress && ms.privateKey != nil {
-            eligiblePrivKey = ms.privateKey
+        configuredMiner = ms.minerAddress
+        if ms.privateKey != nil {
+            loadedKeyAddress = crypto.PubkeyToAddress(ms.privateKey.PublicKey)
+            if expectedMiner == configuredMiner || expectedMiner == loadedKeyAddress {
+                eligiblePrivKey = ms.privateKey
+            }
         }
         ms.mu.RUnlock()
 
@@ -329,8 +341,13 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.Address, p
             // Not our turn — or we don't have the key for the expected miner
             consecutiveMisses++
             if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
-                log.Printf("[miner] Waiting — expected miner: %s (we have key: %v)",
-                    expectedMiner.Hex()[:12], ms.privateKey != nil)
+                hasKey := loadedKeyAddress != (common.Address{})
+                log.Printf("[miner] Waiting — expected: %s configured: %s key: %s (loaded key: %v)",
+                    expectedMiner.Hex()[:12],
+                    configuredMiner.Hex()[:12],
+                    loadedKeyAddress.Hex()[:12],
+                    hasKey,
+                )
             }
             miningEligibilityChecks.WithLabelValues("not_eligible").Inc()
             continue

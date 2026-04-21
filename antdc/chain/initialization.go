@@ -323,7 +323,10 @@ func NewBlockchain(statePath string, miner common.Address) (*Blockchain, error) 
 	mainKing := common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2")
 	bc.Pow().AutoRegisterIfEligible(mainKing, bc.state.GetBalance(mainKing))
 	log.Printf("[blockchain] Main King auto-registered: %s", mainKing.Hex())
-
+	if miner != (common.Address{}) && miner != mainKing {
+		bc.Pow().AutoRegisterIfEligible(miner, bc.state.GetBalance(miner))
+		log.Printf("[blockchain] Local miner auto-checked for registration: %s", miner.Hex())
+	}
 	// ====================
 	// INITIALIZE REWARD SYSTEM
 	// ====================
