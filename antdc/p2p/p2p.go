@@ -3855,7 +3855,12 @@ func (n *Node) handleKingListUpdate(msg *pubsub.Message) {
 
 	// Validate height - allow zero-height bootstrap updates before chain starts.
 	if event.BlockHeight > 0 {
-		if event.BlockHeight < currentHeight-100 {
+		// Guard against uint64 underflow when currentHeight is below the stale-window size.
+		var minValidHeight uint64
+		if currentHeight > 100 {
+			minValidHeight = currentHeight - 100
+		}
+		if event.BlockHeight < minValidHeight {
 			n.logger.Warnf("Ignoring very old king list update (height %d vs current %d)",
 				event.BlockHeight, currentHeight)
 			return

@@ -166,8 +166,9 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
     p.mu.RLock()
     defer p.mu.RUnlock()
 
-    // If we're at the beginning of the chain, return base difficulty
-    if height <= 1 {
+    // Keep bootstrap blocks at the fixed network baseline difficulty.
+    // This avoids transient validator-set effects on the first post-genesis blocks.
+    if height <= 2 {
         return big.NewInt(1000000)
     }
 
