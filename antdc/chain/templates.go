@@ -200,7 +200,7 @@ continue
 }
 
 // Check correct nonce
-expectedNonce := bc.State().GetNonce(tx.From)
+expectedNonce := bc.State().GetNonce(common.BytesToAddress(tx.From.Bytes()))
 if tx.Nonce != expectedNonce {
 continue
 }
