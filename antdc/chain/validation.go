@@ -227,6 +227,12 @@ if bc.pow == nil {
 return errors.New("PoS engine not initialized")
 }
 
+// Keep the validator set synchronized with on-chain balances.
+// This allows any address with >= 1,000,000 ANTD to be considered for mining.
+if bc.state != nil {
+bc.pow.AutoRegisterIfEligible(b.Header.Coinbase, bc.state.GetBalance(b.Header.Coinbase))
+}
+
 eligible, err := bc.pow.VerifyMinerEligibility(
 b.Header.Coinbase,
 b.Header.ParentHash,

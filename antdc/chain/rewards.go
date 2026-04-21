@@ -123,18 +123,18 @@ go bc.syncRotatingKingForBlock(b.Header.Number.Uint64())
 }
 
 log.Printf("[blockchain] Rewards distributed for block %d:", b.Header.Number.Uint64())
-log.Printf("  • Miner (%s): %s ANTD (0%%)",
+log.Printf("  • Miner (%s): %s ANTD (25%%)",
 b.Header.Coinbase.Hex()[:10], formatWei(distribution.MinerReward))
 log.Printf("  • Main King (%s): %s ANTD (10%%)",
 distribution.MainKingAddress.Hex()[:10], formatWei(distribution.MainKingReward))
 
 if distribution.RotatingKingEligible {
-log.Printf("  • Rotating King (%s): %s ANTD (90%%)",
+log.Printf("  • Rotating King (%s): %s ANTD (65%%)",
 distribution.RotatingKingAddress.Hex()[:10], formatWei(distribution.RotatingKingReward))
 } else {
 log.Printf("  • Rotating King: Not eligible")
 totalMainKing := new(big.Int).Add(distribution.MainKingReward, distribution.RotatingKingReward)
-log.Printf("  • Main King receives full reward: %s ANTD (100%%)", formatWei(totalMainKing))
+log.Printf("  • Main King receives rotating share fallback: %s ANTD", formatWei(totalMainKing))
 }
 
 // Log halving info if available
@@ -171,14 +171,14 @@ log.Printf("   • Total fees: %s ANTD", formatBalance(totalFees))
 }
 
 log.Printf("   • Total reward: %s ANTD", formatBalance(distribution.TotalReward))
-log.Printf("   • Miner reward: %s ANTD (0%%) to %s",
+log.Printf("   • Miner reward: %s ANTD (25%%) to %s",
 formatBalance(distribution.MinerReward), b.Header.Coinbase.Hex()[:10])
-log.Printf("   • Main King reward: %s ANTD (1%%) to %s",
+log.Printf("   • Main King reward: %s ANTD (10%%) to %s",
 formatBalance(distribution.MainKingReward), distribution.MainKingAddress.Hex()[:10])
 
 // Better logging for rotating king status
 if distribution.RotatingKingEligible {
-log.Printf("   • Rotating King reward: %s ANTD (10%%) to %s",
+log.Printf("   • Rotating King reward: %s ANTD (65%%) to %s",
 formatBalance(distribution.RotatingKingReward),
 distribution.RotatingKingAddress.Hex()[:10])
 
@@ -200,7 +200,7 @@ log.Printf("   • Rotating King Eligibility: ✓ (Balance: %s ANTD, Required: %
 formatBalance(balance), formatBalance(minRequired))
 }
 } else {
-log.Printf("   • Rotating King: Not eligible (Main King receives extra 5%%)")
+log.Printf("   • Rotating King: Not eligible (Main King receives rotating share)")
 
 // ADDED: Explain why not eligible
 if bc.rotatingKingManager != nil && distribution.RotatingKingAddress != (common.Address{}) {

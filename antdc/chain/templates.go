@@ -156,6 +156,10 @@ currentTime = uint64(time.Now().Unix())
 
 // Check miner eligibility
 if bc.pow != nil {
+if bc.state != nil {
+bc.pow.AutoRegisterIfEligible(miner, bc.state.GetBalance(miner))
+}
+
 eligible, err := bc.pow.VerifyMinerEligibility(
 miner,
 parent.Hash(),

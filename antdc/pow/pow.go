@@ -371,9 +371,9 @@ func (p *PoW) AutoRegisterIfEligible(addr common.Address, balance *big.Int) {
     if balance.Cmp(MinStakeAmount) < 0 {
         // Not enough — ensure removed if previously registered
         p.mu.Lock()
-        if info, exists := p.stakers[addr]; exists && !info.IsActive {
-            p.removeStakerLocked(addr)
-        }
+    if _, exists := p.stakers[addr]; exists {
+        p.removeStakerLocked(addr)
+    }
         p.mu.Unlock()
         return
     }

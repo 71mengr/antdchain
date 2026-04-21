@@ -193,6 +193,21 @@ log.Printf("[blockchain] Parent validated: height=%d hash=%s",
 parentBlock.Header.Number.Uint64(), parentBlock.Hash().Hex()[:12])
 }
 
+// Fast fork pre-check for same-height competitors.
+// Avoid mutating state for losing fork candidates.
+if blockHeight == currentHeight && currentTip != nil && currentTipHash != blockHash {
+log.Printf("[blockchain] Fork detected at height %d: current=%s, new=%s",
+blockHeight, currentTipHash.Hex()[:12], blockHash.Hex()[:12])
+
+if b.Header.Time >= currentTip.Header.Time {
+log.Printf("[blockchain] Fork rejected: new block has later/equal timestamp")
+return fmt.Errorf("fork block rejected (later/equal timestamp)")
+}
+
+log.Printf("[blockchain] Reorg candidate accepted by timestamp tie-break")
+return bc.reorganizeAtHeight(blockHeight, b)
+}
+
 // ==============================================
 // BLOCK VALIDATION
 // ==============================================
@@ -235,19 +250,7 @@ if currentTipHash == blockHash {
 log.Printf("[blockchain] Duplicate block at height %d", blockHeight)
 return nil
 }
-
-log.Printf("[blockchain] Fork detected at height %d: current=%s, new=%s",
-blockHeight, currentTipHash.Hex()[:12], blockHash.Hex()[:12])
-
-// Fork resolution: prefer block with earlier timestamp
-if b.Header.Time < currentTip.Header.Time {
-log.Printf("[blockchain] Reorg: switching to earlier timestamp block %s",
-blockHash.Hex()[:12])
-return bc.reorganizeAtHeight(blockHeight, b)
-}
-
-log.Printf("[blockchain] Fork rejected: new block has later timestamp")
-return fmt.Errorf("fork block rejected (later timestamp)")
+return fmt.Errorf("same-height fork should have been handled earlier")
 }
 
 // Block is ahead — trigger sync
@@ -460,6 +463,20 @@ newHash := newBlock.Hash()
 log.Printf("[blockchain] Reorg: replacing block %s with %s at height %d",
 oldHash.Hex()[:12], newHash.Hex()[:12], height)
 
+parent := bc.GetBlock(height - 1)
+if parent == nil {
+return fmt.Errorf("missing parent block at height %d for reorg", height-1)
+}
+
+// Rebuild state from parent before validating/executing replacement block.
+if err := bc.revertToHeight(height - 1); err != nil {
+return fmt.Errorf("failed to revert state for reorg at height %d: %w", height, err)
+}
+
+if err := bc.validateAndExecuteBlock(newBlock, parent); err != nil {
+return fmt.Errorf("replacement block validation failed at height %d: %w", height, err)
+}
+
 // Write new block to database
 if err := bc.db.WriteBlock(newBlock); err != nil {
 return fmt.Errorf("failed to write new block to database during reorg: %w", err)
@@ -493,13 +510,25 @@ if currentTip != nil && currentTip.Hash() == oldHash {
 bc.latest.Store(newBlock)
 }
 
+// Commit new canonical state for the replacement block.
+root, err := bc.state.Commit(newBlock.Header.Number.Uint64())
+if err != nil {
+return fmt.Errorf("failed to commit replacement block state at height %d: %w", height, err)
+}
+if root != newBlock.Header.Root {
+return fmt.Errorf("replacement block state root mismatch at height %d: %s != %s", height, root.Hex(), newBlock.Header.Root.Hex())
+}
+if err := bc.state.Reset(root); err != nil {
+return fmt.Errorf("failed to reset state after replacement block at height %d: %w", height, err)
+}
+
 // Note: persistBlockAsync is no longer needed for persistence but may do other things
 go bc.persistBlockAsync(newBlock)
 
-// Cleanup txs from old block, add from new
+// Cleanup txs from old and new blocks in pool
 if bc.txPool != nil {
 bc.txPool.CleanupMinedTransactions(oldBlock.Txs)
-// Note: We don't add new block's txs back to pool - they're already mined
+bc.txPool.CleanupMinedTransactions(newBlock.Txs)
 }
 
 log.Printf("[blockchain] Reorg successful at height %d", height)
