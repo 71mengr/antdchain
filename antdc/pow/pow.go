@@ -205,18 +205,14 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
     stakeConcentration := p.calculateStakeConcentration()
     concentrationFactor := big.NewInt(int64(stakeConcentration * 100))
 
-    // Adjust based on recent missed blocks
-    missedBlocksFactor := big.NewInt(100)
-    if p.missedBlocks.Load() > 0 {
-        missedRate := float64(p.missedBlocks.Load()) / float64(p.totalBlocks.Load())
-        missedBlocksFactor = big.NewInt(int64(100 * (1 + missedRate)))
-    }
-
     // Calculate final difficulty
-    // Difficulty = base * timeAdjustment * concentrationFactor / missedBlocksFactor
+    // NOTE: Do not include local runtime counters (e.g. missed blocks) here.
+    // They can legitimately differ between nodes and lead to non-deterministic
+    // expected difficulty during block validation.
+    //
+    // Difficulty = base * timeAdjustment * concentrationFactor
     difficulty := new(big.Int).Mul(baseDifficulty, timeAdjustment)
     difficulty.Mul(difficulty, concentrationFactor)
-    difficulty.Div(difficulty, missedBlocksFactor)
 
     // Apply bounds
     if difficulty.Cmp(big.NewInt(BaseDifficulty)) < 0 {
@@ -820,5 +816,4 @@ func (p *PoW) IsKing(addr common.Address) bool {
     s, ok := p.stakers[addr]
     return ok && s.IsActive && s.UnbondingEnd == nil
 }
-
 
