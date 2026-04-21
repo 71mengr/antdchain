@@ -53,7 +53,7 @@ return err
 }
 tx.Signature = sig
 tx.PubKey = append([]byte(nil), pubKey...)
-from, err := quantum.AddressToQuantum(quantum.PubKeyToAddress(pubKey))
+from, err := chaincommon.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
 if err != nil {
 return err
 }
@@ -88,7 +88,7 @@ return false, errors.New("missing public key")
 if !quantum.Verify(tx.PubKey, tx.HashForSigning(), tx.Signature) {
 return false, errors.New("invalid signature")
 }
-addr, err := quantum.AddressToQuantum(quantum.PubKeyToAddress(tx.PubKey))
+addr, err := chaincommon.ParseQuantumAddress(quantum.PubKeyToAddress(tx.PubKey))
 if err != nil {
 return false, err
 }
@@ -192,23 +192,14 @@ return fmt.Errorf("invalid pubKey hex: %w", err)
 tx.PubKey = pk
 }
 if aux.From != "" {
-fromAddr, err := quantum.AddressToQuantum(aux.From)
+fromAddr, err := chaincommon.ParseQuantumAddress(aux.From)
 if err != nil {
-if len(aux.From) == chaincommon.QuantumAddressLength*2 {
-var a chaincommon.QuantumAddress
-if err2 := a.UnmarshalJSON([]byte("\"" + aux.From + "\"")); err2 == nil {
-tx.From = a
-}
-}
-if tx.From == (chaincommon.QuantumAddress{}) {
 return err
 }
-} else {
 tx.From = fromAddr
 }
-}
 if aux.To != nil {
-toAddr, err := quantum.AddressToQuantum(*aux.To)
+toAddr, err := chaincommon.ParseQuantumAddress(*aux.To)
 if err != nil {
 return err
 }

@@ -4,7 +4,6 @@ import (
 "crypto/rand"
 "errors"
 
-localcommon "github.com/antdaza/antdchain/common"
 "github.com/cloudflare/circl/sign/mldsa/mldsa65"
 "github.com/mr-tron/base58"
 "golang.org/x/crypto/ripemd160"
@@ -58,7 +57,14 @@ sha := sha3.Sum256(pubKey)
 r := ripemd160.New()
 _, _ = r.Write(sha[:])
 payload := r.Sum(nil)
-return encodeAddress(payload)
+return EncodeAddress(payload)
+}
+
+func EncodeAddress(payload []byte) string {
+buf := make([]byte, 0, EncodedPayloadLength)
+buf = append(buf, payload...)
+buf = append(buf, addressChecksum(payload)...)
+return AddressPrefix + base58.Encode(buf)
 }
 
 func IsValidAddress(addr string) bool {
@@ -88,21 +94,6 @@ return nil, errors.New("checksum mismatch")
 out := make([]byte, PayloadLength)
 copy(out, payload)
 return out, nil
-}
-
-func AddressToQuantum(addr string) (localcommon.QuantumAddress, error) {
-payload, err := ExtractPayload(addr)
-if err != nil {
-return localcommon.QuantumAddress{}, err
-}
-return localcommon.NewQuantumAddressFromBytes(payload)
-}
-
-func encodeAddress(payload []byte) string {
-buf := make([]byte, 0, EncodedPayloadLength)
-buf = append(buf, payload...)
-buf = append(buf, addressChecksum(payload)...)
-return AddressPrefix + base58.Encode(buf)
 }
 
 func addressChecksum(payload []byte) []byte {

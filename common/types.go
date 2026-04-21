@@ -1,10 +1,11 @@
 package common
 
 import (
-"encoding/hex"
 "encoding/json"
 "errors"
 "strings"
+
+"github.com/antdaza/antdchain/antdc/crypto/quantum"
 )
 
 const QuantumAddressLength = 20
@@ -20,7 +21,15 @@ copy(a[:], b)
 return a, nil
 }
 
-func (a QuantumAddress) String() string { return a.Hex() }
+func ParseQuantumAddress(s string) (QuantumAddress, error) {
+payload, err := quantum.ExtractPayload(strings.TrimSpace(s))
+if err != nil {
+return QuantumAddress{}, err
+}
+return NewQuantumAddressFromBytes(payload)
+}
+
+func (a QuantumAddress) String() string { return quantum.EncodeAddress(a[:]) }
 
 func (a QuantumAddress) Bytes() []byte {
 out := make([]byte, QuantumAddressLength)
@@ -28,10 +37,8 @@ copy(out, a[:])
 return out
 }
 
-func (a QuantumAddress) Hex() string { return hex.EncodeToString(a[:]) }
-
 func (a QuantumAddress) MarshalJSON() ([]byte, error) {
-return json.Marshal(a.Hex())
+return json.Marshal(a.String())
 }
 
 func (a *QuantumAddress) UnmarshalJSON(data []byte) error {
@@ -39,14 +46,10 @@ var s string
 if err := json.Unmarshal(data, &s); err != nil {
 return err
 }
-s = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "0x")
-if len(s) != QuantumAddressLength*2 {
-return errors.New("invalid quantum address hex length")
-}
-decoded, err := hex.DecodeString(s)
+parsed, err := ParseQuantumAddress(s)
 if err != nil {
 return err
 }
-copy(a[:], decoded)
+*a = parsed
 return nil
 }
