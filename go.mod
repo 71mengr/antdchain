@@ -108,7 +108,6 @@ require (
 	github.com/mikioh/tcpinfo v0.0.0-20190314235526-30a79bb1804b // indirect
 	github.com/mikioh/tcpopt v0.0.0-20190314235656-172688c1accc // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
-	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
 	github.com/multiformats/go-multiaddr-dns v0.3.1 // indirect
@@ -125,7 +124,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/polydawn/refmt v0.89.0 // indirect
-	github.com/prometheus/client_golang v1.15.0 // indirect
 	github.com/prometheus/client_model v0.4.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
@@ -163,6 +161,10 @@ require (
 	lukechampine.com/blake3 v1.2.1 // indirect
 )
 
-require github.com/antdaza/antdchain/antdc/chain v1.0.0
+require (
+	github.com/antdaza/antdchain/antdc/chain v1.0.0
+	github.com/mr-tron/base58 v1.2.0
+	github.com/prometheus/client_golang v1.15.0
+)
 
 replace github.com/antdaza/antdchain/antdc/chain => ./antdc/chain

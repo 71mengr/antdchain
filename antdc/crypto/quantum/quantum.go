@@ -45,11 +45,11 @@ return privKey.Sign(rand.Reader, message, nil)
 }
 
 func Verify(pubKeyBytes, message, signature []byte) bool {
-pubKey := new(mldsa65.PublicKey)
-if err := pubKey.UnmarshalBinary(pubKeyBytes); err != nil {
-return false
-}
-return pubKey.Verify(message, signature, nil)
+    pubKey := new(mldsa65.PublicKey)
+    if err := pubKey.UnmarshalBinary(pubKeyBytes); err != nil {
+        return false
+    }
+    return mldsa65.Verify(pubKey, message, signature, nil)
 }
 
 func DerivePublicKey(privKeyBytes []byte) ([]byte, error) {
