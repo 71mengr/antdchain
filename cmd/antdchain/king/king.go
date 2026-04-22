@@ -155,7 +155,7 @@ func cmdStatus(ctx *cli.Context) error {
     fmt.Println("=== ANTDChain King Status ===")
     
     // Get main king from reward distributor
-    mainKing := common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2") // Default main king
+    mainKing := common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY") // Default main king
     fmt.Printf("Main King : %s\n", mainKing.Hex())
     fmt.Printf("  Balance : %s ANTD\n\n", weiToANTD(bc.GetAccountBalance(mainKing)))
 

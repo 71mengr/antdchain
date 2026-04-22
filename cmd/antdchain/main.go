@@ -363,8 +363,8 @@ func main() {
 			&cli.StringFlag{Name: "data-dir", Value: defaultDir, Usage: "Data directory"},
 			&cli.IntFlag{Name: "rpc-port", Value: 8089, Usage: "JSON-RPC port"},
 			&cli.IntFlag{Name: "web-port", Value: 8090, Usage: "Web interface port"},
-			&cli.IntFlag{Name: "p2p-port", Value: 30343, Usage: "P2P port"},
-			&cli.StringFlag{Name: "bootstrap", Value: "/ip4/129.151.164.223/tcp/30343/p2p/12D3KooWNQMrzwLnDxL8NHMpYuTCpZja3K4AXJDrW2NzSPsGdERC", Usage: "Bootstrap nodes"},
+			&cli.IntFlag{Name: "p2p-port", Value: 3000, Usage: "P2P port"},
+			&cli.StringFlag{Name: "bootstrap", Value: "/ip4/129.151.164.223/tcp/3000/p2p/12D3KooWNQMrzwLnDxL8NHMpYuTCpZja3K4AXJDrW2NzSPsGdERC", Usage: "Bootstrap nodes"},
 			&cli.BoolFlag{Name: "startmining", Usage: "Start PoS mining"},
 			&cli.BoolFlag{Name: "console", Usage: "Open console"},
 			&cli.BoolFlag{Name: "no-web", Usage: "Disable web interface"},
@@ -870,7 +870,7 @@ func runNode(c *cli.Context) error {
 
 	// Check candidate addresses
 	candidateAddresses := []common.Address{
-		common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2"), // Main King
+		common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
 		common.BytesToAddress(minerWallet.Address().Bytes()),              // Miner wallet
 	}
 

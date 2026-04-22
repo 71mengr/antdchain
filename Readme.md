@@ -95,13 +95,13 @@ go build -o antdchain ./cmd/antdchain
 #### Quick Start
 ```bash
 # Start a node with default settings
-./antdchain --data-dir ./antdchain-data --p2p-port 30343
+./antdchain --data-dir ./antdchain-data --p2p-port 3000
 
 # Start with mining enabled
 ./antdchain --startmining --miner-address YOUR_ADDRESS
 
 # Connect to testnet
-./antdchain --bootstrap "/ip4/1.2.3.4/tcp/30343/p2p/12D3KooW..."
+./antdchain --bootstrap "/ip4/1.2.3.4/tcp/3000/p2p/12D3KooW..."
 
 # Open console interface
 ./antdchain --console
@@ -120,7 +120,7 @@ antdchain-data/
 ```
 
 #### Network Ports
-- **P2P**: 30343 (default)
+- **P2P**: 3000 (default)
 - **JSON-RPC**: 8089 (default)
 - **Web Interface**: 8090 (default)
 
@@ -244,11 +244,11 @@ curl -X POST http://localhost:8089/rpc \
 ```json
 {
   "genesis": {
-    "miner": "0xb007d5cde43250cA61E87799ed3416A0B20f4FC2",
+    "miner": "0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY",
     "timestamp": 1763731821,
     "difficulty": "1",
     "alloc": {
-      "0xb007d5cde43250cA61E87799ed3416A0B20f4FC2": "1000000000000000000000000"
+      "0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY": "1000000000000000000000000"
     }
   }
 }
@@ -269,7 +269,7 @@ curl -X POST http://localhost:8089/rpc \
 ### P2P Configuration
 ```bash
 # Custom bootstrap nodes
-./antdchain --bootstrap "/ip4/1.2.3.4/tcp/30343/p2p/...,/ip4/5.6.7.8/tcp/30343/p2p/..."
+./antdchain --bootstrap "/ip4/1.2.3.4/tcp/3000/p2p/...,/ip4/5.6.7.8/tcp/3000/p2p/..."
 
 # Disable discovery
 ./antdchain --no-mdns --no-dht

@@ -156,15 +156,25 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		DataDir:           "./antdchain-data",
-		Port:              4001,
+		Port:              3000,
 		EnableMDNS:        true,
 		EnableDHT:         true,
 		EnableNATService:  true,
 		MaxPeers:          50,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
-		LogLevel:          "info",
+		LogLevel:          defaultP2PLogLevel(),
 	}
+}
+
+func defaultP2PLogLevel() string {
+	for _, arg := range os.Args[1:] {
+		if arg == "--log-info" {
+			return "info"
+		}
+	}
+
+	return "error"
 }
 
 type Node struct {
@@ -1165,7 +1175,7 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 		MaxPeers:          50,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
-		LogLevel:          "info",
+		LogLevel:          defaultP2PLogLevel(),
 	}
 
 	return NewNodeWithConfig(bc, cfg)
@@ -5121,7 +5131,7 @@ func (n *Node) BroadcastRotation(event *rotatingking.KingRotationBroadcast) erro
 func (n *Node) isImportantAddress(addr common.Address) bool {
 	// Define important addresses (main king, known validators, etc.)
 	importantAddresses := []common.Address{
-		common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2"), // Main King
+		common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
 		// Add other important addresses HERE
 	}
 

@@ -1,6 +1,6 @@
 [network]
 data_dir = "./node-data"
-p2p_port = 4001
+p2p_port = 3000
 bootstrap_peers = [
-    "/ip4/45.87.80.81/tcp/30343/p2p/12D3KooWE2NhYpUTx2JVjZV4n77kZMuPxRwMKTvwTsjktDzR1LSd"
+    "/ip4/129.151.164.223/tcp/3000/p2p/12D3KooWE2NhYpUTx2JVjZV4n77kZMuPxRwMKTvwTsjktDzR1LSd"
 ]

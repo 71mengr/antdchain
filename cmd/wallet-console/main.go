@@ -44,7 +44,7 @@ func main() {
             },
             &cli.IntFlag{
                 Name:    "daemon-p2p-port",
-                Value:   30343,
+                Value:   3000,
                 Usage:   "Daemon P2P port (for reference)",
                 EnvVars: []string{"ANTDCHAIN_DAEMON_P2P_PORT"},
             },

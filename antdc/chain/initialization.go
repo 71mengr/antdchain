@@ -18,18 +18,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/golang-lru"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/antdaza/antdchain/antdc/block"
+	"github.com/antdaza/antdchain/antdc/chain/db"
 	"github.com/antdaza/antdchain/antdc/checkpoints"
 	"github.com/antdaza/antdchain/antdc/monitoring"
 	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/antdc/reward"
-	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
+	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/vm"
-	"github.com/antdaza/antdchain/antdc/chain/db"
+	chaincommon "github.com/antdaza/antdchain/common"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/hashicorp/golang-lru"
 )
 
 // Constants for initialization
@@ -45,24 +46,22 @@ func NewBlockchain(statePath string, miner common.Address) (*Blockchain, error) 
 	log.Printf("[blockchain] Initializing blockchain from: %s", statePath)
 	log.Printf("[blockchain] Miner address: %s", miner.Hex())
 
+	subDirs := []string{
+		"chain",        // Pebble chain database
+		"blocks",       // Legacy/migration blocks (warned about in logs)
+		"rotatingking", // Rotating king manager DB
+		"state",
 
-       subDirs := []string{
-        "chain",          // Pebble chain database
-        "blocks",         // Legacy/migration blocks (warned about in logs)
-        "rotatingking",   // Rotating king manager DB
-        "state",         
-        
-        // "ancient", 
-        // "checkpoints",
-       }
-
-       for _, sub := range subDirs {
-        dirPath := filepath.Join(statePath, sub)
-        if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
-            return nil, fmt.Errorf("failed to create required directory %s: %w", sub, err)
-        }
-        log.Printf("[blockchain] Ensured directory exists: %s", dirPath)
-       }
+		// "ancient",
+		// "checkpoints",
+	}
+	for _, sub := range subDirs {
+		dirPath := filepath.Join(statePath, sub)
+		if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
+			return nil, fmt.Errorf("failed to create required directory %s: %w", sub, err)
+		}
+		log.Printf("[blockchain] Ensured directory exists: %s", dirPath)
+	}
 
 	// ====================
 	// INITIALIZE CHAIN DATABASE
@@ -320,7 +319,11 @@ func NewBlockchain(statePath string, miner common.Address) (*Blockchain, error) 
 	// ====================
 	// INITIALIZE MAIN KING
 	// ====================
-	mainKing := common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2")
+	parsedMainKing, err := chaincommon.ParseQuantumAddress(GenesisMainKing)
+	if err != nil {
+		return nil, fmt.Errorf("invalid configured main king antdchain address: %w", err)
+	}
+	mainKing := common.Address(parsedMainKing)
 	bc.Pow().AutoRegisterIfEligible(mainKing, bc.state.GetBalance(mainKing))
 	log.Printf("[blockchain] Main King auto-registered: %s", mainKing.Hex())
 	if miner != (common.Address{}) && miner != mainKing {

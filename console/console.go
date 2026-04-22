@@ -30,6 +30,7 @@ import (
 
 	qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
 	"github.com/antdaza/antdchain/antdc/chain"
+	"github.com/antdaza/antdchain/antdc/crypto/quantum"
 	"github.com/antdaza/antdchain/antdc/mining"
 	"github.com/antdaza/antdchain/antdc/p2p"
 	"github.com/antdaza/antdchain/antdc/reward"
@@ -37,7 +38,6 @@ import (
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/wallet"
 	chaincommon "github.com/antdaza/antdchain/common"
-	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -50,6 +50,14 @@ func ethToQuantumAddress(addr common.Address) chaincommon.QuantumAddress {
 		return chaincommon.QuantumAddress{}
 	}
 	return q
+}
+
+func parseQuantumAddressInput(input string) (common.Address, error) {
+	qAddr, err := chaincommon.ParseQuantumAddress(strings.TrimSpace(input))
+	if err != nil {
+		return common.Address{}, fmt.Errorf("invalid antdchain address '%s': %w", input, err)
+	}
+	return common.Address(qAddr), nil
 }
 
 type RPCClient struct {
@@ -756,8 +764,17 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 		return
 	}
 
-	fromAddr := common.HexToAddress(parts[1])
-	toAddr := common.HexToAddress(parts[2])
+	fromAddr, err := parseQuantumAddressInput(parts[1])
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
+	}
+
+	toAddr, err := parseQuantumAddressInput(parts[2])
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
+	}
 	amount, err := parseANTDAmount(parts[3])
 	if err != nil {
 		fmt.Printf("❌ Invalid amount: %v\n", err)
@@ -797,11 +814,9 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 	}
 
 	// Find wallet in local keystore
-	var account accounts.Account
 	found := false
 	for _, acc := range c.node.Keystore().Accounts() {
 		if acc.Address == fromAddr {
-			account = acc
 			found = true
 			break
 		}
@@ -819,19 +834,23 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 		return
 	}
 
-	// Decrypt and sign
-	keyjson, err := os.ReadFile(account.URL.Path)
+	qFrom, err := chaincommon.NewQuantumAddressFromBytes(fromAddr.Bytes())
 	if err != nil {
-		fmt.Printf("❌ Failed to read keystore file: %v\n", err)
+		fmt.Printf("❌ Invalid sender address bytes: %v\n", err)
 		return
 	}
 
-	key, err := keystore.DecryptKey(keyjson, password)
+	privKey, err := qkeystore.Unlock(qFrom, password, c.node.GetKeystoreDir())
 	if err != nil {
-		fmt.Printf("❌ Wrong password: %v\n", err)
+		fmt.Printf("❌ Wrong password or quantum keystore unavailable: %v\n", err)
 		return
 	}
-	_ = key
+
+	pubKey, err := quantum.DerivePublicKey(privKey)
+	if err != nil {
+		fmt.Printf("❌ Failed to derive quantum public key: %v\n", err)
+		return
+	}
 
 	// Create transaction
 	txObj := tx.NewTransferTx(
@@ -842,7 +861,7 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 		gasPrice,
 	)
 
-	if err := txObj.Sign(nil, nil); err != nil {
+	if err := txObj.Sign(privKey, pubKey); err != nil {
 		fmt.Printf("❌ Failed to sign transaction: %v\n", err)
 		return
 	}
@@ -1113,8 +1132,19 @@ func (n *Node) Keystore() *keystore.KeyStore {
 }
 
 func (n *Node) GetKeystoreDir() string {
-	return n.keystoreDir
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return n.keystoreDir
+	}
+
+	if runtime.GOOS == "windows" {
+		return filepath.Join(homeDir, "Antdchain", "keystore")
+	}
+
+	return filepath.Join(homeDir, ".antdchain", "keystore")
 }
+
+
 
 func (n *Node) GetMinerWallet() MinerWallet {
 	n.mu.RLock()
@@ -1546,7 +1576,11 @@ func (c *Console) handleSetAddress(parts []string) {
 		return
 	}
 
-	addr := common.HexToAddress(parts[1])
+	addr, err := parseQuantumAddressInput(parts[1])
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
+	}
 
 	// Verify it exists in keystore
 	found := false
@@ -1606,7 +1640,7 @@ func (c *Console) handleCreateAddress() {
 		return
 	}
 
-	keystoreDir := filepath.Join(c.getWalletDataDir(), "keystore")
+	keystoreDir := c.node.GetKeystoreDir()
 	addr, err := qkeystore.NewAccount(password, keystoreDir)
 	if err != nil {
 		fmt.Printf("❌ Failed to create wallet in keystore: %v\n", err)
@@ -1620,7 +1654,7 @@ func (c *Console) handleCreateAddress() {
 	fmt.Printf("✅ New wallet created and saved to keystore!\n")
 	fmt.Printf("Address: %s\n", addr)
 
-	fmt.Printf("Type: quantum address (0q Base58Check)\n")
+	fmt.Printf("Type: Antdchain address (0q Base58Check)\n")
 	fmt.Printf("Keystore: %s\n", keystoreDir)
 }
 
@@ -1635,8 +1669,17 @@ func (c *Console) handleSend(parts []string) {
 	}
 
 	//PARSE INPUTS
-	fromAddr := common.HexToAddress(parts[1])
-	toAddr := common.HexToAddress(parts[2])
+	fromAddr, err := parseQuantumAddressInput(parts[1])
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
+	}
+
+	toAddr, err := parseQuantumAddressInput(parts[2])
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
+	}
 	amountStr := parts[3]
 
 	// Parse amount
@@ -1775,11 +1818,9 @@ func (c *Console) handleSend(parts []string) {
 	}
 
 	// FIND KEYSTORE ACCOUNT
-	var account accounts.Account
 	found := false
 	for _, acc := range c.node.Keystore().Accounts() {
 		if acc.Address == fromAddr {
-			account = acc
 			found = true
 			break
 		}
@@ -1802,18 +1843,23 @@ func (c *Console) handleSend(parts []string) {
 		return
 	}
 
-	keyjson, err := os.ReadFile(account.URL.Path)
+	qFrom, err := chaincommon.NewQuantumAddressFromBytes(fromAddr.Bytes())
 	if err != nil {
-		fmt.Printf("❌ Failed to read keystore file: %v\n", err)
+		fmt.Printf("❌ Invalid sender address bytes: %v\n", err)
 		return
 	}
 
-	key, err := keystore.DecryptKey(keyjson, password)
+	privKey, err := qkeystore.Unlock(qFrom, password, c.node.GetKeystoreDir())
 	if err != nil {
-		fmt.Printf("❌ Wrong password or corrupted keystore: %v\n", err)
+		fmt.Printf("❌ Wrong password or antdchain keystore unavailable: %v\n", err)
 		return
 	}
-	_ = key
+
+	pubKey, err := quantum.DerivePublicKey(privKey)
+	if err != nil {
+		fmt.Printf("❌ Failed to derive antdchain public key: %v\n", err)
+		return
+	}
 
 	// CREATE AND SIGN TRANSACTION
 	fmt.Printf("\n🔏 Creating and signing transaction...\n")
@@ -1826,7 +1872,7 @@ func (c *Console) handleSend(parts []string) {
 	)
 
 	// Sign the transaction
-	if err := txm.Sign(nil, nil); err != nil {
+	if err := txm.Sign(privKey, pubKey); err != nil {
 		fmt.Printf("❌ Failed to sign transaction: %v\n", err)
 		return
 	}
@@ -2704,37 +2750,8 @@ func (c *Console) handleSendDebug(parts []string) {
 
 // GetUnlockedPrivateKey – safe, works with any go-ethereum version
 func (n *Node) GetUnlockedPrivateKey(addr common.Address) (*ecdsa.PrivateKey, error) {
-	// Find the keystore file for this address
-	var account accounts.Account
-	for _, a := range n.keystore.Accounts() {
-		if a.Address == addr {
-			account = a
-			break
-		}
-	}
-	if account.Address == (common.Address{}) {
-		return nil, fmt.Errorf("address %s not found in keystore", addr.Hex())
-	}
-
-	// Read the encrypted keystore file
-	keyjson, err := os.ReadFile(account.URL.Path)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read keystore file: %w", err)
-	}
-
-	// Ask user for password
-	password, err := readPasswordOnce(fmt.Sprintf("Password for %s: ", addr.Hex()))
-	if err != nil {
-		return nil, err
-	}
-
-	// Decrypt – this is the official, supported way
-	key, err := keystore.DecryptKey(keyjson, password)
-	if err != nil {
-		return nil, fmt.Errorf("wrong password or corrupted keystore: %w", err)
-	}
-
-	return key.PrivateKey, nil
+	_ = addr
+	return nil, fmt.Errorf("legacy ECDSA private keys are unsupported; use antdchain keystore unlock flow")
 }
 
 // List wallets from wallet manager
@@ -3174,7 +3191,7 @@ func (c *Console) listLocalProposals() {
 }
 
 func (c *Console) handleLoadWallets() {
-	keystoreDir := filepath.Join(c.getWalletDataDir(), "keystore")
+	keystoreDir := c.node.GetKeystoreDir()
 	if _, err := os.Stat(keystoreDir); os.IsNotExist(err) {
 		fmt.Printf("❌ No keystore directory found at %s. Create a wallet first using 'createaddress'.\n", keystoreDir)
 		return
@@ -3743,7 +3760,7 @@ func (c *Console) handleRKList(rkManager reward.RotatingKingManager) {
 	for i, addr := range addresses {
 		c.node.mu.RLock()
 		balance := c.node.blockchain.State().GetBalance(addr)
-		isMainKing := addr == common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2")
+		isMainKing := addr == common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 		c.node.mu.RUnlock()
 
 		status := ""
@@ -3834,7 +3851,7 @@ func (c *Console) handleRKHistory(rkManager reward.RotatingKingManager, limit in
 func (c *Console) handleRKRotate(rkManager reward.RotatingKingManager, index int) {
 	c.node.mu.RLock()
 	minerAddr := c.node.MinerWalletAddress()
-	mainKing := common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2")
+	mainKing := common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	isMainKing := minerAddr == mainKing
 	currentHeight := c.node.blockchain.GetChainHeight()
 	blockHash := c.node.blockchain.GetBlock(currentHeight).Hash()
@@ -4105,7 +4122,7 @@ func (c *Console) handleRKInfo(rkManager reward.RotatingKingManager, addrStr str
 	c.node.mu.RLock()
 	balance := c.node.blockchain.State().GetBalance(addr)
 	// blocksMined := c.node.blockchain.GetBlocksMinedBy(addr)
-	isMainKing := addr == common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2")
+	isMainKing := addr == common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	c.node.mu.RUnlock()
 
 	isKing := rkManager.IsKing(addr)
@@ -4161,7 +4178,7 @@ func (c *Console) handleRKGovernance(rkManager reward.RotatingKingManager, parts
 	}
 
 	c.node.mu.RLock()
-	mainKing := common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2")
+	mainKing := common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	isMainKing := c.node.MinerWalletAddress() == mainKing
 	c.node.mu.RUnlock()
 
@@ -4233,7 +4250,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	}
 
 	// Check if address is the Main King address
-	mainKing := common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2")
+	mainKing := common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	if addr == mainKing {
 		fmt.Println("❌ Main King is already permanently in the reward distribution")
 		fmt.Println("   Main King receives 5% rewards automatically")
@@ -4485,7 +4502,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 	fmt.Printf("\n🎉 GOVERNANCE PROPOSAL CREATED!\n")
 	fmt.Printf("══════════════════════════════════════════════════════════\n")
 	fmt.Printf("   Proposal ID:      %d\n", proposalID)
-	fmt.Printf("   From (Main King): %s\n", common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2").Hex())
+	fmt.Printf("   From (Main King): %s\n", common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY").Hex())
 	fmt.Printf("   Action:           Add %s to rotation\n", addr.Hex())
 	fmt.Printf("   New Total Kings:  %d\n", len(newRotatingKings))
 	fmt.Printf("   Created:          %s\n", time.Unix(int64(currentTime), 0).Format(time.RFC3339))

@@ -72,7 +72,7 @@ func main() {
 	genesis.Alloc = map[common.Address]struct {
 		Balance string `json:"balance"`
 	}{
-		common.HexToAddress("0xb007d5cde43250cA61E87799ed3416A0B20f4FC2"): {
+		common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"): {
 			Balance: "1000000000000000000000000", // 1,000,000 ANTD
 		},
 	}
