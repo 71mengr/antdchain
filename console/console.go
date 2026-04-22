@@ -902,7 +902,7 @@ func (c *Console) printWalletHelp() {
 	fmt.Println("  nonce <address>          - Show nonce for address")
 	fmt.Println("  address                  - Show wallet addresses")
 	fmt.Println("  createaddress            - Create new wallet")
-        fmt.Println("  import <key>             - Import ML-DSA-65 private key")
+	fmt.Println("  import <key>             - Import ML-DSA-65 private key")
 	fmt.Println("  export <address>         - Export private key")
 	fmt.Println("  listwallets              - List all quantum wallets")
 	fmt.Println("  listaddresses            - Alias for listwallets")
@@ -3028,16 +3028,41 @@ func (c *Console) handleStatus() {
 		fmt.Printf("  Miner Balance    : %s ANTD\n", formatBalance(balance))
 	}
 
-	// Keystore wallets (real encrypted wallets)
-	keystoreAccounts := c.node.Keystore().Accounts()
-	fmt.Printf("  Encrypted Wallets: %d\n", len(keystoreAccounts))
-	if len(keystoreAccounts) > 0 {
+	// Quantum wallets (0q Base58Check only)
+	wallets := c.node.walletManager.ListWallets()
+	walletCount := 0
+	for _, walletInfo := range wallets {
+		if walletInfo != "No wallets found" {
+			walletCount++
+		}
+	}
+	fmt.Printf("  Quantum Wallets  : %d\n", walletCount)
+	if walletCount > 0 {
 		fmt.Println("     Available wallets:")
-		for i, acc := range keystoreAccounts {
+		displayIndex := 1
+		for _, walletInfo := range wallets {
+			if walletInfo == "No wallets found" {
+				continue
+			}
+			parts := strings.Fields(walletInfo)
+			if len(parts) < 2 {
+				continue
+			}
+
+			// ListWallets format: "<lock-icon> <address>"
+			statusIcon := parts[0]
+			addrStr := parts[1]
+			quantumAddr, err := chaincommon.ParseQuantumAddress(addrStr)
+			if err != nil {
+				// Ignore non-quantum/legacy address formats in status output.
+				continue
+			}
+
 			c.node.mu.RLock()
-			bal := c.node.blockchain.State().GetBalance(acc.Address)
+			bal := c.node.blockchain.State().GetBalance(common.Address(quantumAddr))
 			c.node.mu.RUnlock()
-			fmt.Printf("     %d. %s → %s ANTD\n", i+1, acc.Address.Hex(), formatBalance(bal))
+			fmt.Printf("     %d. %s %s → %s ANTD\n", displayIndex, statusIcon, addrStr, formatBalance(bal))
+			displayIndex++
 		}
 	}
 
