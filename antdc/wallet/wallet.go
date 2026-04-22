@@ -25,6 +25,7 @@ import (
 
     "golang.org/x/crypto/scrypt"
 
+    "github.com/antdaza/antdchain/antdc/accounts/keystore"
     "github.com/antdaza/antdchain/antdc/chain"
     "github.com/antdaza/antdchain/antdc/crypto/quantum"
     "github.com/antdaza/antdchain/antdc/tx"
@@ -206,26 +207,37 @@ func NewWallet(bc *chain.Blockchain, dataDir string) (*Wallet, error) {
 
 // NewWalletWithKey creates a wallet with an existing private key
 func NewWalletWithKey(bc *chain.Blockchain, privKey []byte, dataDir string) (*Wallet, error) {
-    if len(privKey) == 0 {
-        return nil, errors.New("private key cannot be nil")
-    }
-    pubKey, err := quantum.DerivePublicKey(privKey)
-    if err != nil {
-        return nil, fmt.Errorf("failed to derive public key: %w", err)
-    }
-    addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
-    if err != nil {
-        return nil, fmt.Errorf("failed to parse address: %w", err)
-    }
-    return &Wallet{
-        privKey:  append([]byte(nil), privKey...),
-        pubKey:   pubKey,
-        addr:     addr,
-        bc:       bc,
-        dataDir:  dataDir, // Store dataDir
-        isLocked: true,
-        security: NewWalletSecurity(),
-    }, nil
+	if len(privKey) == 0 {
+		return nil, errors.New("private key cannot be nil")
+	}
+	pubKey, err := quantum.DerivePublicKey(privKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive public key: %w", err)
+	}
+	addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse address: %w", err)
+	}
+	return &Wallet{
+		privKey:  append([]byte(nil), privKey...),
+		pubKey:   pubKey,
+		addr:     addr,
+		bc:       bc,
+		dataDir:  dataDir, // Store dataDir
+		isLocked: true,
+		security: NewWalletSecurity(),
+	}, nil
+}
+
+// NewWalletWithAddress creates a locked wallet placeholder from an address.
+func NewWalletWithAddress(bc *chain.Blockchain, addr common.QuantumAddress, dataDir string) *Wallet {
+	return &Wallet{
+		addr:     addr,
+		bc:       bc,
+		dataDir:  dataDir,
+		isLocked: true,
+		security: NewWalletSecurity(),
+	}
 }
 
 // Address returns the wallet address
@@ -517,70 +529,46 @@ func (wm *WalletManager) Lock(addr string) bool {
 
 // Unlock unlocks a wallet with a password
 func (wm *WalletManager) Unlock(addr, password string) error {
-    wm.mu.Lock()
-    defer wm.mu.Unlock()
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
 
-    w := wm.wallets[addr]
-    if w == nil {
-        wm.security.recordFailedAttempt(addr)
-        return fmt.Errorf("wallet not found: %s", addr)
-    }
+	w := wm.wallets[addr]
+	if w == nil {
+		wm.security.recordFailedAttempt(addr)
+		return fmt.Errorf("wallet not found: %s", addr)
+	}
 
-    if wm.security.isLockedOut(addr) {
-        return fmt.Errorf("wallet temporarily locked due to too many failed attempts")
-    }
+	if wm.security.isLockedOut(addr) {
+		return fmt.Errorf("wallet temporarily locked due to too many failed attempts")
+	}
 
-    // Load encrypted wallet data
-    walletFile := filepath.Join(wm.dataDir, "wallets.encrypted.json")
-    data, err := os.ReadFile(walletFile)
-    if err != nil {
-        wm.security.recordFailedAttempt(addr)
-        if os.IsNotExist(err) {
-            return fmt.Errorf("wallet file does not exist: %s", walletFile)
-        }
-        return fmt.Errorf("failed to read wallet file: %w", err)
-    }
+	parsedAddr, err := common.ParseQuantumAddress(addr)
+	if err != nil {
+		wm.security.recordFailedAttempt(addr)
+		return fmt.Errorf("invalid address: %w", err)
+	}
 
-    var encryptedWallets []EncryptedWallet
-    if err := json.Unmarshal(data, &encryptedWallets); err != nil {
-        wm.security.recordFailedAttempt(addr)
-        return fmt.Errorf("invalid wallet file format: %w", err)
-    }
+	privKey, err := keystore.Unlock(parsedAddr, password, filepath.Join(wm.dataDir, "keystore"))
+	if err != nil {
+		wm.security.recordFailedAttempt(addr)
+		return fmt.Errorf("failed to decrypt keystore: %w", err)
+	}
 
-    var encrypted *EncryptedWallet
-    for _, ew := range encryptedWallets {
-        if ew.Address == addr {
-            encrypted = &ew
-            break
-        }
-    }
-    if encrypted == nil {
-        wm.security.recordFailedAttempt(addr)
-        return fmt.Errorf("encrypted wallet not found for address: %s", addr)
-    }
+	// Update wallet with decrypted private key
+	if err := w.Unlock(privKey); err != nil {
+		wm.security.recordFailedAttempt(addr)
+		return fmt.Errorf("failed to unlock wallet: %w", err)
+	}
 
-    // Decrypt to verify password
-    decryptedWallet, err := Decrypt(encrypted, password, w.bc, wm.dataDir)
-    if err != nil {
-        wm.security.recordFailedAttempt(addr)
-        return fmt.Errorf("failed to decrypt wallet: %w", err)
-    }
+	wm.locked[addr] = false
+	wm.security.recordSuccessfulUnlock(addr)
 
-    // Update wallet with decrypted private key
-    if err := w.Unlock(decryptedWallet.privKey); err != nil {
-        wm.security.recordFailedAttempt(addr)
-        return fmt.Errorf("failed to unlock wallet: %w", err)
-    }
+	wm.security.setAutoLockTimer(addr, func() {
+		wm.Lock(addr)
+		log.Printf("Auto-locked wallet: %s", addr)
+	})
 
-    wm.locked[addr] = false
-    wm.security.recordSuccessfulUnlock(addr)
-
-    wm.security.setAutoLockTimer(addr, func() {
-        wm.Lock(addr)
-        log.Printf("Auto-locked wallet: %s", addr)
-    })
-
-    return nil
+	return nil
 }
 
 // ListWallets returns a list of wallets with lock status
@@ -603,70 +591,56 @@ func (wm *WalletManager) ListWallets() []string {
 
 // SaveWallets saves encrypted wallets to a JSON file
 func (wm *WalletManager) SaveWallets(password string) error {
-    wm.mu.RLock()
-    defer wm.mu.RUnlock()
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
 
-    var encryptedWallets []EncryptedWallet
-    for addr, w := range wm.wallets {
-        encrypted, err := w.Encrypt(password)
-        if err != nil {
-            return fmt.Errorf("failed to encrypt wallet %s: %w", addr, err)
-        }
-        encryptedWallets = append(encryptedWallets, *encrypted)
-    }
+	ksDir := filepath.Join(wm.dataDir, "keystore")
+	saved := 0
+	for addr, w := range wm.wallets {
+		privKey, err := w.PrivateKey()
+		if err != nil {
+			return fmt.Errorf("wallet %s is locked; unlock it before save", addr)
+		}
+		if _, err := keystore.ImportAccount(privKey, password, ksDir); err != nil && !strings.Contains(err.Error(), "already exists") {
+			return fmt.Errorf("failed to save wallet %s to keystore: %w", addr, err)
+		}
+		saved++
+	}
 
-    data, err := json.MarshalIndent(encryptedWallets, "", "  ")
-    if err != nil {
-        return fmt.Errorf("failed to marshal wallets: %w", err)
-    }
-
-    walletFile := filepath.Join(wm.dataDir, "wallets.encrypted.json")
-    if err := os.WriteFile(walletFile, data, 0600); err != nil {
-        return fmt.Errorf("failed to write wallet file: %w", err)
-    }
-
-    log.Printf("Saved %d encrypted wallets to %s", len(encryptedWallets), walletFile)
-    return nil
+	log.Printf("Saved %d encrypted wallets to %s", saved, ksDir)
+	return nil
 }
 
 // LoadWallets loads and decrypts wallets from a JSON file
 func (wm *WalletManager) LoadWallets(chainInterface interface{}, password string) error {
-    walletFile := filepath.Join(wm.dataDir, "wallets.encrypted.json")
-    data, err := os.ReadFile(walletFile)
-    if err != nil {
-        if os.IsNotExist(err) {
-            return errors.New("wallet file does not exist")
-        }
-        return fmt.Errorf("failed to read wallet file: %w", err)
-    }
+	_ = password
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.wallets = make(map[string]*Wallet)
+	wm.locked = make(map[string]bool)
 
-    var encryptedWallets []EncryptedWallet
-    if err := json.Unmarshal(data, &encryptedWallets); err != nil {
-        return fmt.Errorf("invalid wallet file format: %w", err)
-    }
+	// Type assertion to get the blockchain
+	bc, ok := chainInterface.(*chain.Blockchain)
+	if !ok {
+		return errors.New("invalid chain type, expected *chain.Blockchain")
+	}
 
-    wm.mu.Lock()
-    defer wm.mu.Unlock()
-    wm.wallets = make(map[string]*Wallet)
-    wm.locked = make(map[string]bool)
+	addresses, err := keystore.ListAccounts(filepath.Join(wm.dataDir, "keystore"))
+	if err != nil {
+		return fmt.Errorf("failed to list keystore accounts: %w", err)
+	}
+	if len(addresses) == 0 {
+		return errors.New("wallet file does not exist")
+	}
 
-    // Type assertion to get the blockchain
-    bc, ok := chainInterface.(*chain.Blockchain)
-    if !ok {
-        return errors.New("invalid chain type, expected *chain.Blockchain")
-    }
+	for _, addr := range addresses {
+		w := NewWalletWithAddress(bc, addr, wm.dataDir)
+		wm.wallets[addr.String()] = w
+		wm.locked[addr.String()] = true
+		log.Printf("Loaded wallet: %s", addr.String())
+	}
 
-    for _, ew := range encryptedWallets {
-        w, err := Decrypt(&ew, password, bc, wm.dataDir)
-        if err != nil {
-            return fmt.Errorf("failed to decrypt wallet %s: %w", ew.Address, err)
-        }
-        wm.wallets[ew.Address] = w
-        wm.locked[ew.Address] = true
-        log.Printf("Loaded wallet: %s", ew.Address)
-    }
-
-    return nil
+	return nil
 }
 
 // GetBalance returns the balance of an address
