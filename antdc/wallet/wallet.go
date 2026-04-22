@@ -20,6 +20,7 @@ import (
     "os"
     "strings"
     "path/filepath"
+    "runtime"
     "sync"
     "time"
 
@@ -116,6 +117,27 @@ func NewWalletManager(dataDir string) *WalletManager {
         locked:   make(map[string]bool),
         dataDir:  dataDir,
         security: NewWalletSecurity(),
+    }
+}
+
+// DataDir returns the wallet manager storage directory.
+func (wm *WalletManager) DataDir() string {
+    return wm.dataDir
+}
+
+func getKeystoreDir() string {
+    home, err := os.UserHomeDir()
+    if err != nil {
+        return filepath.Join(".", ".antdchain", "keystore")
+    }
+
+    switch runtime.GOOS {
+    case "windows":
+        return filepath.Join(home, "AppData", "Local", "Antdchain", "keystore")
+    case "darwin":
+        return filepath.Join(home, "Library", "Application Support", "Antdchain", "keystore")
+    default:
+        return filepath.Join(home, ".antdchain", "keystore")
     }
 }
 
@@ -548,7 +570,8 @@ func (wm *WalletManager) Unlock(addr, password string) error {
 		return fmt.Errorf("invalid address: %w", err)
 	}
 
-	privKey, err := keystore.Unlock(parsedAddr, password, filepath.Join(wm.dataDir, "keystore"))
+	privKey, err := keystore.Unlock(parsedAddr, password, getKeystoreDir())
+
 	if err != nil {
 		wm.security.recordFailedAttempt(addr)
 		return fmt.Errorf("failed to decrypt keystore: %w", err)
@@ -594,7 +617,7 @@ func (wm *WalletManager) SaveWallets(password string) error {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
-	ksDir := filepath.Join(wm.dataDir, "keystore")
+	ksDir := getKeystoreDir()
 	saved := 0
 	for addr, w := range wm.wallets {
 		privKey, err := w.PrivateKey()
@@ -625,7 +648,7 @@ func (wm *WalletManager) LoadWallets(chainInterface interface{}, password string
 		return errors.New("invalid chain type, expected *chain.Blockchain")
 	}
 
-	addresses, err := keystore.ListAccounts(filepath.Join(wm.dataDir, "keystore"))
+	addresses, err := keystore.ListAccounts(getKeystoreDir())
 	if err != nil {
 		return fmt.Errorf("failed to list keystore accounts: %w", err)
 	}

@@ -1036,9 +1036,20 @@ func (n *Node) rebroadcastStaleTransactions(maxAge time.Duration) {
 
 // NewNode creates a new Node with the given components
 func NewNode(bc *chain.Blockchain, posMiningState *mining.PosMiningState, wm *wallet.WalletManager, p2pNode *p2p.Node) (*Node, error) {
-	dataDir, err := getAppDataDir()
-	if err != nil {
-		return nil, err
+	var dataDir string
+	var err error
+
+	if wm != nil && wm.DataDir() != "" {
+		dataDir = wm.DataDir()
+	} else {
+		dataDir, err = getAppDataDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
+		return nil, fmt.Errorf("failed to create data directory %s: %w", dataDir, err)
 	}
 
 	ksDir := filepath.Join(dataDir, "keystore")
