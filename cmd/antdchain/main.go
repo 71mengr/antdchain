@@ -628,6 +628,16 @@ func runNode(c *cli.Context) error {
 	logger.SetFormatter(&logrus.JSONFormatter{})
 	logger.SetLevel(logrus.InfoLevel)
 
+	var consoleLogOutput *os.File
+	if openConsole {
+		logOutput, cleanupConsoleLogging, err := configureConsoleLogging(dataDir, logger)
+		if err != nil {
+			return fmt.Errorf("failed to configure console logging: %w", err)
+		}
+		consoleLogOutput = logOutput
+		defer cleanupConsoleLogging()
+	}
+
 	// Ensure data directory exists
 	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
 		logger.Fatal("Failed to create data directory:", err)
@@ -764,6 +774,7 @@ func runNode(c *cli.Context) error {
 		MaxPeers:          50,
 		MinPeers:          1,
 		ConnectionTimeout: 30 * time.Second,
+		LogOutput:         consoleLogOutput,
 	}
 
 	p2pNode, err := p2p.NewNodeWithConfig(bc, p2pConfig)
@@ -871,7 +882,7 @@ func runNode(c *cli.Context) error {
 	// Check candidate addresses
 	candidateAddresses := []common.Address{
 		common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
-		common.BytesToAddress(minerWallet.Address().Bytes()),              // Miner wallet
+		common.BytesToAddress(minerWallet.Address().Bytes()),       // Miner wallet
 	}
 
 	for _, addr := range candidateAddresses {
@@ -1148,6 +1159,28 @@ func runNode(c *cli.Context) error {
 
 	logger.Info("ANTDChain node stopped gracefully")
 	return nil
+}
+
+func configureConsoleLogging(dataDir string, logger *logrus.Logger) (*os.File, func(), error) {
+	logPath := filepath.Join(dataDir, "console.log")
+	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
+		return nil, nil, err
+	}
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log.SetOutput(logFile)
+	logger.SetOutput(logFile)
+	logrus.SetOutput(logFile)
+
+	fmt.Printf("Console mode enabled: runtime logs redirected to %s\n", logPath)
+
+	return logFile, func() {
+		_ = logFile.Close()
+	}, nil
 }
 
 // ============================================================================

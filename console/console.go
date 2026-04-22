@@ -2899,14 +2899,21 @@ func (c *Console) handleImport(parts []string) {
 		return
 	}
 
-	privKeyHex := strings.TrimPrefix(parts[1], "0x")
+	// Accept keys pasted with spaces/newlines or surrounding formatting.
+	privKeyHex := strings.Join(parts[1:], "")
+	privKeyHex = strings.TrimSpace(strings.TrimPrefix(privKeyHex, "0x"))
+	privKeyHex = strings.ReplaceAll(privKeyHex, "\n", "")
+	privKeyHex = strings.ReplaceAll(privKeyHex, "\r", "")
+	privKeyHex = strings.ReplaceAll(privKeyHex, "\t", "")
+	privKeyHex = strings.ReplaceAll(privKeyHex, " ", "")
 	privKeyBytes, err := hex.DecodeString(privKeyHex)
 	if err != nil {
-		fmt.Printf("Failed to import wallet: invalid private key: %v\n", err)
+		fmt.Printf("Failed to import wallet: invalid private key hex: %v\n", err)
 		return
 	}
 	if len(privKeyBytes) != 4032 {
-		fmt.Printf("Failed to import wallet: %s\n", "invalid antdchain private key length; expected 4032 bytes")
+		fmt.Printf("Failed to import wallet: invalid antdchain private key length; expected 4032 bytes, got %d\n", len(privKeyBytes))
+		fmt.Printf("Hint: this command expects a full ML-DSA-65 private key hex string (%d hex characters)\n", 4032*2)
 		return
 	}
 
@@ -2951,9 +2958,9 @@ func (c *Console) handleExport(parts []string) {
 		fmt.Printf("❌ Failed to export wallet: %s\n", "invalid antdchain private key length; expected 4032 bytes")
 		return
 	}
-	privateKey := hex.EncodeToString(privKeyBytes)
+        privateKey := "0x" + hex.EncodeToString(privKeyBytes)
 
-	fmt.Printf("�� Private key for %s: %s\n", qAddr.String(), privateKey)
+        fmt.Printf("�� Private key for %s: %s\n", qAddr.String(), privateKey)
 	fmt.Printf("⚠️ Keep this private key secure and never share it!\n")
 }
 

@@ -149,6 +149,7 @@ type Config struct {
 	MinPeers          int           // Minimum peers before discovery
 	ConnectionTimeout time.Duration // Timeout for connections
 	LogLevel          string        // Log level
+	LogOutput         io.Writer     // Optional writer for logs
 	Context           context.Context
 }
 
@@ -1205,6 +1206,9 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		logger.SetLevel(level)
 	}
 
+	if cfg.LogOutput != nil {
+		logger.SetOutput(cfg.LogOutput)
+	}
 	// Load or create persistent identity
 	var privKey crypto.PrivKey
 	var peerID peer.ID
