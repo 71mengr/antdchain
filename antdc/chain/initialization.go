@@ -44,7 +44,11 @@ const (
 func NewBlockchain(statePath string, miner common.Address) (*Blockchain, error) {
 	initStart := time.Now()
 	log.Printf("[blockchain] Initializing blockchain from: %s", statePath)
-	log.Printf("[blockchain] Miner address: %s", miner.Hex())
+	minerQuantum, err := chaincommon.NewQuantumAddressFromBytes(miner.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("invalid quantum-resistant miner address: %w", err)
+	}
+	log.Printf("[blockchain] Miner address: %s", minerQuantum.String())
 
 	subDirs := []string{
 		"chain",        // Pebble chain database
@@ -319,16 +323,18 @@ func NewBlockchain(statePath string, miner common.Address) (*Blockchain, error) 
 	// ====================
 	// INITIALIZE MAIN KING
 	// ====================
-	parsedMainKing, err := chaincommon.ParseQuantumAddress(GenesisMainKing)
+	mainKingQuantum, err := chaincommon.NewQuantumAddressFromBytes(common.HexToAddress(GenesisMainKing).Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("invalid configured main king antdchain address: %w", err)
+		chainDb.Close()
+		stateDb.Close()
+		return nil, fmt.Errorf("invalid quantum-resistant main king address: %w", err)
 	}
-	mainKing := common.Address(parsedMainKing)
+	mainKing := common.Address(mainKingQuantum)
 	bc.Pow().AutoRegisterIfEligible(mainKing, bc.state.GetBalance(mainKing))
-	log.Printf("[blockchain] Main King auto-registered: %s", mainKing.Hex())
+	log.Printf("[blockchain] Main King auto-registered: %s", mainKingQuantum.String())
 	if miner != (common.Address{}) && miner != mainKing {
 		bc.Pow().AutoRegisterIfEligible(miner, bc.state.GetBalance(miner))
-		log.Printf("[blockchain] Local miner auto-checked for registration: %s", miner.Hex())
+		log.Printf("[blockchain] Local miner auto-checked for registration: %s", minerQuantum.String())
 	}
 	// ====================
 	// INITIALIZE REWARD SYSTEM

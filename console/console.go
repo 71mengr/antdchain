@@ -2879,14 +2879,48 @@ func (c *Console) handleImport(parts []string) {
 		return
 	}
 
-	imported, err := c.node.walletManager.ImportWallet(parts[1])
+	password, err := c.readPassword("Set password for imported wallet: ")
+	if err != nil {
+		fmt.Printf("❌ Failed to read password: %v\n", err)
+		return
+	}
+
+	confirm, err := c.readPassword("Confirm password: ")
+	if err != nil {
+		fmt.Printf("❌ Failed to read password confirmation: %v\n", err)
+		return
+	}
+	if password != confirm {
+		fmt.Printf("❌ Passwords do not match\n")
+		return
+	}
+	if len(password) < 8 {
+		fmt.Printf("❌ Password must be at least 8 characters\n")
+		return
+	}
+
+	privKeyHex := strings.TrimPrefix(parts[1], "0x")
+	privKeyBytes, err := hex.DecodeString(privKeyHex)
+	if err != nil {
+		fmt.Printf("Failed to import wallet: invalid private key: %v\n", err)
+		return
+	}
+	if len(privKeyBytes) != 4032 {
+		fmt.Printf("Failed to import wallet: %s\n", "invalid antdchain private key length; expected 4032 bytes")
+		return
+	}
+
+	addr, err := qkeystore.ImportAccount(privKeyBytes, password, c.node.GetKeystoreDir())
 	if err != nil {
 		fmt.Printf("Failed to import wallet: %v\n", err)
 		return
 	}
 
+	imported := wallet.NewWalletWithAddress(c.node.blockchain, addr, c.getWalletDataDir())
+	c.node.walletManager.AddWallet(addr.String(), imported)
+
 	fmt.Printf("Wallet imported.\n")
-	fmt.Printf("Address: %s\n", imported.Address().String())
+	fmt.Printf("Address: %s\n", addr.String())
 	fmt.Printf("Type: quantum address (0q Base58Check)\n")
 }
 
@@ -2895,30 +2929,31 @@ func (c *Console) handleExport(parts []string) {
 		fmt.Println("Usage: export <address>")
 		return
 	}
-	addr := parts[1]
-
-	// Check if wallet is locked
-	if c.node.walletManager.IsLocked(addr) {
-		fmt.Printf("🔒 Wallet %s is locked. Please unlock it to export private key.\n", addr)
-		password, err := c.readPassword("Enter password to unlock wallet: ")
-		if err != nil {
-			fmt.Printf("❌ Failed to read password: %v\n", err)
-			return
-		}
-		if err := c.node.walletManager.Unlock(addr, password); err != nil {
-			fmt.Printf("❌ Failed to unlock wallet: %v\n", err)
-			return
-		}
-		defer c.node.walletManager.Lock(addr) // Lock again after export
+	qAddr, err := chaincommon.ParseQuantumAddress(parts[1])
+	if err != nil {
+		fmt.Printf("❌ Invalid antdchain address: %v\n", err)
+		return
 	}
 
-	privateKey, err := c.node.walletManager.ExportWallet(addr, "")
+	password, err := c.readPassword("Enter password to decrypt wallet: ")
+	if err != nil {
+		fmt.Printf("❌ Failed to read password: %v\n", err)
+		return
+	}
+
+	privKeyBytes, err := qkeystore.Unlock(qAddr, password, c.node.GetKeystoreDir())
 	if err != nil {
 		fmt.Printf("❌ Failed to export wallet: %v\n", err)
 		return
 	}
 
-	fmt.Printf("🔑 Private key for %s: %s\n", addr, privateKey)
+	if len(privKeyBytes) != 4032 {
+		fmt.Printf("❌ Failed to export wallet: %s\n", "invalid antdchain private key length; expected 4032 bytes")
+		return
+	}
+	privateKey := hex.EncodeToString(privKeyBytes)
+
+	fmt.Printf("�� Private key for %s: %s\n", qAddr.String(), privateKey)
 	fmt.Printf("⚠️ Keep this private key secure and never share it!\n")
 }
 
