@@ -22,6 +22,7 @@ import (
     "github.com/antdaza/antdchain/antdc/chain"
     "github.com/antdaza/antdchain/antdc/p2p"
     "github.com/antdaza/antdchain/antdc/pow"
+    chaincommon "github.com/antdaza/antdchain/common"
 )
 
 // Configuration constants (can be made configurable via environment variables)
@@ -165,7 +166,11 @@ func (ms *PosMiningState) SetMinerAddress(addr common.Address) error {
     }
 
     ms.minerAddress = addr
-    log.Printf("[miner] PoS miner address set → %s", addr.Hex())
+    if qAddr, err := chaincommon.NewQuantumAddressFromBytes(addr.Bytes()); err == nil {
+        log.Printf("[miner] PoS miner address set → %s", qAddr.String())
+    } else {
+        log.Printf("[miner] PoS miner address set → %s", addr.Hex())
+    }
     return nil
 }
 

@@ -28,6 +28,7 @@ import (
 	"golang.org/x/term"
 	"sort"
 
+	qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
 	"github.com/antdaza/antdchain/antdc/chain"
 	"github.com/antdaza/antdchain/antdc/mining"
 	"github.com/antdaza/antdchain/antdc/p2p"
@@ -1574,17 +1575,42 @@ func (c *Console) handleStopMining() {
 }
 
 func (c *Console) handleCreateAddress() {
-	w, err := c.node.walletManager.CreateNewWallet()
+	password, err := c.readPassword("Set password for new wallet: ")
 	if err != nil {
-		fmt.Printf("Failed to create wallet: %v\n", err)
+		fmt.Printf("❌ Failed to read password: %v\n", err)
 		return
 	}
 
-	addr := w.Address().String()
-	fmt.Printf("New wallet created!\n")
+	confirm, err := c.readPassword("Confirm password: ")
+	if err != nil {
+		fmt.Printf("❌ Failed to read password confirmation: %v\n", err)
+		return
+	}
+	if password != confirm {
+		fmt.Printf("❌ Passwords do not match\n")
+		return
+	}
+	if len(password) < 8 {
+		fmt.Printf("❌ Password must be at least 8 characters\n")
+		return
+	}
+
+	keystoreDir := filepath.Join(c.getWalletDataDir(), "keystore")
+	addr, err := qkeystore.NewAccount(password, keystoreDir)
+	if err != nil {
+		fmt.Printf("❌ Failed to create wallet in keystore: %v\n", err)
+		return
+	}
+
+	// Register as a locked wallet in the wallet manager for console operations.
+	w := wallet.NewWalletWithAddress(c.node.blockchain, addr, c.getWalletDataDir())
+	c.node.walletManager.AddWallet(addr.String(), w)
+
+	fmt.Printf("✅ New wallet created and saved to keystore!\n")
 	fmt.Printf("Address: %s\n", addr)
 
 	fmt.Printf("Type: quantum address (0q Base58Check)\n")
+	fmt.Printf("Keystore: %s\n", keystoreDir)
 }
 
 func (c *Console) handleSend(parts []string) {
@@ -3137,32 +3163,31 @@ func (c *Console) listLocalProposals() {
 }
 
 func (c *Console) handleLoadWallets() {
-	walletFile := c.getWalletFilePath()
-	if _, err := os.Stat(walletFile); os.IsNotExist(err) {
-		fmt.Printf("❌ No wallet file found at %s. Save wallets first using 'savewallets'.\n", walletFile)
+	keystoreDir := filepath.Join(c.getWalletDataDir(), "keystore")
+	if _, err := os.Stat(keystoreDir); os.IsNotExist(err) {
+		fmt.Printf("❌ No keystore directory found at %s. Create a wallet first using 'createaddress'.\n", keystoreDir)
 		return
 	}
 
-	password, err := c.readPassword("Enter encryption password: ")
+	password, err := c.readPassword("Enter wallet password (used when unlocking): ")
 	if err != nil {
 		fmt.Printf("❌ Failed to read password: %v\n", err)
 		return
 	}
+	_ = password
 
 	err = c.node.walletManager.LoadWallets(c.node.blockchain, password)
 	if err != nil {
-		if strings.Contains(err.Error(), "invalid password") || strings.Contains(err.Error(), "decryption failed") {
-			fmt.Printf("❌ Failed to load wallets: incorrect password\n")
-		} else if strings.Contains(err.Error(), "file corrupted") || strings.Contains(err.Error(), "invalid format") {
-			fmt.Printf("❌ Failed to load wallets: wallet file is corrupted or malformed\n")
+		if strings.Contains(err.Error(), "wallet file does not exist") {
+			fmt.Printf("❌ No wallets found in keystore directory: %s\n", keystoreDir)
 		} else {
 			fmt.Printf("❌ Failed to load wallets: %v\n", err)
 		}
 		return
 	}
 
-	fmt.Printf("✅ Wallets loaded and decrypted from %s\n", walletFile)
-	fmt.Printf("🔓 Wallets are loaded but locked for security\n")
+	fmt.Printf("✅ Wallets loaded from keystore: %s\n", keystoreDir)
+	fmt.Printf("�� Wallets are loaded in locked mode for security\n")
 	fmt.Printf("💡 Use 'unlock <address>' to unlock individual wallets\n")
 }
 
@@ -5454,6 +5479,10 @@ func (n *Node) SetMinerWalletAddress(addr common.Address) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.minerWalletAddress = addr
+	if qAddr, err := chaincommon.NewQuantumAddressFromBytes(addr.Bytes()); err == nil {
+		log.Printf("Miner wallet address set to: %s", qAddr.String())
+		return
+	}
 	log.Printf("Miner wallet address set to: %s", addr.Hex())
 }
 
