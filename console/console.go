@@ -2942,11 +2942,8 @@ func (c *Console) handleExport(parts []string) {
 		fmt.Println("Usage: export <address>")
 		return
 	}
-	qAddr, err := mustParseQuantumAddress(parts[1])
-	if err != nil {
-		fmt.Printf("❌ Invalid antdchain address: %v\n", err)
-		return
-	}
+
+	qAddr := mustParseQuantumAddress(parts[1])
 
 	password, err := c.readPassword("Enter password to decrypt wallet: ")
 	if err != nil {
@@ -3154,11 +3151,7 @@ func (c *Console) handleStatus() {
 			// ListWallets format: "<lock-icon> <address>"
 			statusIcon := parts[0]
 			addrStr := parts[1]
-			quantumAddr, err := mustParseQuantumAddress(addrStr)
-			if err != nil {
-				// Ignore non-quantum/legacy address formats in status output.
-				continue
-			}
+			quantumAddr := mustParseQuantumAddress(addrStr)
 
 			c.node.mu.RLock()
 			bal := c.node.blockchain.State().GetBalance(common.QuantumAddress(quantumAddr))
