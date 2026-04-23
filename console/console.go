@@ -3002,14 +3002,7 @@ func (c *Console) handleExport(parts []string) {
 
 	privateKeyHex := hex.EncodeToString(privKeyBytes)
 	fmt.Printf("�� Private key for %s:\n", qAddr.String())
-	fmt.Println("0x")
-	for i := 0; i < len(privateKeyHex); i += 128 {
-		end := i + 128
-		if end > len(privateKeyHex) {
-			end = len(privateKeyHex)
-		}
-		fmt.Println(privateKeyHex[i:end])
-	}
+	fmt.Printf("0x%s\n", privateKeyHex)
 	if seed := quantum.ExtractSeedFromPrivateKey(privKeyBytes); len(seed) == 32 {
 		fmt.Println("Seed (if available):")
 		fmt.Printf("0x%s\n", hex.EncodeToString(seed))
