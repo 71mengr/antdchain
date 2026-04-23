@@ -10,7 +10,7 @@ import (
     "path/filepath"
 
     "github.com/urfave/cli/v2"
-
+    "github.com/antdaza/antdchain/common"
     "github.com/antdaza/antdchain/console"
     "github.com/antdaza/antdchain/antdc/chain"
     "github.com/antdaza/antdchain/antdc/wallet"
