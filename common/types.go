@@ -33,6 +33,8 @@ return NewQuantumAddressFromBytes(payload)
 
 func (a QuantumAddress) String() string { return quantum.EncodeAddress(a[:]) }
 
+func (a QuantumAddress) Hex() string { return a.String() }
+
 func (a QuantumAddress) Bytes() []byte {
 out := make([]byte, QuantumAddressLength)
 copy(out, a[:])

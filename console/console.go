@@ -5,6 +5,7 @@
 package console
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
@@ -56,6 +57,18 @@ func parseQuantumAddressInput(input string) (common.QuantumAddress, error) {
 		return common.QuantumAddress{}, fmt.Errorf("invalid antdchain address '%s': %w", input, err)
 	}
 	return common.QuantumAddress(qAddr), nil
+}
+
+func mustParseQuantumAddress(input string) common.QuantumAddress {
+	qAddr, err := common.ParseQuantumAddress(strings.TrimSpace(input))
+	if err != nil {
+		return common.QuantumAddress{}
+	}
+	return common.QuantumAddress(qAddr)
+}
+
+func ethAddressMatchesQuantumAddress(ethAddr interface{ Bytes() []byte }, quantumAddr common.QuantumAddress) bool {
+	return bytes.Equal(ethAddr.Bytes(), quantumAddr.Bytes())
 }
 
 type RPCClient struct {
@@ -128,7 +141,7 @@ func (c *RPCClient) GetRotatingKingList() ([]common.QuantumAddress, error) {
 
 	addresses := make([]common.QuantumAddress, len(result))
 	for i, addrStr := range result {
-		addresses[i] = common.ParseQuantumAddress(addrStr)
+		addresses[i] = mustParseQuantumAddress(addrStr)
 	}
 
 	return addresses, nil
@@ -157,7 +170,7 @@ func (c *RPCClient) GetRotatingKingAddress() (common.QuantumAddress, error) {
 		return common.QuantumAddress{}, fmt.Errorf("RPC call failed: %w", err)
 	}
 
-	return common.ParseQuantumAddress(result), nil
+	return mustParseQuantumAddress(result), nil
 }
 
 func (c *RPCClient) GetRotatingKingCycle() (map[string]interface{}, error) {
@@ -183,7 +196,7 @@ func (c *RPCClient) GetRotatingKingNext() (common.QuantumAddress, error) {
 		return common.QuantumAddress{}, fmt.Errorf("RPC call failed: %w", err)
 	}
 
-	return common.ParseQuantumAddress(result), nil
+	return mustParseQuantumAddress(result), nil
 }
 
 func (c *RPCClient) GetRotatingKingHistory(limit int) ([]map[string]interface{}, error) {
@@ -718,7 +731,7 @@ func handleHeight(rpcClient *RPCClient) {
 }
 
 func handleNonce(rpcClient *RPCClient, addrStr string) {
-	addr := common.ParseQuantumAddress(addrStr)
+	addr := mustParseQuantumAddress(addrStr)
 	nonce, err := rpcClient.GetNonce(addr)
 	if err != nil {
 		fmt.Printf("❌ Failed to get nonce: %v\n", err)
@@ -746,7 +759,7 @@ func (c *Console) handleRemoteBalance(rpcClient *RPCClient, parts []string) {
 		return
 	}
 
-	addr := common.ParseQuantumAddress(parts[1])
+	addr := mustParseQuantumAddress(parts[1])
 	balance, err := rpcClient.GetBalance(addr)
 	if err != nil {
 		fmt.Printf("❌ Failed to get balance: %v\n", err)
@@ -814,7 +827,7 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 	// Find wallet in local keystore
 	found := false
 	for _, acc := range c.node.Keystore().Accounts() {
-		if acc.Address == fromAddr {
+		if ethAddressMatchesQuantumAddress(acc.Address, fromAddr) {
 			found = true
 			break
 		}
@@ -1556,7 +1569,7 @@ func (c *Console) handleAddressStats(parts []string) {
 		return
 	}
 
-	addr := common.ParseQuantumAddress(parts[1])
+	addr := mustParseQuantumAddress(parts[1])
 
 	c.node.mu.RLock()
 	balance := c.node.blockchain.State().GetBalance(addr)
@@ -1584,7 +1597,7 @@ func (c *Console) handleSetAddress(parts []string) {
 	found := false
 	var file string
 	for _, acc := range c.node.Keystore().Accounts() {
-		if acc.Address == addr {
+		if ethAddressMatchesQuantumAddress(acc.Address, addr) {
 			found = true
 			file = acc.URL.Path
 			break
@@ -1818,7 +1831,7 @@ func (c *Console) handleSend(parts []string) {
 	// FIND KEYSTORE ACCOUNT
 	found := false
 	for _, acc := range c.node.Keystore().Accounts() {
-		if acc.Address == fromAddr {
+		if ethAddressMatchesQuantumAddress(acc.Address, fromAddr) {
 			found = true
 			break
 		}
@@ -1907,12 +1920,7 @@ func (c *Console) handleSend(parts []string) {
 	if chainTxPool, ok := txPool.(*chain.TxPool); ok {
 		addErr = chainTxPool.AddTx(txm, c.node.blockchain)
 	} else {
-		// Fallback for other pool types
-		if genericPool, ok := txPool.(interface{ AddTx(*tx.Tx) error }); ok {
-			addErr = genericPool.AddTx(txm)
-		} else {
-			addErr = fmt.Errorf("unsupported pool type: %T", txPool)
-		}
+		addErr = fmt.Errorf("unsupported pool type: %T", txPool)
 	}
 	c.node.mu.Unlock()
 
@@ -2113,7 +2121,7 @@ func (c *Console) handleTxDebug(parts []string) {
 		return
 	}
 
-	addr := common.ParseQuantumAddress(parts[1])
+	addr := mustParseQuantumAddress(parts[1])
 
 	fmt.Printf("\n🔧 Transaction Debug for %s\n", addr.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
@@ -2206,7 +2214,7 @@ func (c *Console) handleListWorkers() {
 }
 
 func (c *Console) handleWorkerInfo(addressStr string) {
-	address := common.ParseQuantumAddress(addressStr)
+	address := mustParseQuantumAddress(addressStr)
 	if address == (common.QuantumAddress{}) {
 		fmt.Println("Error: Invalid address format")
 		return
@@ -2299,7 +2307,7 @@ func (c *Console) handleStartMining() {
 		accounts := c.node.Keystore().Accounts()
 		for i, acc := range accounts {
 			c.node.mu.RLock()
-			balance := c.node.blockchain.State().GetBalance(acc.Address)
+			    balance := c.node.blockchain.State().GetBalance(common.BytesToQuantumAddress(acc.Address.Bytes()))
 			c.node.mu.RUnlock()
 			fmt.Printf("   %d. %s → %s ANTD\n",
 				i+1, acc.Address.String(), formatBalance(balance))
@@ -2388,7 +2396,7 @@ func (c *Console) handleDebugTransactionFlow(parts []string) {
 		return
 	}
 
-	fromAddr := common.ParseQuantumAddress(parts[1])
+	fromAddr := mustParseQuantumAddress(parts[1])
 
 	fmt.Printf("\n🔍 Debug Transaction Flow for %s\n", fromAddr.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
@@ -2690,7 +2698,7 @@ func (c *Console) handleSendDebug(parts []string) {
 		return
 	}
 
-	fromAddr := common.ParseQuantumAddress(parts[1])
+	fromAddr := mustParseQuantumAddress(parts[1])
 
 	fmt.Printf("\n🔧 Debug Send for address %s\n", fromAddr.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
@@ -2934,7 +2942,7 @@ func (c *Console) handleExport(parts []string) {
 		fmt.Println("Usage: export <address>")
 		return
 	}
-	qAddr, err := common.ParseQuantumAddress(parts[1])
+	qAddr, err := mustParseQuantumAddress(parts[1])
 	if err != nil {
 		fmt.Printf("❌ Invalid antdchain address: %v\n", err)
 		return
@@ -3022,7 +3030,7 @@ func (c *Console) handleUnlock(parts []string) {
 		return
 	}
 
-	addr := common.ParseQuantumAddress(parts[1])
+	addr := mustParseQuantumAddress(parts[1])
 
 	// Read password
 	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", addr.String()))
@@ -3045,7 +3053,7 @@ func (c *Console) handleUnlock(parts []string) {
 		// Find the keystore file
 		var keyFile string
 		for _, acc := range c.node.Keystore().Accounts() {
-			if acc.Address == addr {
+			if ethAddressMatchesQuantumAddress(acc.Address, addr) {
 				keyFile = acc.URL.Path
 				break
 			}
@@ -3076,7 +3084,7 @@ func (c *Console) handleBalance(parts []string) {
 		fmt.Println("Usage: balance <address>")
 		return
 	}
-	address := common.ParseQuantumAddress(parts[1])
+	address := mustParseQuantumAddress(parts[1])
 	c.node.mu.RLock()
 	balance := c.node.blockchain.State().GetBalance(address)
 	c.node.mu.RUnlock()
@@ -3146,7 +3154,7 @@ func (c *Console) handleStatus() {
 			// ListWallets format: "<lock-icon> <address>"
 			statusIcon := parts[0]
 			addrStr := parts[1]
-			quantumAddr, err := common.ParseQuantumAddress(addrStr)
+			quantumAddr, err := mustParseQuantumAddress(addrStr)
 			if err != nil {
 				// Ignore non-quantum/legacy address formats in status output.
 				continue
@@ -3478,7 +3486,7 @@ func (c *Console) handleClearStuckTxs() {
 			continue
 		}
 		addrStr := parts[1]
-		addr := common.ParseQuantumAddress(addrStr)
+		addr := mustParseQuantumAddress(addrStr)
 		currentNonce := state.GetNonce(addr)
 		fmt.Printf("   %s: nonce=%d\n", addrStr, currentNonce)
 	}
@@ -3800,7 +3808,7 @@ func (c *Console) handleRKList(rkManager reward.RotatingKingManager) {
 	for i, addr := range addresses {
 		c.node.mu.RLock()
 		balance := c.node.blockchain.State().GetBalance(addr)
-		isMainKing := addr == common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+		isMainKing := addr == mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 		c.node.mu.RUnlock()
 
 		status := ""
@@ -3891,7 +3899,7 @@ func (c *Console) handleRKHistory(rkManager reward.RotatingKingManager, limit in
 func (c *Console) handleRKRotate(rkManager reward.RotatingKingManager, index int) {
 	c.node.mu.RLock()
 	minerAddr := c.node.MinerWalletAddress()
-	mainKing := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	mainKing := mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	isMainKing := minerAddr == mainKing
 	currentHeight := c.node.blockchain.GetChainHeight()
 	blockHash := c.node.blockchain.GetBlock(currentHeight).Hash()
@@ -4139,7 +4147,7 @@ func (c *Console) handleRKSetMiner(rkManager reward.RotatingKingManager) {
 	// Check if we have the key for this address
 	hasKey := false
 	for _, acc := range c.node.Keystore().Accounts() {
-		if acc.Address == currentKing {
+		if ethAddressMatchesQuantumAddress(acc.Address, currentKing) {
 			hasKey = true
 			break
 		}
@@ -4157,12 +4165,12 @@ func (c *Console) handleRKSetMiner(rkManager reward.RotatingKingManager) {
 }
 
 func (c *Console) handleRKInfo(rkManager reward.RotatingKingManager, addrStr string) {
-	addr := common.ParseQuantumAddress(addrStr)
+	addr := mustParseQuantumAddress(addrStr)
 
 	c.node.mu.RLock()
 	balance := c.node.blockchain.State().GetBalance(addr)
 	// blocksMined := c.node.blockchain.GetBlocksMinedBy(addr)
-	isMainKing := addr == common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	isMainKing := addr == mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	c.node.mu.RUnlock()
 
 	isKing := rkManager.IsKing(addr)
@@ -4218,7 +4226,7 @@ func (c *Console) handleRKGovernance(rkManager reward.RotatingKingManager, parts
 	}
 
 	c.node.mu.RLock()
-	mainKing := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	mainKing := mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	isMainKing := c.node.MinerWalletAddress() == mainKing
 	c.node.mu.RUnlock()
 
@@ -4274,14 +4282,12 @@ func (c *Console) handleRKGovernance(rkManager reward.RotatingKingManager, parts
 }
 
 func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, addrStr string) {
-	// Validate address format
-	if !common.IsHexAddress(addrStr) {
+	addr, err := parseQuantumAddressInput(addrStr)
+	if err != nil {
 		fmt.Printf("❌ Invalid address format: %s\n", addrStr)
-		fmt.Println("   Address should start with 0x and be 42 characters long")
+		fmt.Println("   Address must be a valid ANTDChain quantum address")
 		return
 	}
-
-	addr := common.ParseQuantumAddress(addrStr)
 
 	// Check if address is the zero address
 	if addr == (common.QuantumAddress{}) {
@@ -4290,7 +4296,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	}
 
 	// Check if address is the Main King address
-	mainKing := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	mainKing := mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	if addr == mainKing {
 		fmt.Println("❌ Main King is already permanently in the reward distribution")
 		fmt.Println("   Main King receives 5% rewards automatically")
@@ -4341,7 +4347,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	// Check if address exists in keystore (optional but helpful)
 	hasKey := false
 	for _, acc := range c.node.Keystore().Accounts() {
-		if acc.Address == addr {
+		if ethAddressMatchesQuantumAddress(acc.Address, addr) {
 			hasKey = true
 			break
 		}
@@ -4388,7 +4394,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	// Find Main King wallet in keystore (just for verification)
 	foundMainKing := false
 	for _, acc := range c.node.Keystore().Accounts() {
-		if acc.Address == mainKing {
+		if ethAddressMatchesQuantumAddress(acc.Address, mainKing) {
 			foundMainKing = true
 			break
 		}
@@ -4542,7 +4548,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 	fmt.Printf("\n🎉 GOVERNANCE PROPOSAL CREATED!\n")
 	fmt.Printf("══════════════════════════════════════════════════════════\n")
 	fmt.Printf("   Proposal ID:      %d\n", proposalID)
-	fmt.Printf("   From (Main King): %s\n", common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY").String())
+	fmt.Printf("   From (Main King): %s\n", mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY").Hex())
 	fmt.Printf("   Action:           Add %s to rotation\n", addr.String())
 	fmt.Printf("   New Total Kings:  %d\n", len(newRotatingKings))
 	fmt.Printf("   Created:          %s\n", time.Unix(int64(currentTime), 0).Format(time.RFC3339))
@@ -5190,7 +5196,7 @@ func (c *Console) handleRKGovernanceTimelock(govController interface{}) {
 }
 
 func (c *Console) handleRKGovernanceRemove(rkManager reward.RotatingKingManager, addrStr string) {
-	addr := common.ParseQuantumAddress(addrStr)
+	addr := mustParseQuantumAddress(addrStr)
 
 	addresses := rkManager.GetKingAddresses()
 
@@ -5328,14 +5334,12 @@ func (c *Console) handleRKStatus(rkManager reward.RotatingKingManager) {
 }
 
 func (c *Console) handleRKAdd(addrStr string) {
-	// Parse and validate address
-	if !common.IsHexAddress(addrStr) {
+	addr, err := parseQuantumAddressInput(addrStr)
+	if err != nil {
 		fmt.Printf("❌ Invalid address format: %s\n", addrStr)
-		fmt.Println("   Address must be 0x-prefixed and 42 characters long")
+		fmt.Println("   Address must be a valid ANTDChain quantum address")
 		return
 	}
-
-	addr := common.ParseQuantumAddress(addrStr)
 
 	if addr == (common.QuantumAddress{}) {
 		fmt.Println("❌ Cannot add zero address")
@@ -5486,7 +5490,7 @@ func (c *Console) handleRKRewards(parts []string) {
 		return
 	}
 
-	addr := common.ParseQuantumAddress(parts[2])
+	addr := mustParseQuantumAddress(parts[2])
 
 	c.node.mu.RLock()
 	defer c.node.mu.RUnlock()
@@ -6122,7 +6126,7 @@ func (c *Console) handleKeyStatus(parts []string) {
 
 		found := false
 		for _, acc := range c.node.Keystore().Accounts() {
-			if acc.Address == addr {
+			if ethAddressMatchesQuantumAddress(acc.Address, addr) {
 				fmt.Printf("  ✓ Wallet found in keystore\n")
 				fmt.Printf("  File: %s\n", acc.URL.Path)
 
@@ -6157,7 +6161,7 @@ func (n *Node) AutoUnlockMinerWallet() error {
 	// Find the keystore file
 	var keyFile string
 	for _, acc := range n.keystore.Accounts() {
-		if acc.Address == n.minerWalletAddress {
+		if ethAddressMatchesQuantumAddress(acc.Address, n.minerWalletAddress) {
 			keyFile = acc.URL.Path
 			break
 		}
