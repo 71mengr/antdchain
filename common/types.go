@@ -7,7 +7,10 @@ import (
 "github.com/antdaza/antdchain/antdc/crypto/quantum"
 )
 
-const QuantumAddressLength = 20
+const (
+    QuantumAddressLength = 20
+    AddressLength        = QuantumAddressLength // alias for compatibility
+)
 
 type QuantumAddress [QuantumAddressLength]byte
 
