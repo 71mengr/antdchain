@@ -42,16 +42,16 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-func ethToQuantumAddress(addr common.QuantumAddress) chaincommon.QuantumAddress {
-	q, err := chaincommon.NewQuantumAddressFromBytes(addr.Bytes())
+func ethToQuantumAddress(addr common.QuantumAddress) common.QuantumAddress {
+	q, err := common.NewQuantumAddressFromBytes(addr.Bytes())
 	if err != nil {
-		return chaincommon.QuantumAddress{}
+		return common.QuantumAddress{}
 	}
 	return q
 }
 
 func parseQuantumAddressInput(input string) (common.QuantumAddress, error) {
-	qAddr, err := chaincommon.ParseQuantumAddress(strings.TrimSpace(input))
+	qAddr, err := common.ParseQuantumAddress(strings.TrimSpace(input))
 	if err != nil {
 		return common.QuantumAddress{}, fmt.Errorf("invalid antdchain address '%s': %w", input, err)
 	}
@@ -832,7 +832,7 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 		return
 	}
 
-	qFrom, err := chaincommon.NewQuantumAddressFromBytes(fromAddr.Bytes())
+	qFrom, err := common.NewQuantumAddressFromBytes(fromAddr.Bytes())
 	if err != nil {
 		fmt.Printf("❌ Invalid sender address bytes: %v\n", err)
 		return
@@ -1841,7 +1841,7 @@ func (c *Console) handleSend(parts []string) {
 		return
 	}
 
-	qFrom, err := chaincommon.NewQuantumAddressFromBytes(fromAddr.Bytes())
+	qFrom, err := common.NewQuantumAddressFromBytes(fromAddr.Bytes())
 	if err != nil {
 		fmt.Printf("❌ Invalid sender address bytes: %v\n", err)
 		return
@@ -2934,7 +2934,7 @@ func (c *Console) handleExport(parts []string) {
 		fmt.Println("Usage: export <address>")
 		return
 	}
-	qAddr, err := chaincommon.ParseQuantumAddress(parts[1])
+	qAddr, err := common.ParseQuantumAddress(parts[1])
 	if err != nil {
 		fmt.Printf("❌ Invalid antdchain address: %v\n", err)
 		return
@@ -3146,7 +3146,7 @@ func (c *Console) handleStatus() {
 			// ListWallets format: "<lock-icon> <address>"
 			statusIcon := parts[0]
 			addrStr := parts[1]
-			quantumAddr, err := chaincommon.ParseQuantumAddress(addrStr)
+			quantumAddr, err := common.ParseQuantumAddress(addrStr)
 			if err != nil {
 				// Ignore non-quantum/legacy address formats in status output.
 				continue
@@ -5547,7 +5547,7 @@ func (n *Node) SetMinerWalletAddress(addr common.QuantumAddress) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.minerWalletAddress = addr
-	if qAddr, err := chaincommon.NewQuantumAddressFromBytes(addr.Bytes()); err == nil {
+	if qAddr, err := common.NewQuantumAddressFromBytes(addr.Bytes()); err == nil {
 		log.Printf("Miner wallet address set to: %s", qAddr.String())
 		return
 	}
