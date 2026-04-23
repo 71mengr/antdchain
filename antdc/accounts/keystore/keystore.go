@@ -63,6 +63,11 @@ func ImportAccount(privKey []byte, password, keystoreDir string) (common.Quantum
 		return common.QuantumAddress{}, fmt.Errorf("failed to create keystore directory: %w", err)
 	}
 
+	privKey, err := quantum.NormalizePrivateKey(privKey)
+	if err != nil {
+		return common.QuantumAddress{}, fmt.Errorf("invalid private key: %w", err)
+	}
+
 	pubKey, err := quantum.DerivePublicKey(privKey)
 	if err != nil {
 		return common.QuantumAddress{}, fmt.Errorf("failed to derive public key: %w", err)

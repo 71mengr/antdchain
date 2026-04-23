@@ -36,6 +36,10 @@ return privKeyBytes, pubKeyBytes, nil
 }
 
 func Sign(privKeyBytes, message []byte) ([]byte, error) {
+privKeyBytes, err := NormalizePrivateKey(privKeyBytes)
+if err != nil {
+return nil, err
+}
 privKey := new(mldsa65.PrivateKey)
 if err := privKey.UnmarshalBinary(privKeyBytes); err != nil {
 return nil, err
@@ -52,6 +56,10 @@ func Verify(pubKeyBytes, message, signature []byte) bool {
 }
 
 func DerivePublicKey(privKeyBytes []byte) ([]byte, error) {
+privKeyBytes, err := NormalizePrivateKey(privKeyBytes)
+if err != nil {
+return nil, err
+}
 privKey := new(mldsa65.PrivateKey)
 if err := privKey.UnmarshalBinary(privKeyBytes); err != nil {
 return nil, err
@@ -61,6 +69,22 @@ if !ok {
 return nil, errors.New("invalid derived public key type")
 }
 return pub.MarshalBinary()
+}
+
+// NormalizePrivateKey accepts either a packed ML-DSA-65 private key
+// (mldsa65.PrivateKeySize bytes) or a seed (mldsa65.SeedSize bytes).
+// It always returns a packed private key.
+func NormalizePrivateKey(privKeyBytes []byte) ([]byte, error) {
+if len(privKeyBytes) == mldsa65.PrivateKeySize {
+return append([]byte(nil), privKeyBytes...), nil
+}
+if len(privKeyBytes) == mldsa65.SeedSize {
+var seed [mldsa65.SeedSize]byte
+copy(seed[:], privKeyBytes)
+_, priv := mldsa65.NewKeyFromSeed(&seed)
+return priv.MarshalBinary()
+}
+return nil, errors.New("invalid private key length: expected packed private key or seed")
 }
 
 func PubKeyToAddress(pubKey []byte) string {
