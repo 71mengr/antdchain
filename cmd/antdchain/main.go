@@ -578,7 +578,7 @@ func getGenesisStakers() []struct {
 		var config []map[string]string
 		if err := json.Unmarshal([]byte(genesisConfig), &config); err == nil {
 			for _, w := range config {
-				addr := common.ParseQuantumAddress(w["address"])
+				addr, _ := common.ParseQuantumAddress(w["address"])
 				stakeStr := w["stake"]
 				if stake, ok := new(big.Int).SetString(stakeStr, 10); ok {
 					stakeWei := new(big.Int).Mul(stake, big.NewInt(1e18))
@@ -879,9 +879,10 @@ func runNode(c *cli.Context) error {
 	registeredCount := 0
 
 	// Check candidate addresses
+	mainKingAddr, _ := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
 	candidateAddresses := []common.QuantumAddress{
-		common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
-		common.BytesToQuantumAddress(minerWallet.Address().Bytes()),       // Miner wallet
+		mainKingAddr,                                         // Main King
+		common.BytesToQuantumAddress(minerWallet.Address().Bytes()), // Miner wallet
 	}
 
 	for _, addr := range candidateAddresses {
@@ -891,7 +892,7 @@ func runNode(c *cli.Context) error {
 		balance := bc.State().GetBalance(addr)
 		if balance.Cmp(minStake) >= 0 {
 			// Auto-register if eligible
-			powEngine.AutoRegisterIfEligible(addr, balance)
+			powEngine.AutoRegisterIfEligible(addr, balance, nil)
 			registeredCount++
 			logger.Infof("Genesis auto-registered staker: %s (%s ANTD)",
 				addr.Hex()[:12],
@@ -1211,7 +1212,8 @@ func (api *EthAPI) Syncing() (interface{}, error) {
 }
 
 func (api *EthAPI) GetBalance(address string, _ interface{}) (string, error) {
-	bal := api.node.Blockchain().GetAccountBalance(common.ParseQuantumAddress(address))
+	addr, _ := common.ParseQuantumAddress(address)
+	bal := api.node.Blockchain().GetAccountBalance(addr)
 	if bal == nil {
 		bal = big.NewInt(0)
 	}
@@ -1219,7 +1221,8 @@ func (api *EthAPI) GetBalance(address string, _ interface{}) (string, error) {
 }
 
 func (api *EthAPI) GetTransactionCount(address string, _ interface{}) (string, error) {
-	nonce := api.node.Blockchain().State().GetNonce(common.ParseQuantumAddress(address))
+	addr, _ := common.ParseQuantumAddress(address)
+	nonce := api.node.Blockchain().State().GetNonce(addr)
 	return hexutil.EncodeUint64(nonce), nil
 }
 
@@ -1665,7 +1668,7 @@ func (r *RotatingKingAPI) GetKingStats(addressStr string) (*KingStats, error) {
 		return nil, errors.New("blockchain not available")
 	}
 
-	address := common.ParseQuantumAddress(addressStr)
+	address, _ := common.ParseQuantumAddress(addressStr)
 	rkManager := r.node.Blockchain().GetRotatingKingManager()
 	if rkManager == nil {
 		return nil, errors.New("rotating king manager not available")

@@ -223,7 +223,7 @@ continue
 for _, tx := range blk.Txs {
 // Filter by address if specified
 if address != "" {
-addr := common.ParseQuantumAddress(address)
+addr, _ := common.ParseQuantumAddress(address)
 txFrom := common.BytesToQuantumAddress(tx.From.Bytes())
 txTo := common.QuantumAddress{}
 if tx.To != nil {
@@ -301,14 +301,15 @@ var walletList []map[string]interface{}
 if keystore := ws.node.Keystore(); keystore != nil {
 accounts := keystore.Accounts()
 for _, acc := range accounts {
-balance := ws.node.Blockchain().GetAccountBalance(acc.Address)
+addr := common.BytesToQuantumAddress(acc.Address.Bytes())
+balance := ws.node.Blockchain().GetAccountBalance(addr)
 
 walletData := map[string]interface{}{
 "address":      acc.Address.Hex(),
 "name":         "Wallet", // You might need to get the actual name
 "balance":      balance.String(),
 "balance_antd": formatBalance(balance),
-"nonce":        ws.node.Blockchain().State().GetNonce(acc.Address),
+"nonce":        ws.node.Blockchain().State().GetNonce(addr),
 }
 walletList = append(walletList, walletData)
 }
@@ -321,7 +322,7 @@ func (ws *WebServer) apiWalletBalance(w http.ResponseWriter, r *http.Request) {
 vars := mux.Vars(r)
 address := vars["address"]
 
-addr := common.ParseQuantumAddress(address)
+addr, _ := common.ParseQuantumAddress(address)
 balance := ws.node.Blockchain().GetAccountBalance(addr)
 
 json.NewEncoder(w).Encode(map[string]interface{}{
