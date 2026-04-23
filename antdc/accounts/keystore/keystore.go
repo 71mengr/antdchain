@@ -304,8 +304,7 @@ func findKeystoreFile(addr common.QuantumAddress, dir string) (string, error) {
 		if len(parts) < 3 {
 			continue
 		}
-		tsStr := strings.ReplaceAll(parts[1], "-", ":")
-		t, err := time.Parse("2006-01-02T15:04:05.000000000Z", tsStr)
+		t, err := time.Parse("2006-01-02T15-04-05.000000000Z", parts[1])
 		if err != nil {
 			continue
 		}
