@@ -3,7 +3,6 @@
 // for more information.
 
 package governance
-
 import (
     "encoding/json"
     "errors"
@@ -13,7 +12,6 @@ import (
     "strings"
     "sync/atomic"
 
-    "github.com/ethereum/go-ethereum/common"
     "github.com/ethereum/go-ethereum/log"
     "github.com/antdaza/antdchain/antdc/reward"
 )
@@ -30,11 +28,11 @@ const (
 type GovernanceProposal struct {
     ID                uint64           `json:"id"`
     ProposalType      ProposalType     `json:"type"`
-    Executor          common.Address   `json:"executor"`
+    Executor          common.QuantumAddress   `json:"executor"`
     Executed          bool             `json:"executed"`
     ETA               uint64           `json:"eta"`
-    NewMainKing       common.Address   `json:"new_main_king,omitempty"`
-    NewRotatingKings  []common.Address `json:"new_rotating_kings,omitempty"`
+    NewMainKing       common.QuantumAddress   `json:"new_main_king,omitempty"`
+    NewRotatingKings  []common.QuantumAddress `json:"new_rotating_kings,omitempty"`
     CreatedTimestamp  uint64           `json:"created_timestamp"`
     ExecutedTimestamp uint64           `json:"executed_timestamp,omitempty"`
 }
@@ -46,10 +44,10 @@ var (
     ErrInvalidParams    = errors.New("governance: invalid proposal parameters")
 )
 
-type KingUpdateListener func(mainKing common.Address, rotatingKings []common.Address)
+type KingUpdateListener func(mainKing common.QuantumAddress, rotatingKings []common.QuantumAddress)
 
 type GovernanceController struct {
-    owner             common.Address
+    owner             common.QuantumAddress
     proposals         map[uint64]*GovernanceProposal
     rewardDistributor *reward.RewardDistributor
     rotatingKingMgr   reward.RotatingKingManager // Use interface instead of concrete type
@@ -59,8 +57,8 @@ type GovernanceController struct {
 }
 
 // NewGovernanceController — now takes rotating king manager directly
-func NewGovernanceController(owner common.Address, distributor *reward.RewardDistributor, rkMgr reward.RotatingKingManager, dataDir string) (*GovernanceController, error) {
-    if owner == (common.Address{}) {
+func NewGovernanceController(owner common.QuantumAddress, distributor *reward.RewardDistributor, rkMgr reward.RotatingKingManager, dataDir string) (*GovernanceController, error) {
+    if owner == (common.QuantumAddress{}) {
         return nil, errors.New("governance owner cannot be zero address")
     }
     if rkMgr == nil {
@@ -103,11 +101,11 @@ func (gc *GovernanceController) SetKingUpdateListener(fn KingUpdateListener) {
     gc.onKingUpdate = fn
 }
 
-func (gc *GovernanceController) ProposeMainKingChange(caller common.Address, newMainKing common.Address, now uint64) (uint64, error) {
+func (gc *GovernanceController) ProposeMainKingChange(caller common.QuantumAddress, newMainKing common.QuantumAddress, now uint64) (uint64, error) {
     if caller != gc.owner {
         return 0, ErrNotAuthorized
     }
-    if newMainKing == (common.Address{}) {
+    if newMainKing == (common.QuantumAddress{}) {
         return 0, ErrInvalidParams
     }
 
@@ -131,7 +129,7 @@ func (gc *GovernanceController) ProposeMainKingChange(caller common.Address, new
     return id, nil
 }
 
-func (gc *GovernanceController) ProposeRotatingKingsUpdate(caller common.Address, newKings []common.Address, now uint64) (uint64, error) {
+func (gc *GovernanceController) ProposeRotatingKingsUpdate(caller common.QuantumAddress, newKings []common.QuantumAddress, now uint64) (uint64, error) {
     if caller != gc.owner {
         return 0, ErrNotAuthorized
     }
@@ -140,7 +138,7 @@ func (gc *GovernanceController) ProposeRotatingKingsUpdate(caller common.Address
     }
 
     id := gc.nextID()
-    copied := make([]common.Address, len(newKings))
+    copied := make([]common.QuantumAddress, len(newKings))
     copy(copied, newKings)
 
     prop := &GovernanceProposal{
@@ -162,7 +160,7 @@ func (gc *GovernanceController) ProposeRotatingKingsUpdate(caller common.Address
     return id, nil
 }
 
-func (gc *GovernanceController) ExecuteProposal(id uint64, caller common.Address, now uint64) error {
+func (gc *GovernanceController) ExecuteProposal(id uint64, caller common.QuantumAddress, now uint64) error {
     prop, exists := gc.proposals[id]
     if !exists {
         return errors.New("proposal not found")
@@ -196,7 +194,7 @@ func (gc *GovernanceController) ExecuteProposal(id uint64, caller common.Address
     if gc.onKingUpdate != nil {
         go func() {
             // We need methods to get current kings
-            main := common.Address{} // TODO: Get from rewardDistributor
+            main := common.QuantumAddress{} // TODO: Get from rewardDistributor
             rot := gc.rotatingKingMgr.GetKingAddresses()
             gc.onKingUpdate(main, rot)
         }()

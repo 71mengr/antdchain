@@ -1,12 +1,10 @@
 
 package validation
-
 import (
     "errors"
     "log"
     "math/big"
 
-    "github.com/ethereum/go-ethereum/common"
     "github.com/antdaza/antdchain/antdc/block"
     "github.com/antdaza/antdchain/antdc/chain"
     "github.com/antdaza/antdchain/antdc/staking"
@@ -26,7 +24,7 @@ func NewStakingValidator(stakingManager *staking.StakingManager) *StakingValidat
 }
 
 func (sv *StakingValidator) ValidateBlockMiner(blk *block.Block, bc *chain.Blockchain) error {
-    if blk.Header.Miner == (common.Address{}) {
+    if blk.Header.Miner == (common.QuantumAddress{}) {
         return errors.New("block must have a miner address")
     }
     
@@ -58,7 +56,7 @@ func (sv *StakingValidator) ValidateBlockMiner(blk *block.Block, bc *chain.Block
     return nil
 }
 
-func (sv *StakingValidator) ValidateMinerRotation(currentMiner, nextMiner common.Address, 
+func (sv *StakingValidator) ValidateMinerRotation(currentMiner, nextMiner common.QuantumAddress, 
     blocksMined uint64, blocksPerMiner uint64) error {
     
     // Check if current miner completed their blocks

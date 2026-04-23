@@ -1,6 +1,5 @@
 
 package tlsconfig
-
 import (
     "context"
     "crypto/x509"

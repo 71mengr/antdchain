@@ -3,7 +3,6 @@
 // for more information.
 
 package tx
-
 import (
 "crypto/sha256"
 "encoding/binary"
@@ -16,16 +15,15 @@ import (
 "time"
 
 "github.com/antdaza/antdchain/antdc/crypto/quantum"
-chaincommon "github.com/antdaza/antdchain/common"
-"github.com/ethereum/go-ethereum/common"
+"github.com/antdaza/antdchain/common"
 "github.com/ethereum/go-ethereum/rlp"
 )
 
 const MaxQuantumSignatureSize = quantum.MLDSA65SignatureSize
 
 type Tx struct {
-From      chaincommon.QuantumAddress
-To        *chaincommon.QuantumAddress
+From      common.QuantumAddress
+To        *common.QuantumAddress
 PubKey    []byte
 Value     *big.Int
 Data      []byte
@@ -36,7 +34,7 @@ Signature []byte
 Timestamp uint64 `json:"timestamp"`
 }
 
-func NewTx(from, to chaincommon.QuantumAddress, value *big.Int, data []byte, nonce, gas uint64, gasPrice *big.Int) *Tx {
+func NewTx(from, to common.QuantumAddress, value *big.Int, data []byte, nonce, gas uint64, gasPrice *big.Int) *Tx {
 return &Tx{From: from, To: &to, Value: value, Data: data, Nonce: nonce, Gas: gas, GasPrice: gasPrice}
 }
 
@@ -57,7 +55,7 @@ return err
 }
 tx.Signature = sig
 tx.PubKey = append([]byte(nil), pubKey...)
-from, err := chaincommon.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+from, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
 if err != nil {
 return err
 }
@@ -92,7 +90,7 @@ return false, errors.New("missing public key")
 if !quantum.Verify(tx.PubKey, tx.HashForSigning(), tx.Signature) {
 return false, errors.New("invalid signature")
 }
-addr, err := chaincommon.ParseQuantumAddress(quantum.PubKeyToAddress(tx.PubKey))
+addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(tx.PubKey))
 if err != nil {
 return false, err
 }
@@ -199,14 +197,14 @@ return fmt.Errorf("invalid pubKey hex: %w", err)
 tx.PubKey = pk
 }
 if aux.From != "" {
-fromAddr, err := chaincommon.ParseQuantumAddress(aux.From)
+fromAddr, err := common.ParseQuantumAddress(aux.From)
 if err != nil {
 return err
 }
 tx.From = fromAddr
 }
 if aux.To != nil {
-toAddr, err := chaincommon.ParseQuantumAddress(*aux.To)
+toAddr, err := common.ParseQuantumAddress(*aux.To)
 if err != nil {
 return err
 }
@@ -248,6 +246,6 @@ tx.GasPrice = gp
 return nil
 }
 
-func NewTransferTx(from, to chaincommon.QuantumAddress, amount *big.Int, nonce uint64, gasPrice *big.Int) *Tx {
+func NewTransferTx(from, to common.QuantumAddress, amount *big.Int, nonce uint64, gasPrice *big.Int) *Tx {
 return &Tx{From: from, To: &to, Value: amount, Nonce: nonce, Gas: 21000, GasPrice: gasPrice, Timestamp: uint64(time.Now().Unix())}
 }

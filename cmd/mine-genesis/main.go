@@ -3,7 +3,6 @@
 // for more information.
 
 package main
-
 import (
 	"encoding/json"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"math/big"
 	"os"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/antdaza/antdchain/antdc/block"
 	"github.com/antdaza/antdchain/antdc/pow"
 )
@@ -26,7 +24,7 @@ type Genesis struct {
 		MixDigest  common.Hash `json:"mixDigest"`
 		Extra      []byte      `json:"extra"`
 	} `json:"header"`
-	Alloc map[common.Address]struct {
+	Alloc map[common.QuantumAddress]struct {
 		Balance string `json:"balance"`
 	} `json:"alloc"`
 }
@@ -69,10 +67,10 @@ func main() {
 	genesis.Header.Extra = genesisBlock.Header.Extra
 	
 	// Add some initial allocations
-	genesis.Alloc = map[common.Address]struct {
+	genesis.Alloc = map[common.QuantumAddress]struct {
 		Balance string `json:"balance"`
 	}{
-		common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"): {
+		common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"): {
 			Balance: "1000000000000000000000000", // 1,000,000 ANTD
 		},
 	}

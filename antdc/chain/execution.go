@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 "context"
 "crypto/sha256"
@@ -17,7 +16,7 @@ import (
 "github.com/antdaza/antdchain/antdc/tx"
 "github.com/antdaza/antdchain/antdc/vm"
 chaincommon "github.com/antdaza/antdchain/common"
-"github.com/ethereum/go-ethereum/common"
+
 )
 
 // executeBlockTransactions executes all transactions in the block
@@ -88,7 +87,7 @@ return senderTxs[i].Nonce < senderTxs[j].Nonce
 })
 
 // Get current state for this sender
-senderAddress := common.BytesToAddress(sender.Bytes())
+senderAddress := common.BytesToQuantumAddress(sender.Bytes())
 currentNonce := bc.state.GetNonce(senderAddress)
 currentBalance := bc.state.GetBalance(senderAddress)
 
@@ -144,7 +143,7 @@ return fmt.Errorf("transaction %d has invalid signature", index)
 }
 
 // Nonce validation
-from := common.BytesToAddress(t.From.Bytes())
+from := common.BytesToQuantumAddress(t.From.Bytes())
 expectedNonce := bc.state.GetNonce(from)
 if t.Nonce != expectedNonce {
 return fmt.Errorf("transaction %d invalid nonce: expected %d, got %d",
@@ -185,7 +184,7 @@ return errors.New("nil transaction")
 // Get current state
 state := bc.State()
 sender := t.From
-senderAddress := common.BytesToAddress(sender.Bytes())
+senderAddress := common.BytesToQuantumAddress(sender.Bytes())
 senderNonce := state.GetNonce(senderAddress)
 
 // Validate nonce
@@ -229,12 +228,12 @@ func (bc *Blockchain) applyContractCreation(t *tx.Tx, gasCost *big.Int) error {
 state := bc.State()
 
 // Get sender's current nonce (after increment)
-senderNonce := state.GetNonce(common.BytesToAddress(t.From.Bytes())) - 1
+senderNonce := state.GetNonce(common.BytesToQuantumAddress(t.From.Bytes())) - 1
 
 // Create simple contract address
 contractAddrBytes := sha256.Sum256(append(t.From.Bytes(),
 []byte(fmt.Sprintf("%d", senderNonce))...))
-contractAddr := common.BytesToAddress(contractAddrBytes[:20])
+contractAddr := common.BytesToQuantumAddress(contractAddrBytes[:20])
 
 // Check if contract already exists
 if state.GetBalance(contractAddr).Sign() > 0 || len(state.GetCode(contractAddr)) > 0 {
@@ -258,7 +257,7 @@ return nil
 // applyTransferOrCall handles transfers and contract calls
 func (bc *Blockchain) applyTransferOrCall(t *tx.Tx, gasCost *big.Int) error {
 state := bc.State()
-to := common.BytesToAddress(t.To.Bytes())
+to := common.BytesToQuantumAddress(t.To.Bytes())
 
 // Check if recipient exists
 hasBalance := state.GetBalance(to).Sign() > 0

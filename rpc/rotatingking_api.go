@@ -1,12 +1,11 @@
 
 package rpc
-
 import (
     "context"
     "fmt"
     "time"
     "math/big"    
-    "github.com/ethereum/go-ethereum/common"
+
     "github.com/antdaza/antdchain/antdc/reward"
 )
 
@@ -124,7 +123,7 @@ func (api *RotatingKingAPI) Info(ctx context.Context, address string) (map[strin
         return nil, fmt.Errorf("rotating king manager not available")
     }
     
-    addr := common.HexToAddress(address)
+    addr := common.ParseQuantumAddress(address)
     
     result := map[string]interface{}{
         "address":     addr.Hex(),
@@ -152,10 +151,10 @@ func (api *RotatingKingAPI) Rewards(ctx context.Context, address string) (string
         return "", fmt.Errorf("rotating king manager not available")
     }
     
-    addr := common.HexToAddress(address)
+    addr := common.ParseQuantumAddress(address)
     
     // Try to get rewards if method exists
-    if m, ok := interface{}(api.manager).(interface{ GetKingRewards(common.Address) *big.Int }); ok {
+    if m, ok := interface{}(api.manager).(interface{ GetKingRewards(common.QuantumAddress) *big.Int }); ok {
         rewards := m.GetKingRewards(addr)
         if rewards != nil {
             return rewards.String(), nil

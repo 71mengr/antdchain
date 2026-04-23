@@ -3,18 +3,17 @@
 // for more information.
 
 package chain
-
 import (
     "math/big"
     "github.com/antdaza/antdchain/antdc/rotatingking"
-    "github.com/ethereum/go-ethereum/common"
+
     )
 // RotatingKingManager interface for managing rotating kings
 type RotatingKingManager interface {
-    GetCurrentKing() common.Address
+    GetCurrentKing() common.QuantumAddress
     GetCurrentKingIndex() int
-    GetKingAddresses() []common.Address
-    IsKing(common.Address) bool
+    GetKingAddresses() []common.QuantumAddress
+    IsKing(common.QuantumAddress) bool
     ForceRotate(int, string) error
     GetRotationInterval() uint64
     GetRotationHistory(int) []interface{}

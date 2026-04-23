@@ -3,14 +3,13 @@
 // for more information.
 
 package chain
-
 import (
 "fmt"
 "github.com/antdaza/antdchain/antdc/block"
 "github.com/antdaza/antdchain/antdc/monitoring"
 "github.com/antdaza/antdchain/antdc/state"
 "github.com/antdaza/antdchain/antdc/tx"
-"github.com/ethereum/go-ethereum/common"
+
 "math/big"
 )
 
@@ -33,14 +32,14 @@ return out
 type TransactionWrapper struct{ tx *tx.Tx }
 
 func (w *TransactionWrapper) GetHash() common.Hash { return w.tx.Hash() }
-func (w *TransactionWrapper) GetFrom() common.Address {
-return common.BytesToAddress(w.tx.From.Bytes())
+func (w *TransactionWrapper) GetFrom() common.QuantumAddress {
+return common.BytesToQuantumAddress(w.tx.From.Bytes())
 }
-func (w *TransactionWrapper) GetTo() *common.Address {
+func (w *TransactionWrapper) GetTo() *common.QuantumAddress {
 if w.tx.To == nil {
 return nil
 }
-to := common.BytesToAddress(w.tx.To.Bytes())
+to := common.BytesToQuantumAddress(w.tx.To.Bytes())
 return &to
 }
 func (w *TransactionWrapper) GetValue() *big.Int    { return w.tx.Value }
@@ -58,14 +57,14 @@ func (w *HeaderWrapper) GetNumber() *big.Int { return w.header.Number }
 // StateWrapper wraps state for monitoring
 type StateWrapper struct{ state *state.State }
 
-func (w *StateWrapper) GetBalance(addr common.Address) *big.Int {
+func (w *StateWrapper) GetBalance(addr common.QuantumAddress) *big.Int {
 if w.state == nil {
 return big.NewInt(0)
 }
 return w.state.GetBalance(addr)
 }
 
-func (w *StateWrapper) GetNonce(addr common.Address) uint64 {
+func (w *StateWrapper) GetNonce(addr common.QuantumAddress) uint64 {
 if w.state == nil {
 return 0
 }

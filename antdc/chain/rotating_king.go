@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 "context"
 "errors"
@@ -15,7 +14,7 @@ import (
 "github.com/antdaza/antdchain/antdc/block"
 "github.com/antdaza/antdchain/antdc/reward"
 "github.com/antdaza/antdchain/antdc/rotatingking"
-"github.com/ethereum/go-ethereum/common"
+
 )
 
 // processRotatingKingForBlock handles rotating king updates for a validated block
@@ -30,7 +29,7 @@ currentKing := bc.rotatingKingManager.GetCurrentKing()
 // Keep local rotating king state aligned with the king used by the accepted block.
 // This is especially important for synced nodes, where reward distribution can be
 // derived from block extra data (rk=...) and may differ from stale local state.
-if distribution.RotatingKingAddress != (common.Address{}) &&
+if distribution.RotatingKingAddress != (common.QuantumAddress{}) &&
 distribution.RotatingKingAddress != currentKing {
 if err := bc.rotatingKingManager.ForceRotateToAddress(
 distribution.RotatingKingAddress,
@@ -81,7 +80,7 @@ func (bc *Blockchain) updateRotatingKingForBlock(b *block.Block, blockHeight uin
 
     // Check for king rotation eligibility
     currentKing := bc.rotatingKingManager.GetCurrentKing()
-    if currentKing != (common.Address{}) {
+    if currentKing != (common.QuantumAddress{}) {
         if shouldRotate {
             // Perform rotation
             if err := bc.rotatingKingManager.RotateToNextKing(blockHeight, b.Hash()); err != nil {
@@ -381,7 +380,7 @@ log.Printf("[blockchain] Database marked as synced to height %d", height)
 }
 
 // initDefaultRotatingKing initializes default rotating king
-func (bc *Blockchain) initDefaultRotatingKing(defaultAddress common.Address) {
+func (bc *Blockchain) initDefaultRotatingKing(defaultAddress common.QuantumAddress) {
 if bc.rotatingKingManager == nil {
 return
 }

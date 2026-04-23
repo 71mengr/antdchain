@@ -3,7 +3,6 @@
 // for more information.
 
 package vm
-
 import (
 "context"
 
@@ -11,10 +10,8 @@ import (
 
 "math/big"
 
-"github.com/ethereum/go-ethereum/common"
-
 "github.com/antdaza/antdchain/antdc/state"
-
+"github.com/antdaza/antdchain/common"
 "github.com/antdaza/antdchain/antdc/tx"
 )
 
@@ -78,14 +75,14 @@ v.gas -= gasUsed
 
 if t.Data == nil || len(t.Data) == 0 {
 
-from := common.BytesToAddress(t.From[:])
+from := common.BytesToQuantumAddress(t.From[:])
 if !v.canTransfer(from, t.Value) {
 
 return nil, gasUsed, errors.New("insufficient balance")
 
 }
 
-to := common.BytesToAddress((*t.To)[:])
+to := common.BytesToQuantumAddress((*t.To)[:])
 v.transfer(from, to, t.Value)
 
 v.s.SetNonce(from, t.Nonce+1)
@@ -139,7 +136,7 @@ instr := []Instruction{
 
 {Opcode: "PUSH", Args: []interface{}{big.NewInt(100)}},
 
-{Opcode: "TRANSFER", Args: []interface{}{common.HexToAddress("0x123..."), big.NewInt(50)}},
+{Opcode: "TRANSFER", Args: []interface{}{common.ParseQuantumAddress("0x123..."), big.NewInt(50)}},
 }
 
 return instr, nil
@@ -278,7 +275,7 @@ return errors.New("TRANSFER requires 2 arguments")
 
 }
 
-to, ok1 := instr.Args[0].(common.Address)
+to, ok1 := instr.Args[0].(common.QuantumAddress)
 
 amount, ok2 := instr.Args[1].(*big.Int)
 
@@ -288,13 +285,13 @@ return errors.New("TRANSFER requires address and big.Int")
 
 }
 
-if !v.canTransfer(common.Address{}, amount) { // Assume contract address is zero
+if !v.canTransfer(common.QuantumAddress{}, amount) { // Assume contract address is zero
 
 return errors.New("insufficient balance")
 
 }
 
-v.transfer(common.Address{}, to, amount)
+v.transfer(common.QuantumAddress{}, to, amount)
 
 v.gas -= 21000
 
@@ -320,7 +317,7 @@ return nil
 
 // canTransfer checks if the sender has enough balance.
 
-func (v *VM) canTransfer(from common.Address, value *big.Int) bool {
+func (v *VM) canTransfer(from common.QuantumAddress, value *big.Int) bool {
 
 return v.s.GetBalance(from).Cmp(value) >= 0
 
@@ -328,7 +325,7 @@ return v.s.GetBalance(from).Cmp(value) >= 0
 
 // transfer moves balance from sender to recipient.
 
-func (v *VM) transfer(from, to common.Address, value *big.Int) {
+func (v *VM) transfer(from, to common.QuantumAddress, value *big.Int) {
 
 if value.Sign() == 0 {
 

@@ -3,7 +3,6 @@
 // for more information.
 
 package king
-
 import (
     "fmt"
     "math/big"
@@ -14,7 +13,7 @@ import (
     "strings"
     "time"
 
-    "github.com/ethereum/go-ethereum/common"
+    "github.com/antdaza/antdchain/common"
     "github.com/ethereum/go-ethereum/crypto"
     "github.com/antdaza/antdchain/antdc/chain"
     "github.com/urfave/cli/v2"
@@ -47,9 +46,9 @@ const (
 type GovernanceProposal struct {
     ID                uint64
     ProposalType      uint8
-    Creator           common.Address
-    NewMainKing       common.Address
-    NewRotatingKings  []common.Address
+    Creator           common.QuantumAddress
+    NewMainKing       common.QuantumAddress
+    NewRotatingKings  []common.QuantumAddress
     CreatedAt         uint64
     ETA               uint64 // 48 hours after creation
     Executed          bool
@@ -59,9 +58,9 @@ type GovernanceProposal struct {
 
 // GovernanceController interface
 type GovernanceController interface {
-    ProposeMainKingChange(caller common.Address, newMainKing common.Address, now uint64) (uint64, error)
-    ProposeRotatingKingsUpdate(caller common.Address, newKings []common.Address, now uint64) (uint64, error)
-    ExecuteProposal(id uint64, caller common.Address, now uint64) error
+    ProposeMainKingChange(caller common.QuantumAddress, newMainKing common.QuantumAddress, now uint64) (uint64, error)
+    ProposeRotatingKingsUpdate(caller common.QuantumAddress, newKings []common.QuantumAddress, now uint64) (uint64, error)
+    ExecuteProposal(id uint64, caller common.QuantumAddress, now uint64) error
     ListProposals() map[uint64]*GovernanceProposal
 }
 
@@ -121,16 +120,16 @@ var KingCommands = &cli.Command{
 func loadChain(ctx *cli.Context) (*chain.Blockchain, error) {
     dataDir := ctx.String("data")
     statePath := filepath.Join(dataDir, "state")
-    return chain.NewBlockchain(statePath, common.Address{})
+    return chain.NewBlockchain(statePath, common.QuantumAddress{})
 }
 
-func ownerAddr(keyHex string) (common.Address, error) {
+func ownerAddr(keyHex string) (common.QuantumAddress, error) {
     if strings.HasPrefix(keyHex, "0x") {
         keyHex = keyHex[2:]
     }
     pk, err := crypto.HexToECDSA(keyHex)
     if err != nil {
-        return common.Address{}, err
+        return common.QuantumAddress{}, err
     }
     return crypto.PubkeyToAddress(pk.PublicKey), nil
 }
@@ -155,13 +154,13 @@ func cmdStatus(ctx *cli.Context) error {
     fmt.Println("=== ANTDChain King Status ===")
     
     // Get main king from reward distributor
-    mainKing := common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY") // Default main king
+    mainKing := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY") // Default main king
     fmt.Printf("Main King : %s\n", mainKing.Hex())
     fmt.Printf("  Balance : %s ANTD\n\n", weiToANTD(bc.GetAccountBalance(mainKing)))
 
     // Try to get rotating kings from rotating king manager if available
     rkManager := bc.GetRotatingKingManager()
-    var kings []common.Address
+    var kings []common.QuantumAddress
     
     if rkManager != nil {
         kings = rkManager.GetKingAddresses()
@@ -184,7 +183,7 @@ func cmdProposeMain(ctx *cli.Context) error {
     if ctx.NArg() != 1 {
         return fmt.Errorf("need exactly one address")
     }
-    newKing := common.HexToAddress(ctx.Args().First())
+    newKing := common.ParseQuantumAddress(ctx.Args().First())
 
     bc, err := loadChain(ctx)
     if err != nil {
@@ -221,9 +220,9 @@ func cmdProposeRotating(ctx *cli.Context) error {
     if ctx.NArg() == 0 {
         return fmt.Errorf("at least one address required")
     }
-    var addrs []common.Address
+    var addrs []common.QuantumAddress
     for _, a := range ctx.Args().Slice() {
-        addrs = append(addrs, common.HexToAddress(a))
+        addrs = append(addrs, common.ParseQuantumAddress(a))
     }
 
     bc, err := loadChain(ctx)

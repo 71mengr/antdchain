@@ -3,18 +3,17 @@
 // for more information.
 
 package monitoring
-
 import (
     "encoding/json"
     "math/big"
     "time"
 
-    "github.com/ethereum/go-ethereum/common"
+    "github.com/antdaza/antdchain/common"
 )
 
 // MonitorConfig holds monitoring configuration
 type MonitorConfig struct {
-    MainKingAddress   common.Address
+    MainKingAddress   common.QuantumAddress
     AlertThreshold    *big.Int // Alert if any tx exceeds this amount
     MaxSupply         *big.Int // Maximum allowed total supply
     CheckInterval     time.Duration
@@ -30,8 +29,8 @@ type TransactionAlert struct {
     Message     string          `json:"message"`
     TxHash      common.Hash     `json:"tx_hash"`
     Amount      *big.Int        `json:"amount"`
-    From        common.Address  `json:"from"`
-    To          common.Address  `json:"to"`
+    From        common.QuantumAddress  `json:"from"`
+    To          common.QuantumAddress  `json:"to"`
     BlockNumber uint64          `json:"block_number"`
     Timestamp   time.Time       `json:"timestamp"`
     Data        json.RawMessage `json:"data,omitempty"`
@@ -42,7 +41,7 @@ type SupplyStats struct {
     TotalSupply     string                      `json:"total_supply"`
     UniqueAddresses int                         `json:"unique_addresses"`
     TopHolders      []Holder                    `json:"top_holders"`
-    Distribution    map[common.Address]string   `json:"distribution"`
+    Distribution    map[common.QuantumAddress]string   `json:"distribution"`
     AlertCounts     map[string]int              `json:"alert_counts"`
     LastUpdated     time.Time                   `json:"last_updated"`
 }
@@ -71,8 +70,8 @@ type BlockProvider interface {
 // Defines the interface for transaction access
 type TransactionProvider interface {
     GetHash() common.Hash
-    GetFrom() common.Address
-    GetTo() *common.Address
+    GetFrom() common.QuantumAddress
+    GetTo() *common.QuantumAddress
     GetValue() *big.Int
     GetNonce() uint64
     GetGas() uint64
@@ -88,6 +87,6 @@ type HeaderProvider interface {
 
 // Defines the interface for state access
 type StateProvider interface {
-    GetBalance(address common.Address) *big.Int
-    GetNonce(address common.Address) uint64
+    GetBalance(address common.QuantumAddress) *big.Int
+    GetNonce(address common.QuantumAddress) uint64
 }

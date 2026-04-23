@@ -3,7 +3,6 @@
 // for more information.
 
 package keystore
-
 import (
 	"crypto/aes"
 	"crypto/cipher"

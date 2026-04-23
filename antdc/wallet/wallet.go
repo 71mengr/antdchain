@@ -4,7 +4,6 @@
 
 
 package wallet
-
 import (
     "crypto/aes"
     "crypto/cipher"
@@ -31,7 +30,6 @@ import (
     "github.com/antdaza/antdchain/antdc/crypto/quantum"
     "github.com/antdaza/antdchain/antdc/tx"
     "github.com/antdaza/antdchain/common"
-    ethcommon "github.com/ethereum/go-ethereum/common"
 )
 
 // Security constants
@@ -323,7 +321,7 @@ func (w *Wallet) Nonce() uint64 {
     }
 
     // Get nonce from blockchain state
-    stateNonce := state.GetNonce(ethcommon.BytesToAddress(w.addr.Bytes()))
+    stateNonce := state.GetNonce(common.BytesToQuantumAddress(w.addr.Bytes()))
     
     // Check if there are pending transactions in the pool
     txPool := w.bc.TxPool()
@@ -333,7 +331,7 @@ func (w *Wallet) Nonce() uint64 {
     }
 
     // Get pending transactions for this address
-    pendingTxs := txPool.GetPendingTransactionsByNonce(ethcommon.BytesToAddress(w.addr.Bytes()))
+    pendingTxs := txPool.GetPendingTransactionsByNonce(common.BytesToQuantumAddress(w.addr.Bytes()))
     
     var nextNonce uint64
     
@@ -679,7 +677,7 @@ func (wm *WalletManager) GetBalance(addr common.QuantumAddress) *big.Int {
         return big.NewInt(0)
     }
 
-    return state.GetBalance(ethcommon.BytesToAddress(addr.Bytes()))
+    return state.GetBalance(common.BytesToQuantumAddress(addr.Bytes()))
 }
 
 // CreateNewWallet creates a new wallet and adds it to the manager

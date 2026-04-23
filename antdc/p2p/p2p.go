@@ -3,7 +3,6 @@
 // for more information.
 
 package p2p
-
 import (
 	"bufio"
 	"context"
@@ -17,7 +16,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
 	"github.com/antdaza/antdchain/antdc/tx"
-	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
 	kd "github.com/libp2p/go-libp2p-kad-dht"
@@ -114,13 +113,13 @@ type DBSyncMetrics struct {
 	BytesTransferred int64            `json:"bytesTransferred"`
 	PeerCount        int              `json:"peerCount"`
 	IsActive         bool             `json:"isActive"`
-	LastKingList     []common.Address `json:"lastKingList"`
+	LastKingList     []common.QuantumAddress `json:"lastKingList"`
 }
 
 type KingRotationEvent struct {
 	BlockHeight        uint64         `json:"height"`
-	PreviousKing       common.Address `json:"prevKing"`
-	NewKing            common.Address `json:"newKing"`
+	PreviousKing       common.QuantumAddress `json:"prevKing"`
+	NewKing            common.QuantumAddress `json:"newKing"`
 	Eligible           bool           `json:"eligible"`
 	EligibilityBalance *big.Int       `json:"balance"`
 	Timestamp          time.Time      `json:"ts"`
@@ -234,7 +233,7 @@ type Node struct {
 
 	banManager *BanManager
 
-	lastKingList   []common.Address
+	lastKingList   []common.QuantumAddress
 	lastKingListMu sync.RWMutex
 }
 
@@ -1309,13 +1308,13 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 			FailedSyncs:     0,
 			TotalRotations:  0,
 			IsActive:        true,
-			LastKingList:    []common.Address{},
+			LastKingList:    []common.QuantumAddress{},
 		},
 		dbSyncInterval: 120 * time.Second, // Sync every 2 minutes
 		dbSyncEnabled:  true,
 		dbSyncVersion:  "1.0.0",
 		maxSyncRetries: 3,
-		lastKingList:   []common.Address{},
+		lastKingList:   []common.QuantumAddress{},
 	}
 
 	// Set stream handlers
@@ -2777,7 +2776,7 @@ func (n *Node) processDBSyncRequest(req *DBSyncRequest, requester peer.ID) {
 			}); ok {
 				config := configManager.GetConfig()
 				response.Config = &config
-			} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+			} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 				// Fallback: create basic config from addresses
 				addresses := addrManager.GetKingAddresses()
 				config := rotatingking.RotatingKingConfig{
@@ -2837,8 +2836,8 @@ func (n *Node) handleDBSyncResponse(msg *pubsub.Message) {
 		n.processMu.Unlock()
 		//    n.applyKingConfiguration(resp.Config, msg.GetFrom())
 		if mgr != nil {
-			var ourAddresses []common.Address
-			if manager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+			var ourAddresses []common.QuantumAddress
+			if manager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 				ourAddresses = manager.GetKingAddresses()
 			}
 
@@ -3339,7 +3338,7 @@ func (n *Node) getCurrentKingConfig(mgr interface{}) rotatingking.RotatingKingCo
 	}
 
 	// Fallback: use GetKingAddresses()
-	if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		addresses := addrManager.GetKingAddresses()
 		n.logger.Debugf("Got %d addresses via GetKingAddresses()", len(addresses))
 
@@ -3380,10 +3379,10 @@ func (n *Node) processReceivedConfig(config *rotatingking.RotatingKingConfig, so
 
 	// Update configuration if manager supports it
 	if manager, ok := mgr.(interface {
-		UpdateKingAddresses(newAddresses []common.Address) error
+		UpdateKingAddresses(newAddresses []common.QuantumAddress) error
 	}); ok {
-		currentAddresses := []common.Address{}
-		if currentManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+		currentAddresses := []common.QuantumAddress{}
+		if currentManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 			currentAddresses = currentManager.GetKingAddresses()
 		}
 
@@ -3412,8 +3411,8 @@ func (n *Node) applyKingConfig(config *rotatingking.RotatingKingConfig, source p
 	}
 
 	// Get current addresses
-	var currentAddresses []common.Address
-	if manager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	var currentAddresses []common.QuantumAddress
+	if manager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		currentAddresses = manager.GetKingAddresses()
 	}
 
@@ -3423,7 +3422,7 @@ func (n *Node) applyKingConfig(config *rotatingking.RotatingKingConfig, source p
 			source.String()[:8], len(currentAddresses), len(config.KingAddresses))
 
 		// Update the list
-		if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.Address) error }); ok {
+		if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.QuantumAddress) error }); ok {
 			if err := updater.UpdateKingAddresses(config.KingAddresses); err != nil {
 				n.logger.Warnf("Failed to update king list: %v", err)
 			} else {
@@ -3433,7 +3432,7 @@ func (n *Node) applyKingConfig(config *rotatingking.RotatingKingConfig, source p
 	}
 }
 
-func (n *Node) compareAddressLists(a, b []common.Address) bool {
+func (n *Node) compareAddressLists(a, b []common.QuantumAddress) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -3540,7 +3539,7 @@ func (n *Node) handleConfigSyncRequest(req *DBSyncRequest, requester peer.ID) {
 		GetConfig() rotatingking.RotatingKingConfig
 	}); ok {
 		config = configManager.GetConfig()
-	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		addresses := addrManager.GetKingAddresses()
 		config = rotatingking.RotatingKingConfig{
 			KingAddresses:    addresses,
@@ -3600,14 +3599,14 @@ func (n *Node) parseKingConfig(configData map[string]interface{}) (rotatingking.
 	n.logger.Debugf("parseKingConfig called with data: %v", configData)
 
 	// Parse KingAddresses - try different possible field names
-	var addresses []common.Address
+	var addresses []common.QuantumAddress
 
 	// Try "KingAddresses" (capital)
 	if addrsData, ok := configData["KingAddresses"].([]interface{}); ok {
 		n.logger.Debugf("Found KingAddresses array with %d items", len(addrsData))
 		for _, addr := range addrsData {
 			if addrStr, ok := addr.(string); ok {
-				addresses = append(addresses, common.HexToAddress(addrStr))
+				addresses = append(addresses, common.ParseQuantumAddress(addrStr))
 			}
 		}
 	} else if addrsData, ok := configData["kingAddresses"].([]interface{}); ok {
@@ -3615,7 +3614,7 @@ func (n *Node) parseKingConfig(configData map[string]interface{}) (rotatingking.
 		n.logger.Debugf("Found kingAddresses array with %d items", len(addrsData))
 		for _, addr := range addrsData {
 			if addrStr, ok := addr.(string); ok {
-				addresses = append(addresses, common.HexToAddress(addrStr))
+				addresses = append(addresses, common.ParseQuantumAddress(addrStr))
 			}
 		}
 	} else if addrsData, ok := configData["addresses"].([]interface{}); ok {
@@ -3623,7 +3622,7 @@ func (n *Node) parseKingConfig(configData map[string]interface{}) (rotatingking.
 		n.logger.Debugf("Found addresses array with %d items", len(addrsData))
 		for _, addr := range addrsData {
 			if addrStr, ok := addr.(string); ok {
-				addresses = append(addresses, common.HexToAddress(addrStr))
+				addresses = append(addresses, common.ParseQuantumAddress(addrStr))
 			}
 		}
 	} else {
@@ -3785,7 +3784,7 @@ func (n *Node) syncConfigWithAllPeers() {
 }
 
 // Compare address lists
-func (n *Node) areAddressListsEqual(a, b []common.Address) bool {
+func (n *Node) areAddressListsEqual(a, b []common.QuantumAddress) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -3949,7 +3948,7 @@ func (n *Node) processKingRotationEvent(event *KingRotationEvent, source peer.ID
 
 	// Apply rotation
 	if rotator, ok := mgr.(interface {
-		ForceRotateToAddress(newKing common.Address, reason string) error
+		ForceRotateToAddress(newKing common.QuantumAddress, reason string) error
 	}); ok {
 		if err := rotator.ForceRotateToAddress(event.NewKing, "p2p-rotation-event"); err != nil {
 			n.logger.Warnf("Failed to apply rotation event: %v", err)
@@ -4074,7 +4073,7 @@ func (n *Node) handleKingConfigStream(s network.Stream) {
 		GetConfig() rotatingking.RotatingKingConfig
 	}); ok {
 		config = configManager.GetConfig()
-	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		addresses := addrManager.GetKingAddresses()
 		config = rotatingking.RotatingKingConfig{
 			KingAddresses:    addresses,
@@ -4116,8 +4115,8 @@ func (n *Node) syncKingConfigurationOnStartup() {
 	}
 
 	// Get current addresses
-	var currentAddresses []common.Address
-	if manager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	var currentAddresses []common.QuantumAddress
+	if manager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		currentAddresses = manager.GetKingAddresses()
 	}
 
@@ -4145,7 +4144,7 @@ func (n *Node) syncKingConfigurationOnStartup() {
 	}()
 }
 
-func (n *Node) requestAndCompareConfiguration(peerID peer.ID, ourAddresses []common.Address) {
+func (n *Node) requestAndCompareConfiguration(peerID peer.ID, ourAddresses []common.QuantumAddress) {
 	// Create config request
 	req := DBSyncRequest{
 		RequestID:   fmt.Sprintf("config-check-%d", time.Now().UnixNano()),
@@ -4163,7 +4162,7 @@ func (n *Node) requestAndCompareConfiguration(peerID peer.ID, ourAddresses []com
 	time.Sleep(5 * time.Second)
 }
 
-func (n *Node) shouldSyncConfiguration(ourCount, peerCount int, ourAddresses, peerAddresses []common.Address) bool {
+func (n *Node) shouldSyncConfiguration(ourCount, peerCount int, ourAddresses, peerAddresses []common.QuantumAddress) bool {
 	// If counts differ, definitely sync
 	if ourCount != peerCount {
 		n.logger.Warnf("Configuration mismatch: we have %d, peer has %d addresses",
@@ -4201,7 +4200,7 @@ func (n *Node) syncKingConfiguration() {
 		GetConfig() rotatingking.RotatingKingConfig
 	}); ok {
 		ourConfig = configManager.GetConfig()
-	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		addresses := addrManager.GetKingAddresses()
 		ourConfig = rotatingking.RotatingKingConfig{
 			KingAddresses:    addresses,
@@ -4255,7 +4254,7 @@ func (n *Node) DebugKingConfiguration() {
 	}
 
 	// Try different ways to get addresses
-	if manager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	if manager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		addresses := manager.GetKingAddresses()
 		n.logger.Infof("DEBUG: GetKingAddresses() returned %d addresses:", len(addresses))
 		for i, addr := range addresses {
@@ -4311,7 +4310,7 @@ func (n *Node) BroadcastCurrentConfig() {
 		GetConfig() rotatingking.RotatingKingConfig
 	}); ok {
 		config = configManager.GetConfig()
-	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		addresses := addrManager.GetKingAddresses()
 		config = rotatingking.RotatingKingConfig{
 			KingAddresses:    addresses,
@@ -4441,7 +4440,7 @@ func (n *Node) broadcastDBSyncStatus() {
 	}
 
 	// Get king count
-	if manager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	if manager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		status.KingCount = len(manager.GetKingAddresses())
 	}
 
@@ -4522,14 +4521,14 @@ func (n *Node) CheckIfConfigurationSyncNeeded() {
 
 	// Get our current configuration
 	var ourConfig rotatingking.RotatingKingConfig
-	var ourAddresses []common.Address
+	var ourAddresses []common.QuantumAddress
 
 	if configManager, ok := mgr.(interface {
 		GetConfig() rotatingking.RotatingKingConfig
 	}); ok {
 		ourConfig = configManager.GetConfig()
 		ourAddresses = ourConfig.KingAddresses
-	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	} else if addrManager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		ourAddresses = addrManager.GetKingAddresses()
 		ourConfig = rotatingking.RotatingKingConfig{
 			KingAddresses:    ourAddresses,
@@ -4692,7 +4691,7 @@ func (n *Node) triggerConfigurationSync() {
 		n.processMu.Unlock()
 
 		if mgr != nil {
-			if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.Address) error }); ok {
+			if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.QuantumAddress) error }); ok {
 				if err := updater.UpdateKingAddresses(bestConfig.KingAddresses); err != nil {
 					n.logger.Errorf("Failed to apply configuration: %v", err)
 				} else {
@@ -4766,7 +4765,7 @@ func (n *Node) applyConsensusConfiguration(config *rotatingking.RotatingKingConf
 		return
 	}
 
-	if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.Address) error }); ok {
+	if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.QuantumAddress) error }); ok {
 		if err := updater.UpdateKingAddresses(config.KingAddresses); err != nil {
 			n.logger.Errorf("Failed to apply consensus configuration: %v", err)
 		} else {
@@ -4816,7 +4815,7 @@ func (n *Node) getOurAddressCount() int {
 		return 0
 	}
 
-	if manager, ok := mgr.(interface{ GetKingAddresses() []common.Address }); ok {
+	if manager, ok := mgr.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		return len(manager.GetKingAddresses())
 	}
 
@@ -4876,7 +4875,7 @@ func (n *Node) startKingListCleanup() {
 
 			// Try to cast to the cleanup interface
 			if cleaner, ok := mgr.(interface {
-				CleanupIneligibleKings() ([]common.Address, error)
+				CleanupIneligibleKings() ([]common.QuantumAddress, error)
 			}); ok {
 				removed, err := cleaner.CleanupIneligibleKings()
 				if err != nil {
@@ -4936,7 +4935,7 @@ func (n *Node) PeriodicKingConfigCheck() {
 	}
 }
 
-func (n *Node) onKingListChanged(newList []common.Address) {
+func (n *Node) onKingListChanged(newList []common.QuantumAddress) {
 	n.logger.Infof("🔄 King list changed to %d addresses - broadcasting immediately", len(newList))
 
 	// Store the last list
@@ -5132,10 +5131,10 @@ func (n *Node) BroadcastRotation(event *rotatingking.KingRotationBroadcast) erro
 	return n.BroadcastKingRotation(rotation)
 }
 
-func (n *Node) isImportantAddress(addr common.Address) bool {
+func (n *Node) isImportantAddress(addr common.QuantumAddress) bool {
 	// Define important addresses (main king, known validators, etc.)
-	importantAddresses := []common.Address{
-		common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
+	importantAddresses := []common.QuantumAddress{
+		common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
 		// Add other important addresses HERE
 	}
 
@@ -5147,7 +5146,7 @@ func (n *Node) isImportantAddress(addr common.Address) bool {
 	return false
 }
 
-func (n *Node) addressInList(addr common.Address, list []common.Address) bool {
+func (n *Node) addressInList(addr common.QuantumAddress, list []common.QuantumAddress) bool {
 	for _, a := range list {
 		if a == addr {
 			return true
@@ -5184,7 +5183,7 @@ func (n *Node) checkAndSyncKingConfig() {
 	}
 
 	// Check if current king is valid
-	if localKing == (common.Address{}) {
+	if localKing == (common.QuantumAddress{}) {
 		n.logger.Warn("⚠️ NO CURRENT ROTATING KING - TRIGGERING EMERGENCY SYNC")
 		n.triggerEmergencyConfigSync()
 	}
@@ -5240,7 +5239,7 @@ func (n *Node) applyEmergencyDefaultConfiguration(mgr reward.RotatingKingManager
 		n.logger.Warn("No cached configuration found, using hardcoded defaults")
 
 		// Default addresses
-		defaultAddresses := []common.Address{}
+		defaultAddresses := []common.QuantumAddress{}
 
 		// Create default config
 		config := rotatingking.RotatingKingConfig{
@@ -5254,7 +5253,7 @@ func (n *Node) applyEmergencyDefaultConfiguration(mgr reward.RotatingKingManager
 	}
 
 	// Apply the configuration
-	if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.Address) error }); ok {
+	if updater, ok := mgr.(interface{ UpdateKingAddresses([]common.QuantumAddress) error }); ok {
 		if err := updater.UpdateKingAddresses(bestConfig.KingAddresses); err != nil {
 			n.logger.Errorf("Failed to apply emergency configuration: %v", err)
 		} else {
@@ -5310,7 +5309,7 @@ func (n *Node) healthCheckRotatingKingConfig() {
 		}
 	}
 
-	if !kingFound && currentKing != (common.Address{}) {
+	if !kingFound && currentKing != (common.QuantumAddress{}) {
 		n.logger.Warnf("⚠️ CONFIGURATION HEALTH: Current king %s not in address list",
 			currentKing.Hex()[:10])
 		// Reset to first address
@@ -5442,8 +5441,8 @@ func (n *Node) CompareAndSyncKingLists() {
 	n.logger.Infof("🔍 Starting king list comparison: we have %d addresses", ourCount)
 
 	// Collect lists from all peers
-	allAddresses := make(map[common.Address]int)  // address -> count of peers that have it
-	allLists := make(map[string][]common.Address) // peerID -> address list
+	allAddresses := make(map[common.QuantumAddress]int)  // address -> count of peers that have it
+	allLists := make(map[string][]common.QuantumAddress) // peerID -> address list
 
 	// Start with our own list
 	for _, addr := range ourList {
@@ -5507,9 +5506,9 @@ func (n *Node) getKingConfigFromPeer(peerID peer.ID) *rotatingking.RotatingKingC
 }
 
 // Analyzes collected lists and merges if needed
-func (n *Node) analyzeAndMergeKingLists(ourList []common.Address,
-	allAddresses map[common.Address]int,
-	allLists map[string][]common.Address,
+func (n *Node) analyzeAndMergeKingLists(ourList []common.QuantumAddress,
+	allAddresses map[common.QuantumAddress]int,
+	allLists map[string][]common.QuantumAddress,
 	mgr reward.RotatingKingManager) {
 
 	totalPeers := len(allLists)
@@ -5520,8 +5519,8 @@ func (n *Node) analyzeAndMergeKingLists(ourList []common.Address,
 
 	// Find addresses that appear in multiple lists (consensus addresses)
 	consensusThreshold := totalPeers/2 + 1 // More than half of peers
-	consensusAddresses := make([]common.Address, 0)
-	allUniqueAddresses := make([]common.Address, 0)
+	consensusAddresses := make([]common.QuantumAddress, 0)
+	allUniqueAddresses := make([]common.QuantumAddress, 0)
 
 	for addr, count := range allAddresses {
 		allUniqueAddresses = append(allUniqueAddresses, addr)
@@ -5594,8 +5593,8 @@ func (n *Node) analyzeAndMergeKingLists(ourList []common.Address,
 }
 
 // Finds addresses in target that are not in source
-func (n *Node) findMissingAddresses(source, target []common.Address) []common.Address {
-	missing := make([]common.Address, 0)
+func (n *Node) findMissingAddresses(source, target []common.QuantumAddress) []common.QuantumAddress {
+	missing := make([]common.QuantumAddress, 0)
 
 	for _, targetAddr := range target {
 		found := false
@@ -5614,7 +5613,7 @@ func (n *Node) findMissingAddresses(source, target []common.Address) []common.Ad
 }
 
 // Decides whether to create a comprehensive list
-func (n *Node) considerCreatingSuperSet(ourList, allAddresses []common.Address, mgr reward.RotatingKingManager) {
+func (n *Node) considerCreatingSuperSet(ourList, allAddresses []common.QuantumAddress, mgr reward.RotatingKingManager) {
 	// Only create super-set if we're missing significant addresses
 	missingCount := len(allAddresses) - len(ourList)
 
@@ -5643,9 +5642,9 @@ func (n *Node) considerCreatingSuperSet(ourList, allAddresses []common.Address, 
 }
 
 // Merges two address lists, removing duplicates
-func (n *Node) mergeAddressLists(list1, list2 []common.Address) []common.Address {
-	merged := make([]common.Address, 0, len(list1)+len(list2))
-	seen := make(map[common.Address]bool)
+func (n *Node) mergeAddressLists(list1, list2 []common.QuantumAddress) []common.QuantumAddress {
+	merged := make([]common.QuantumAddress, 0, len(list1)+len(list2))
+	seen := make(map[common.QuantumAddress]bool)
 
 	// Add all from list1
 	for _, addr := range list1 {

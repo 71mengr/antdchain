@@ -1,6 +1,5 @@
 // chain/db/rotatingkingdb_impl.go
 package db
-
 import (
 "bytes"
 //    "context"
@@ -12,7 +11,7 @@ import (
 
 "github.com/antdaza/antdchain/antdc/rotatingking"
 "github.com/cockroachdb/pebble"
-"github.com/ethereum/go-ethereum/common"
+"github.com/antdaza/antdchain/common"
 )
 
 // PebbleRotatingKingDB implements rotatingking.RotatingKingDatabase
@@ -243,7 +242,7 @@ return nil
 }
 
 // Helper functions for key generation (make them methods to avoid conflicts)
-func (d *PebbleRotatingKingDB) rotationEventKey(height uint64, address common.Address) []byte {
+func (d *PebbleRotatingKingDB) rotationEventKey(height uint64, address common.QuantumAddress) []byte {
 key := make([]byte, len(rotationEventPrefix)+8+1+common.AddressLength)
 copy(key, rotationEventPrefix)
 heightOffset := len(rotationEventPrefix)

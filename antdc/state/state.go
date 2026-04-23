@@ -3,7 +3,6 @@
 // for more information.
 
 package state
-
 import (
 "bytes"
 "crypto/sha256"
@@ -13,7 +12,7 @@ import (
 "math/big"
 "sort"
 
-"github.com/ethereum/go-ethereum/common"
+"github.com/antdaza/antdchain/common"
 "github.com/ethereum/go-ethereum/crypto"
 "github.com/syndtr/goleveldb/leveldb"
 )
@@ -48,7 +47,7 @@ return s.db.Close()
 // ---------------------
 // Balance / Nonce
 // ---------------------
-func (s *State) GetBalance(addr common.Address) *big.Int {
+func (s *State) GetBalance(addr common.QuantumAddress) *big.Int {
 key := append([]byte("balance:"), addr[:]...)
 data, err := s.db.Get(key, nil)
 if err != nil {
@@ -57,7 +56,7 @@ return big.NewInt(0)
 return new(big.Int).SetBytes(data)
 }
 
-func (s *State) AddBalance(addr common.Address, amount *big.Int) error {
+func (s *State) AddBalance(addr common.QuantumAddress, amount *big.Int) error {
 key := append([]byte("balance:"), addr[:]...)
 current := s.GetBalance(addr)
 newBal := new(big.Int).Add(current, amount)
@@ -67,7 +66,7 @@ return errors.New("negative balance")
 return s.db.Put(key, newBal.Bytes(), nil)
 }
 
-func (s *State) SetBalance(addr common.Address, balance *big.Int) error {
+func (s *State) SetBalance(addr common.QuantumAddress, balance *big.Int) error {
 key := append([]byte("balance:"), addr[:]...)
 if balance.Sign() < 0 {
 return errors.New("negative balance")
@@ -75,7 +74,7 @@ return errors.New("negative balance")
 return s.db.Put(key, balance.Bytes(), nil)
 }
 
-func (s *State) GetNonce(addr common.Address) uint64 {
+func (s *State) GetNonce(addr common.QuantumAddress) uint64 {
 key := append([]byte("nonce:"), addr[:]...)
 data, err := s.db.Get(key, nil)
 if err != nil {
@@ -84,7 +83,7 @@ return 0
 return binary.BigEndian.Uint64(data)
 }
 
-func (s *State) SetNonce(addr common.Address, nonce uint64) error {
+func (s *State) SetNonce(addr common.QuantumAddress, nonce uint64) error {
 key := append([]byte("nonce:"), addr[:]...)
 data := make([]byte, 8)
 binary.BigEndian.PutUint64(data, nonce)
@@ -94,7 +93,7 @@ return s.db.Put(key, data, nil)
 // ---------------------
 // Code
 // ---------------------
-func (s *State) SetCode(addr common.Address, code []byte) error {
+func (s *State) SetCode(addr common.QuantumAddress, code []byte) error {
 key := append([]byte("code:"), addr[:]...)
 if err := s.db.Put(key, code, nil); err != nil {
 return err
@@ -104,7 +103,7 @@ codeKey := append([]byte("codehash:"), addr[:]...)
 return s.db.Put(codeKey, codeHash, nil)
 }
 
-func (s *State) GetCode(addr common.Address) []byte {
+func (s *State) GetCode(addr common.QuantumAddress) []byte {
 key := append([]byte("code:"), addr[:]...)
 data, err := s.db.Get(key, nil)
 if err != nil {
@@ -113,7 +112,7 @@ return nil
 return data
 }
 
-func (s *State) GetCodeHash(addr common.Address) common.Hash {
+func (s *State) GetCodeHash(addr common.QuantumAddress) common.Hash {
 key := append([]byte("codehash:"), addr[:]...)
 data, err := s.db.Get(key, nil)
 if err != nil {
@@ -125,7 +124,7 @@ return common.BytesToHash(data)
 // ---------------------
 // Storage
 // ---------------------
-func (s *State) GetStorage(addr, key common.Address) common.Hash {
+func (s *State) GetStorage(addr, key common.QuantumAddress) common.Hash {
 storageKey := append(append([]byte("storage:"), addr[:]...), key[:]...)
 data, err := s.db.Get(storageKey, nil)
 if err != nil {
@@ -134,7 +133,7 @@ return common.Hash{}
 return common.BytesToHash(data)
 }
 
-func (s *State) SetStorage(addr, key common.Address, value common.Hash) error {
+func (s *State) SetStorage(addr, key common.QuantumAddress, value common.Hash) error {
 storageKey := append(append([]byte("storage:"), addr[:]...), key[:]...)
 return s.db.Put(storageKey, value[:], nil)
 }

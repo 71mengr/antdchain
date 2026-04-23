@@ -3,7 +3,6 @@
 // for more information.
 
 package rotatingking
-
 import (
         "fmt"
         "math/big"
@@ -12,7 +11,7 @@ import (
         "time"
         "errors"
         "context"
-        "github.com/ethereum/go-ethereum/common"
+        "github.com/antdaza/antdchain/common"
         "go.uber.org/zap"
 //        "github.com/antdaza/antdchain/antdc/chain/db"
 )
@@ -24,8 +23,8 @@ type RotationProposal struct {
     BlockHeight      uint64           `json:"blockHeight"`
     ProposerNodeID   string           `json:"proposerNodeId"`
     ProposerAddress  string           `json:"proposerAddress"`
-    CurrentKing      common.Address   `json:"currentKing"`
-    NextKing         common.Address   `json:"nextKing"`
+    CurrentKing      common.QuantumAddress   `json:"currentKing"`
+    NextKing         common.QuantumAddress   `json:"nextKing"`
     RotationHeight   uint64           `json:"rotationHeight"`
     NextRotationAt   uint64           `json:"nextRotationAt"`
     ProposerState    string           `json:"proposerState"`
@@ -59,7 +58,7 @@ type ConsensusResult struct {
 type KingStateBroadcast struct {
     BlockHeight        uint64           `json:"blockHeight"`
     CurrentKingIndex   int              `json:"currentKingIndex"`
-    KingAddresses      []common.Address `json:"kingAddresses"`
+    KingAddresses      []common.QuantumAddress `json:"kingAddresses"`
     RotationHeight     uint64           `json:"rotationHeight"`
     NextRotationAt     uint64           `json:"nextRotationAt"`
     RotationCount      uint64           `json:"rotationCount"`
@@ -82,8 +81,8 @@ type P2PBroadcaster interface {
 type KingRotationBroadcast struct {
     BlockHeight  uint64         `json:"blockHeight"`
     BlockHash    common.Hash    `json:"blockHash"`
-    PreviousKing common.Address `json:"previousKing"`
-    NewKing      common.Address `json:"newKing"`
+    PreviousKing common.QuantumAddress `json:"previousKing"`
+    NewKing      common.QuantumAddress `json:"newKing"`
     Timestamp    time.Time      `json:"timestamp"`
 }
 
@@ -96,9 +95,9 @@ type DatabaseSyncRequest struct {
 
 type KingListUpdateEvent struct {
         BlockHeight uint64             `json:"height"`
-        NewList     []common.Address   `json:"newList"`
-        Added       common.Address     `json:"added,omitempty"`
-        Removed     common.Address     `json:"removed,omitempty"`
+        NewList     []common.QuantumAddress   `json:"newList"`
+        Added       common.QuantumAddress     `json:"added,omitempty"`
+        Removed     common.QuantumAddress     `json:"removed,omitempty"`
         Timestamp   time.Time          `json:"ts"`
         Reason      string             `json:"reason,omitempty"`
 }
@@ -148,7 +147,7 @@ func DefaultRotatingKingConfig() RotatingKingConfig {
         return RotatingKingConfig{
                 RotationInterval: 100,
                 RotationOffset:   0,
-                KingAddresses: []common.Address{
+                KingAddresses: []common.QuantumAddress{
 
                 },
                 ActivationDelay:  2,
@@ -173,7 +172,7 @@ func NewRotatingKingManager(statePath string, bc BlockchainProvider, isMainKing 
         RotationCount:            0,
         KingsHistory:             make([]KingRotation, 0),
         TotalRewardsDistributed:  big.NewInt(0),
-        KingRewards:              make(map[common.Address]*big.Int),
+        KingRewards:              make(map[common.QuantumAddress]*big.Int),
     }
 
     // Load from database if available
@@ -213,20 +212,20 @@ func NewRotatingKingManager(statePath string, bc BlockchainProvider, isMainKing 
 
 
 // PUBLIC METHODS
-func (m *RotatingKingManager) GetCurrentKing() common.Address {
+func (m *RotatingKingManager) GetCurrentKing() common.QuantumAddress {
         m.mu.RLock()
         defer m.mu.RUnlock()
         if len(m.config.KingAddresses) == 0 {
-                return common.Address{}
+                return common.QuantumAddress{}
         }
         return m.config.KingAddresses[m.state.CurrentKingIndex]
 }
 
-func (m *RotatingKingManager) GetNextKing() common.Address {
+func (m *RotatingKingManager) GetNextKing() common.QuantumAddress {
         m.mu.RLock()
         defer m.mu.RUnlock()
         if len(m.config.KingAddresses) == 0 {
-                return common.Address{}
+                return common.QuantumAddress{}
         }
         nextIndex := (m.state.CurrentKingIndex + 1) % len(m.config.KingAddresses)
         return m.config.KingAddresses[nextIndex]
@@ -249,8 +248,8 @@ func (m *RotatingKingManager) GetRotationInfo(height uint64) map[string]interfac
                 blocksUntilRotation = m.state.NextRotationAt - height
         }
 
-        info["currentKing"] = currentKing.Hex()
-        info["nextKing"] = nextKing.Hex()
+        info["currentKing"] = currentKing.String()
+        info["nextKing"] = nextKing.String()
         info["blocksUntilRotation"] = blocksUntilRotation
         info["rotationHeight"] = m.state.RotationHeight
         info["nextRotationAt"] = m.state.NextRotationAt
@@ -282,7 +281,7 @@ func (m *RotatingKingManager) ShouldRotate(blockHeight uint64) bool {
         return blockHeight >= m.state.NextRotationAt
 }
 
-func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, reward *big.Int, blockHeight uint64) {
+func (m *RotatingKingManager) RecordRewardDistribution(king common.QuantumAddress, reward *big.Int, blockHeight uint64) {
         m.mu.Lock()
         defer m.mu.Unlock()
 
@@ -293,7 +292,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
         m.state.TotalRewardsDistributed.Add(m.state.TotalRewardsDistributed, reward)
 
         if m.state.KingRewards == nil {
-                m.state.KingRewards = make(map[common.Address]*big.Int)
+                m.state.KingRewards = make(map[common.QuantumAddress]*big.Int)
         }
         if m.state.KingRewards[king] == nil {
                 m.state.KingRewards[king] = big.NewInt(0)
@@ -316,7 +315,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
         }()
 
         m.logger.Info("king received reward",
-                zap.String("king", king.Hex()[:10]),
+                zap.String("king", king.String()[:10]),
                 zap.String("reward", formatBalance(reward)),
                 zap.Uint64("block", blockHeight))
 }
@@ -349,7 +348,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
     // First, cleanup ineligible kings before rotation
     if m.bc != nil {
         stateProvider, ok := m.bc.State().(interface {
-            GetBalance(common.Address) *big.Int
+            GetBalance(common.QuantumAddress) *big.Int
         })
         if ok {
             // Check if next king is eligible
@@ -360,7 +359,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
             if balance.Cmp(m.config.MinStakeRequired) < 0 {
                 // Skip to next eligible king
                 m.logger.Warn("Next king ineligible, searching for eligible king",
-                    zap.String("address", nextKing.Hex()[:10]),
+                    zap.String("address", nextKing.String()[:10]),
                     zap.String("balance", formatBalance(balance)))
 
                 // Find next eligible king
@@ -373,7 +372,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
                         nextIndex = candidateIndex
                         nextKing = candidate
                         m.logger.Info("Found eligible king",
-                            zap.String("address", nextKing.Hex()[:10]),
+                            zap.String("address", nextKing.String()[:10]),
                             zap.String("balance", formatBalance(candidateBalance)))
                         break
                     }
@@ -397,7 +396,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
         eligibilityBalance := big.NewInt(0)
         if m.bc != nil {
                 stateProvider, ok := m.bc.State().(interface {
-                        GetBalance(common.Address) *big.Int
+                        GetBalance(common.QuantumAddress) *big.Int
                 })
                 if ok && stateProvider != nil {
                         eligibilityBalance = stateProvider.GetBalance(newKing)
@@ -443,7 +442,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
                 BlockHeight:    blockHeight,
                 BlockHash:      blockHash,
                 Timestamp:      time.Now(),
-                RotationEvents: []string{fmt.Sprintf("rotation:%s->%s", previousKing.Hex(), newKing.Hex())},
+                RotationEvents: []string{fmt.Sprintf("rotation:%s->%s", previousKing.String(), newKing.String())},
                 SyncDuration:   0,
         }
         if err := m.database.SaveBlockSync(record); err != nil {
@@ -452,11 +451,11 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
 
         if isEligible {
                 m.logger.Info("king rotation - eligible",
-                        zap.String("newKing", newKing.Hex()),
+                        zap.String("newKing", newKing.String()),
                         zap.String("balance", formatBalance(eligibilityBalance)))
         } else {
                 m.logger.Warn("king rotation - ineligible",
-                        zap.String("newKing", newKing.Hex()),
+                        zap.String("newKing", newKing.String()),
                         zap.String("balance", formatBalance(eligibilityBalance)),
                         zap.String("required", formatBalance(m.config.MinStakeRequired)))
         }
@@ -479,7 +478,7 @@ func (m *RotatingKingManager) RecordRewardDistribution(king common.Address, rewa
         return nil
 }
 */
-func (m *RotatingKingManager) GetKingRewards(king common.Address) *big.Int {
+func (m *RotatingKingManager) GetKingRewards(king common.QuantumAddress) *big.Int {
         m.mu.RLock()
         defer m.mu.RUnlock()
         if rewards, exists := m.state.KingRewards[king]; exists {
@@ -494,7 +493,7 @@ func (m *RotatingKingManager) GetTotalRewardsDistributed() *big.Int {
         return new(big.Int).Set(m.state.TotalRewardsDistributed)
 }
 
-func (m *RotatingKingManager) GetKingStats(king common.Address) map[string]interface{} {
+func (m *RotatingKingManager) GetKingStats(king common.QuantumAddress) map[string]interface{} {
         m.mu.RLock()
         defer m.mu.RUnlock()
 
@@ -544,7 +543,7 @@ func (m *RotatingKingManager) GetRotationInterval() uint64 {
         return m.config.RotationInterval
 }
 
-func (m *RotatingKingManager) IsCurrentKing(address common.Address) bool {
+func (m *RotatingKingManager) IsCurrentKing(address common.QuantumAddress) bool {
         m.mu.RLock()
         defer m.mu.RUnlock()
         if len(m.config.KingAddresses) == 0 {
@@ -559,10 +558,10 @@ func (m *RotatingKingManager) GetCurrentKingIndex() int {
         return m.state.CurrentKingIndex
 }
 
-func (m *RotatingKingManager) GetKingAddresses() []common.Address {
+func (m *RotatingKingManager) GetKingAddresses() []common.QuantumAddress {
         m.mu.RLock()
         defer m.mu.RUnlock()
-        addresses := make([]common.Address, len(m.config.KingAddresses))
+        addresses := make([]common.QuantumAddress, len(m.config.KingAddresses))
         copy(addresses, m.config.KingAddresses)
         return addresses
 }
@@ -762,7 +761,7 @@ func (m *RotatingKingManager) ForceRotate(index int, reason string) error {
     var eligibilityBalance *big.Int
     if m.bc != nil {
         stateProvider, ok := m.bc.State().(interface {
-            GetBalance(common.Address) *big.Int
+            GetBalance(common.QuantumAddress) *big.Int
         })
         if ok && stateProvider != nil {
             eligibilityBalance = stateProvider.GetBalance(newKing)
@@ -804,15 +803,15 @@ func (m *RotatingKingManager) ForceRotate(index int, reason string) error {
     }
 
     m.logger.Info("force rotation executed",
-        zap.String("from", previousKing.Hex()[:8]),
-        zap.String("to", newKing.Hex()[:8]),
+        zap.String("from", previousKing.String()[:8]),
+        zap.String("to", newKing.String()[:8]),
         zap.Uint64("height", currentHeight),
         zap.String("reason", reason))
 
     return nil
 }
 
-func (m *RotatingKingManager) IsKing(address common.Address) bool {
+func (m *RotatingKingManager) IsKing(address common.QuantumAddress) bool {
         m.mu.RLock()
         defer m.mu.RUnlock()
 
@@ -824,7 +823,7 @@ func (m *RotatingKingManager) IsKing(address common.Address) bool {
         return false
 }
 
-func (m *RotatingKingManager) UpdateKingAddresses(newAddresses []common.Address) error {
+func (m *RotatingKingManager) UpdateKingAddresses(newAddresses []common.QuantumAddress) error {
     m.mu.Lock()
     defer m.mu.Unlock()
 
@@ -832,7 +831,7 @@ func (m *RotatingKingManager) UpdateKingAddresses(newAddresses []common.Address)
         return fmt.Errorf("cannot set empty king address list")
     }
 
-    m.config.KingAddresses = make([]common.Address, len(newAddresses))
+    m.config.KingAddresses = make([]common.QuantumAddress, len(newAddresses))
     copy(m.config.KingAddresses, newAddresses)
 
     // Save configuration
@@ -845,8 +844,8 @@ func (m *RotatingKingManager) UpdateKingAddresses(newAddresses []common.Address)
         event := &KingListUpdateEvent{
             BlockHeight: m.bc.GetChainHeight(),
             NewList:     newAddresses,
-            Added:       common.Address{},
-            Removed:     common.Address{},
+            Added:       common.QuantumAddress{},
+            Removed:     common.QuantumAddress{},
             Timestamp:   time.Now(),
             Reason:      "manual_update",
         }
@@ -911,7 +910,7 @@ func (m *RotatingKingManager) IsEligible(height uint64) bool {
         defer m.mu.RUnlock()
 
         king := m.GetCurrentKing()
-        if king == (common.Address{}) {
+        if king == (common.QuantumAddress{}) {
                 return false
         }
 
@@ -920,7 +919,7 @@ func (m *RotatingKingManager) IsEligible(height uint64) bool {
         }
 
         stateProvider, ok := m.bc.State().(interface {
-                GetBalance(common.Address) *big.Int
+                GetBalance(common.QuantumAddress) *big.Int
         })
         if !ok {
                 m.logger.Warn("state provider does not support GetBalance")
@@ -931,7 +930,7 @@ func (m *RotatingKingManager) IsEligible(height uint64) bool {
         return balance.Cmp(EligibilityThreshold) >= 0
 }
 
-func (m *RotatingKingManager) ForceRotateToAddress(newKing common.Address, reason string) error {
+func (m *RotatingKingManager) ForceRotateToAddress(newKing common.QuantumAddress, reason string) error {
         m.mu.Lock()
         defer m.mu.Unlock()
 
@@ -944,7 +943,7 @@ func (m *RotatingKingManager) ForceRotateToAddress(newKing common.Address, reaso
                 }
         }
         if index == -1 {
-                return fmt.Errorf("invalid king address: %s", newKing.Hex())
+                return fmt.Errorf("invalid king address: %s", newKing.String())
         }
 
         currentHeight := m.bc.GetChainHeight()
@@ -963,7 +962,7 @@ func (m *RotatingKingManager) ForceRotateToAddress(newKing common.Address, reaso
         }
 
         m.logger.Info("forced rotation to address",
-                zap.String("king", newKing.Hex()[:8]),
+                zap.String("king", newKing.String()[:8]),
                 zap.Uint64("height", currentHeight),
                 zap.String("reason", reason))
 
@@ -971,7 +970,7 @@ func (m *RotatingKingManager) ForceRotateToAddress(newKing common.Address, reaso
 }
 
 // CleanupIneligibleKings removes kings below minimum stake
-func (m *RotatingKingManager) CleanupIneligibleKings() ([]common.Address, error) {
+func (m *RotatingKingManager) CleanupIneligibleKings() ([]common.QuantumAddress, error) {
     m.mu.Lock()
     defer m.mu.Unlock()
 
@@ -981,14 +980,14 @@ func (m *RotatingKingManager) CleanupIneligibleKings() ([]common.Address, error)
 
     // Get state provider
     stateProvider, ok := m.bc.State().(interface {
-        GetBalance(common.Address) *big.Int
+        GetBalance(common.QuantumAddress) *big.Int
     })
     if !ok {
         return nil, fmt.Errorf("state provider does not support GetBalance")
     }
 
-    var removed []common.Address
-    var newAddresses []common.Address
+    var removed []common.QuantumAddress
+    var newAddresses []common.QuantumAddress
 
     for _, addr := range m.config.KingAddresses {
         balance := stateProvider.GetBalance(addr)
@@ -999,7 +998,7 @@ func (m *RotatingKingManager) CleanupIneligibleKings() ([]common.Address, error)
         } else {
             removed = append(removed, addr)
             m.logger.Warn("Removing ineligible king",
-                zap.String("address", addr.Hex()[:10]),
+                zap.String("address", addr.String()[:10]),
                 zap.String("balance", formatBalance(balance)),
                 zap.String("required", formatBalance(m.config.MinStakeRequired)))
         }
@@ -1039,7 +1038,7 @@ func (m *RotatingKingManager) CleanupIneligibleKings() ([]common.Address, error)
         event := &KingListUpdateEvent{
             BlockHeight: m.bc.GetChainHeight(),
             NewList:     m.config.KingAddresses,
-            Removed:     common.Address{}, // Can't specify multiple
+            Removed:     common.QuantumAddress{}, // Can't specify multiple
             Timestamp:   time.Now(),
             Reason:      "ineligible_cleanup",
         }
@@ -1145,12 +1144,12 @@ func (m *RotatingKingManager) checkRotationConsensus(blockHeight uint64) (bool, 
     return true, nil // Temporary - implement proper consensus
 }
 
-func (m *RotatingKingManager) SaveKingListToDB(addresses []common.Address, height uint64) error {
+func (m *RotatingKingManager) SaveKingListToDB(addresses []common.QuantumAddress, height uint64) error {
     m.mu.Lock()
     defer m.mu.Unlock()
 
     // Update configuration
-    m.config.KingAddresses = make([]common.Address, len(addresses))
+    m.config.KingAddresses = make([]common.QuantumAddress, len(addresses))
     copy(m.config.KingAddresses, addresses)
 
     // Save to database
@@ -1274,7 +1273,7 @@ func (m *RotatingKingManager) RotateToNextKing(blockHeight uint64, blockHash com
     // First, cleanup ineligible kings before rotation
     if m.bc != nil {
         stateProvider, ok := m.bc.State().(interface {
-            GetBalance(common.Address) *big.Int
+            GetBalance(common.QuantumAddress) *big.Int
         })
         if ok {
             // Check if next king is eligible
@@ -1285,7 +1284,7 @@ func (m *RotatingKingManager) RotateToNextKing(blockHeight uint64, blockHash com
             if balance.Cmp(m.config.MinStakeRequired) < 0 {
                 // Skip to next eligible king
                 m.logger.Warn("Next king ineligible, searching for eligible king",
-                    zap.String("address", nextKing.Hex()[:10]),
+                    zap.String("address", nextKing.String()[:10]),
                     zap.String("balance", formatBalance(balance)))
 
                 // Find next eligible king
@@ -1298,7 +1297,7 @@ func (m *RotatingKingManager) RotateToNextKing(blockHeight uint64, blockHash com
                         nextIndex = candidateIndex
                         nextKing = candidate
                         m.logger.Info("Found eligible king",
-                            zap.String("address", nextKing.Hex()[:10]),
+                            zap.String("address", nextKing.String()[:10]),
                             zap.String("balance", formatBalance(candidateBalance)))
                         break
                     }
@@ -1315,7 +1314,7 @@ func (m *RotatingKingManager) RotateToNextKing(blockHeight uint64, blockHash com
     eligibilityBalance := big.NewInt(0)
     if m.bc != nil {
         stateProvider, ok := m.bc.State().(interface {
-            GetBalance(common.Address) *big.Int
+            GetBalance(common.QuantumAddress) *big.Int
         })
         if ok && stateProvider != nil {
             eligibilityBalance = stateProvider.GetBalance(newKing)
@@ -1361,7 +1360,7 @@ func (m *RotatingKingManager) RotateToNextKing(blockHeight uint64, blockHash com
         BlockHeight:    blockHeight,
         BlockHash:      blockHash,
         Timestamp:      time.Now(),
-        RotationEvents: []string{fmt.Sprintf("rotation:%s->%s", previousKing.Hex(), newKing.Hex())},
+        RotationEvents: []string{fmt.Sprintf("rotation:%s->%s", previousKing.String(), newKing.String())},
         SyncDuration:   0,
     }
     
@@ -1371,11 +1370,11 @@ func (m *RotatingKingManager) RotateToNextKing(blockHeight uint64, blockHash com
 
     if isEligible {
         m.logger.Info("king rotation - eligible",
-            zap.String("newKing", newKing.Hex()),
+            zap.String("newKing", newKing.String()),
             zap.String("balance", formatBalance(eligibilityBalance)))
     } else {
         m.logger.Warn("king rotation - ineligible",
-            zap.String("newKing", newKing.Hex()),
+            zap.String("newKing", newKing.String()),
             zap.String("balance", formatBalance(eligibilityBalance)),
             zap.String("required", formatBalance(m.config.MinStakeRequired)))
     }
@@ -1414,7 +1413,7 @@ func NewRotatingKingManagerWithDB(statePath string, bc BlockchainProvider, isMai
         RotationCount:            0,
         KingsHistory:             make([]KingRotation, 0),
         TotalRewardsDistributed:  big.NewInt(0),
-        KingRewards:              make(map[common.Address]*big.Int),
+        KingRewards:              make(map[common.QuantumAddress]*big.Int),
     }
 
     // Load from ChainDB if available
@@ -1465,7 +1464,7 @@ func (m *RotatingKingManager) rotateToNextKingInternal(blockHeight uint64, block
     isEligible := false
     if m.bc != nil {
         stateProvider, ok := m.bc.State().(interface {
-            GetBalance(common.Address) *big.Int
+            GetBalance(common.QuantumAddress) *big.Int
         })
         if ok && stateProvider != nil {
             balance := stateProvider.GetBalance(newKing)
@@ -1511,7 +1510,7 @@ func (m *RotatingKingManager) rotateToNextKingInternal(blockHeight uint64, block
         BlockHeight:    blockHeight,
         BlockHash:      blockHash,
         Timestamp:      time.Now(),
-        RotationEvents: []string{fmt.Sprintf("rotation:%s->%s", previousKing.Hex(), newKing.Hex())},
+        RotationEvents: []string{fmt.Sprintf("rotation:%s->%s", previousKing.String(), newKing.String())},
         SyncDuration:   0,
     }
     

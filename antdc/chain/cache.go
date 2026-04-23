@@ -1,14 +1,13 @@
 // cache.go — Hot block cache with proper invalidation & metrics
 
 package chain
-
 import (
     "sync"
 
     "github.com/hashicorp/golang-lru/v2/simplelru"
     "github.com/prometheus/client_golang/prometheus"
     "github.com/prometheus/client_golang/prometheus/promauto"
-    "github.com/ethereum/go-ethereum/common"
+
     "github.com/antdaza/antdchain/antdc/block"
 )
 

@@ -5,49 +5,54 @@
 package block
 
 import (
-    "encoding/binary"
+	"encoding/binary"
 
-    "github.com/ethereum/go-ethereum/common"
-    "github.com/zeebo/blake3"
+	"github.com/antdaza/antdchain/common"
 )
 
+// HashForMining computes a mining-specific hash of the block header using SHA3‑256.
+// This hash is used for Proof-of-Stake eligibility checks and must be deterministic.
 func HashForMining(h *Header) common.Hash {
-    buf := make([]byte, 0, 256)
+	if h == nil {
+		return common.Hash{}
+	}
 
-    appendBytes := func(b []byte) { buf = append(buf, b...) }
-    appendU64 := func(v uint64) {
-        tmp := make([]byte, 8)
-        binary.LittleEndian.PutUint64(tmp, v)
-        appendBytes(tmp)
-    }
-    appendBig32BE := func(b []byte) {
-        // Normalize to exactly 32 bytes (big‑endian)
-        if len(b) < 32 {
-            pad := make([]byte, 32-len(b))
-            b = append(pad, b...)
-        } else if len(b) > 32 {
-            b = b[len(b)-32:]
-        }
-        appendBytes(b)
-    }
+	buf := make([]byte, 0, 512)
 
-    // Serialize fields in fixed order
-    appendBytes(h.ParentHash[:])
-    appendBytes(h.Coinbase[:])
-    appendBytes(h.Root[:])
-    appendBytes(h.TxHash[:])
-    appendU64(h.Number.Uint64())
-    appendU64(uint64(h.GasLimit))
-    appendU64(uint64(h.GasUsed))
-    appendU64(h.Time)
-    appendBig32BE(h.Difficulty.Bytes())
+	appendBytes := func(b []byte) { buf = append(buf, b...) }
+	appendU64 := func(v uint64) {
+		tmp := make([]byte, 8)
+		binary.LittleEndian.PutUint64(tmp, v)
+		appendBytes(tmp)
+	}
+	appendBig32BE := func(b []byte) {
+		// Normalize to exactly 32 bytes (big‑endian)
+		if len(b) < 32 {
+			pad := make([]byte, 32-len(b))
+			b = append(pad, b...)
+		} else if len(b) > 32 {
+			b = b[len(b)-32:]
+		}
+		appendBytes(b)
+	}
 
-    // Extra: length (uint32 LE) + bytes
-    extraLen := make([]byte, 4)
-    binary.LittleEndian.PutUint32(extraLen, uint32(len(h.Extra)))
-    appendBytes(extraLen)
-    appendBytes(h.Extra)
+	// Serialize fields in fixed order (must match consensus)
+	appendBytes(h.ParentHash[:])
+	appendBytes(h.Coinbase.Bytes()) // Quantum address: 20‑byte payload
+	appendBytes(h.Root[:])
+	appendBytes(h.TxHash[:])
+	appendU64(h.Number.Uint64())
+	appendU64(uint64(h.GasLimit))
+	appendU64(uint64(h.GasUsed))
+	appendU64(h.Time)
+	appendBig32BE(h.Difficulty.Bytes())
 
-    sum := blake3.Sum256(buf)
-    return common.BytesToHash(sum[:])
+	// Extra data: length (uint32 LE) + bytes
+	extraLen := make([]byte, 4)
+	binary.LittleEndian.PutUint32(extraLen, uint32(len(h.Extra)))
+	appendBytes(extraLen)
+	appendBytes(h.Extra)
+
+	// Use SHA3‑256 for quantum safety
+	return common.ComputeHash(buf)
 }

@@ -3,14 +3,13 @@
 // for more information.
 
 package chain
-
 import (
 "errors"
 "fmt"
 "github.com/antdaza/antdchain/antdc/block"
 "github.com/antdaza/antdchain/antdc/reward"
 "github.com/antdaza/antdchain/antdc/rotatingking"
-"github.com/ethereum/go-ethereum/common"
+
 "log"
 "math/big"
 "strings"
@@ -18,18 +17,18 @@ import (
 
 type blockExtraAwareRotatingKingManager struct {
 reward.RotatingKingManager
-forcedKing common.Address
+forcedKing common.QuantumAddress
 }
 
-func (m *blockExtraAwareRotatingKingManager) GetCurrentKing() common.Address {
+func (m *blockExtraAwareRotatingKingManager) GetCurrentKing() common.QuantumAddress {
 return m.forcedKing
 }
 
 func (m *blockExtraAwareRotatingKingManager) IsEligible(height uint64) bool {
-return m.forcedKing != (common.Address{})
+return m.forcedKing != (common.QuantumAddress{})
 }
 
-func rotatingKingFromBlockExtra(extra []byte) (common.Address, bool) {
+func rotatingKingFromBlockExtra(extra []byte) (common.QuantumAddress, bool) {
 s := string(extra)
 for _, part := range strings.Split(s, "|") {
 part = strings.TrimSpace(part)
@@ -38,11 +37,11 @@ continue
 }
 addr := strings.TrimSpace(strings.TrimPrefix(part, "rk="))
 if common.IsHexAddress(addr) {
-return common.HexToAddress(addr), true
+return common.ParseQuantumAddress(addr), true
 }
-return common.Address{}, false
+return common.QuantumAddress{}, false
 }
-return common.Address{}, false
+return common.QuantumAddress{}, false
 }
 
 func (bc *Blockchain) resolveRotatingKingManagerForBlock(b *block.Block) reward.RotatingKingManager {
@@ -91,7 +90,7 @@ return distribution, nil
 
 // applyMinerReward applies miner rewards
 func (bc *Blockchain) applyMinerReward(b *block.Block) error {
-if b.Header == nil || b.Header.Coinbase == (common.Address{}) {
+if b.Header == nil || b.Header.Coinbase == (common.QuantumAddress{}) {
 return errors.New("invalid block or miner address")
 }
 
@@ -203,7 +202,7 @@ formatBalance(balance), formatBalance(minRequired))
 log.Printf("   • Rotating King: Not eligible (Main King receives rotating share)")
 
 // ADDED: Explain why not eligible
-if bc.rotatingKingManager != nil && distribution.RotatingKingAddress != (common.Address{}) {
+if bc.rotatingKingManager != nil && distribution.RotatingKingAddress != (common.QuantumAddress{}) {
 king := distribution.RotatingKingAddress
 log.Printf("   • Rotating King Address: %s", king.Hex()[:10])
 

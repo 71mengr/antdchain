@@ -3,8 +3,6 @@
 // for more information.
 
 package main
-
-
 import (
 
     "fmt"

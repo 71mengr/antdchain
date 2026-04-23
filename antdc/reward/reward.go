@@ -2,7 +2,6 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repository root for more information.
 
 package reward
-
 import (
 "context"
 "errors"
@@ -12,7 +11,7 @@ import (
 "github.com/antdaza/antdchain/antdc/pow" // PoS engine
 "github.com/antdaza/antdchain/antdc/rotatingking"
 "github.com/antdaza/antdchain/antdc/state"
-"github.com/ethereum/go-ethereum/common"
+"github.com/antdaza/antdchain/common"
 )
 
 // Constants
@@ -279,55 +278,55 @@ return CalculateBlockReward(blockNumber)
 
 // RewardDistributor now knows both Main King and PoS engine
 type RewardDistributor struct {
-mainKing common.Address
+mainKing common.QuantumAddress
 }
 
-func NewRewardDistributor(mainKing common.Address) *RewardDistributor {
+func NewRewardDistributor(mainKing common.QuantumAddress) *RewardDistributor {
 return &RewardDistributor{
 mainKing: mainKing,
 }
 }
 
-func (rd *RewardDistributor) GetMainKing() common.Address {
+func (rd *RewardDistributor) GetMainKing() common.QuantumAddress {
 return rd.mainKing
 }
 
 // RewardDistribution records what was distributed in a block
 type RewardDistribution struct {
 BlockNumber          uint64
-Miner                common.Address
+Miner                common.QuantumAddress
 TotalReward          *big.Int
 MinerReward          *big.Int
 MainKingReward       *big.Int
 RotatingKingReward   *big.Int
-MainKingAddress      common.Address
-RotatingKingAddress  common.Address
+MainKingAddress      common.QuantumAddress
+RotatingKingAddress  common.QuantumAddress
 RotatingKingEligible bool
 HalvingInfo          map[string]interface{} // Added halving info
 InflationRate        float64                // Annual inflation rate at this block
 }
 
 type RotatingKingManager interface {
-GetCurrentKing() common.Address
-GetNextKing() common.Address
+GetCurrentKing() common.QuantumAddress
+GetNextKing() common.QuantumAddress
 GetRotationInfo(height uint64) map[string]interface{}
 ShouldRotate(blockHeight uint64) bool
 RotateToNextKing(blockHeight uint64, blockHash common.Hash) error
-RecordRewardDistribution(king common.Address, reward *big.Int, blockHeight uint64)
-GetKingRewards(king common.Address) *big.Int
+RecordRewardDistribution(king common.QuantumAddress, reward *big.Int, blockHeight uint64)
+GetKingRewards(king common.QuantumAddress) *big.Int
 GetTotalRewardsDistributed() *big.Int
-GetKingStats(king common.Address) map[string]interface{}
+GetKingStats(king common.QuantumAddress) map[string]interface{}
 GetRotationInterval() uint64
-IsCurrentKing(address common.Address) bool
+IsCurrentKing(address common.QuantumAddress) bool
 GetCurrentKingIndex() int
-GetKingAddresses() []common.Address
-IsKing(address common.Address) bool
-UpdateKingAddresses(newAddresses []common.Address) error
+GetKingAddresses() []common.QuantumAddress
+IsKing(address common.QuantumAddress) bool
+UpdateKingAddresses(newAddresses []common.QuantumAddress) error
 GetRotationHistory(int) []rotatingking.KingRotation
 GetKingRewardMultiplier() *big.Float
 ForceRotate(index int, reason string) error
 IsEligible(height uint64) bool
-ForceRotateToAddress(newKing common.Address, reason string) error
+ForceRotateToAddress(newKing common.QuantumAddress, reason string) error
 
 SyncBlocks(ctx context.Context, blockHeight uint64) error
 GetSyncState() (*rotatingking.SyncState, error)
@@ -366,7 +365,7 @@ return rate
 
 func (rd *RewardDistributor) DistributeRewards(
 statedb *state.State,
-miner common.Address,
+miner common.QuantumAddress,
 transactionFees *big.Int,
 blockNumber uint64,
 blockTime uint64,
@@ -406,7 +405,7 @@ MinerReward:          big.NewInt(0),
 MainKingReward:       big.NewInt(0),
 RotatingKingReward:   big.NewInt(0),
 MainKingAddress:      rd.mainKing,
-RotatingKingAddress:  common.Address{},
+RotatingKingAddress:  common.QuantumAddress{},
 RotatingKingEligible: false,
 HalvingInfo:          halvingInfo,
 InflationRate:        inflationRate,
@@ -421,7 +420,7 @@ currentRotatingKing := rkManager.GetCurrentKing()
 
 // Check rotating king eligibility
 rotatingEligible := false
-if currentRotatingKing != (common.Address{}) {
+if currentRotatingKing != (common.QuantumAddress{}) {
 balance := statedb.GetBalance(currentRotatingKing)
 // DEBUG: Log balance info
 // log.Printf("[reward] Rotating king balance: %s, threshold: %s",

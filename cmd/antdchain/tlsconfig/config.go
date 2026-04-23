@@ -1,6 +1,5 @@
 
 package tlsconfig
-
 import (
     "crypto/rand"
     "crypto/rsa"

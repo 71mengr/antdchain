@@ -3,7 +3,6 @@
 // for more information.
 
 package mining
-
 import (
     "crypto/ecdsa"
     "errors"
@@ -16,7 +15,7 @@ import (
     "github.com/prometheus/client_golang/prometheus"
     "github.com/ethereum/go-ethereum/accounts"
     "github.com/ethereum/go-ethereum/accounts/keystore"
-    "github.com/ethereum/go-ethereum/common"
+
     "github.com/ethereum/go-ethereum/crypto"
     "github.com/antdaza/antdchain/antdc/block"
     "github.com/antdaza/antdchain/antdc/chain"
@@ -105,7 +104,7 @@ var lastSyncLog time.Time = time.Now()
 type PosMiningState struct {
     mining       bool
     enabled      bool
-    minerAddress common.Address
+    minerAddress common.QuantumAddress
     powEngine    *pow.PoW
     privateKey   *ecdsa.PrivateKey
 
@@ -157,7 +156,7 @@ func (ms *PosMiningState) SetBroadcastRetryConfig(maxRetries int, initialBackoff
     ms.broadcastMaxBackoff = maxBackoff
 }
 
-func (ms *PosMiningState) SetMinerAddress(addr common.Address) error {
+func (ms *PosMiningState) SetMinerAddress(addr common.QuantumAddress) error {
     ms.mu.Lock()
     defer ms.mu.Unlock()
 
@@ -195,7 +194,7 @@ func (ms *PosMiningState) SetPrivateKeyFromHex(hexKey string) error {
     return ms.SetPrivateKeyFromBytes(keyBytes)
 }
 
-func (ms *PosMiningState) GetMinerAddress() common.Address {
+func (ms *PosMiningState) GetMinerAddress() common.QuantumAddress {
     ms.mu.RLock()
     defer ms.mu.RUnlock()
     return ms.minerAddress
@@ -211,8 +210,8 @@ func (ms *PosMiningState) GetPublicKey() *ecdsa.PublicKey {
 }
 
 // Starts the Proof-of-Stake mining process
-func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.Address, p2pNode *p2p.Node) {
-    if bc == nil || rewardAddr == (common.Address{}) || state.powEngine == nil {
+func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node) {
+    if bc == nil || rewardAddr == (common.QuantumAddress{}) || state.powEngine == nil {
         log.Println("[miner] Missing required components")
         return
     }
@@ -227,7 +226,7 @@ func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
         time.Sleep(200 * time.Millisecond)
     }
 
-    if rewardAddr == (common.Address{}) {
+    if rewardAddr == (common.QuantumAddress{}) {
         log.Println("[miner] Invalid miner address")
         return
     }
@@ -257,7 +256,7 @@ func StopMining(state *PosMiningState) {
     }
 }
 
-func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.Address, p2pNode *p2p.Node) {
+func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAddress, p2pNode *p2p.Node) {
     // Get configuration values
     ms.mu.RLock()
     miningInterval := ms.miningInterval
@@ -328,8 +327,8 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.Address, p
         // This prevents false "waiting" states when minerAddress and key address drift.
         var (
             eligiblePrivKey  *ecdsa.PrivateKey
-            configuredMiner  common.Address
-            loadedKeyAddress common.Address
+            configuredMiner  common.QuantumAddress
+            loadedKeyAddress common.QuantumAddress
         )
         ms.mu.RLock()
         configuredMiner = ms.minerAddress
@@ -346,7 +345,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.Address, p
             // Not our turn — or we don't have the key for the expected miner
             consecutiveMisses++
             if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
-                hasKey := loadedKeyAddress != (common.Address{})
+                hasKey := loadedKeyAddress != (common.QuantumAddress{})
                 log.Printf("[miner] Waiting — expected: %s configured: %s key: %s (loaded key: %v)",
                     expectedMiner.Hex()[:12],
                     configuredMiner.Hex()[:12],
@@ -441,7 +440,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.Address, p
 
 // Creates a PoS signature for a block using ECDSA
 func generateBlockSignature(
-    miner common.Address,
+    miner common.QuantumAddress,
     parentHash common.Hash,
     height uint64,
     timestamp uint64,
@@ -478,7 +477,7 @@ func generateBlockSignature(
 
 // verifyBlockSignature verifies a PoS block signature using ECDSA
 func verifyBlockSignature(
-    miner common.Address,
+    miner common.QuantumAddress,
     parentHash common.Hash,
     height uint64,
     timestamp uint64,
@@ -640,7 +639,7 @@ func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreStore *keystore.Key
     ms.mu.Lock()
     defer ms.mu.Unlock()
 
-    if ms.minerAddress == (common.Address{}) {
+    if ms.minerAddress == (common.QuantumAddress{}) {
         return errors.New("miner address not set")
     }
 
@@ -684,7 +683,7 @@ func (ms *PosMiningState) LoadPrivateKeyFromFile(filepath, password string) erro
     ms.mu.Lock()
     defer ms.mu.Unlock()
 
-    if ms.minerAddress == (common.Address{}) {
+    if ms.minerAddress == (common.QuantumAddress{}) {
         return errors.New("miner address not set")
     }
 
@@ -759,7 +758,7 @@ func (ms *PosMiningState) CheckMiningEligibility(bc *chain.Blockchain) (bool, er
     minerAddr := ms.minerAddress
     ms.mu.RUnlock()
 
-    if minerAddr == (common.Address{}) {
+    if minerAddr == (common.QuantumAddress{}) {
         return false, errors.New("miner address not set")
     }
 
@@ -791,7 +790,7 @@ func (ms *PosMiningState) GetNextMiningSlot(bc *chain.Blockchain) (uint64, time.
     minerAddr := ms.minerAddress
     ms.mu.RUnlock()
 
-    if minerAddr == (common.Address{}) {
+    if minerAddr == (common.QuantumAddress{}) {
         return 0, 0, errors.New("miner address not set")
     }
 

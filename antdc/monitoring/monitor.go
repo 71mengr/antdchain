@@ -3,7 +3,6 @@
 // for more information.
 
 package monitoring
-
 import (
     "encoding/json"
     "fmt"
@@ -15,15 +14,15 @@ import (
     "sync"
     "time"
 
-    "github.com/ethereum/go-ethereum/common"
+    "github.com/antdaza/antdchain/common"
 )
 
 // Tracks total supply and distribution
 type SupplyMonitor struct {
     mu               sync.RWMutex
     totalSupply      *big.Int
-    distribution     map[common.Address]*big.Int
-    transactionCount map[common.Address]int
+    distribution     map[common.QuantumAddress]*big.Int
+    transactionCount map[common.QuantumAddress]int
     alerts           chan TransactionAlert
     alertHistory     []TransactionAlert
     config           MonitorConfig
@@ -39,8 +38,8 @@ type SupplyMonitor struct {
 func NewSupplyMonitor(bc BlockchainProvider, config MonitorConfig, isMainKing bool) *SupplyMonitor {
     monitor := &SupplyMonitor{
         totalSupply:      big.NewInt(0),
-        distribution:     make(map[common.Address]*big.Int),
-        transactionCount: make(map[common.Address]int),
+        distribution:     make(map[common.QuantumAddress]*big.Int),
+        transactionCount: make(map[common.QuantumAddress]int),
         alerts:           make(chan TransactionAlert, 1000),
         alertHistory:     make([]TransactionAlert, 0),
         config:           config,
@@ -189,7 +188,7 @@ func (sm *SupplyMonitor) analyzeTransaction(t TransactionProvider, blockNumber u
 
     // Check for suspicious amount
     if sm.config.AlertThreshold != nil && t.GetValue().Cmp(sm.config.AlertThreshold) > 0 {
-        toAddr := common.Address{}
+        toAddr := common.QuantumAddress{}
         if t.GetTo() != nil {
             toAddr = *t.GetTo()
         }
@@ -213,7 +212,7 @@ func (sm *SupplyMonitor) analyzeTransaction(t TransactionProvider, blockNumber u
             "transaction_count": sm.transactionCount[t.GetFrom()],
         })
 
-        toAddr := common.Address{}
+        toAddr := common.QuantumAddress{}
         if t.GetTo() != nil {
             toAddr = *t.GetTo()
         }
@@ -234,7 +233,7 @@ func (sm *SupplyMonitor) analyzeTransaction(t TransactionProvider, blockNumber u
 
     // Check for spam patterns
     if sm.isSpamTransaction(t) {
-        toAddr := common.Address{}
+        toAddr := common.QuantumAddress{}
         if t.GetTo() != nil {
             toAddr = *t.GetTo()
         }
@@ -294,7 +293,7 @@ func (sm *SupplyMonitor) isSpamTransaction(t TransactionProvider) bool {
 }
 
 // Updates the distribution tracking
-func (sm *SupplyMonitor) updateDistribution(addr common.Address, amount *big.Int) {
+func (sm *SupplyMonitor) updateDistribution(addr common.QuantumAddress, amount *big.Int) {
     sm.mu.Lock()
     defer sm.mu.Unlock()
 
@@ -388,14 +387,14 @@ func (sm *SupplyMonitor) handleCriticalAlert(alert TransactionAlert) {
 
     switch alert.Type {
     case "SUPPLY_MANIPULATION":
-        sm.logger.Printf("🛑 Supply manipulation detected from %s - consider freezing address", alert.From.Hex())
+        sm.logger.Printf("🛑 Supply manipulation detected from %s - consider freezing address", alert.From.String())
 
     case "SUPPLY_EXCEEDED":
         sm.logger.Printf("🛑 MAXIMUM SUPPLY EXCEEDED - Emergency measures required!")
         // Trigger emergency protocols
 
     case "LARGE_TRANSACTION":
-        sm.logger.Printf("🛑 Very large transaction: %s ANTD from %s", sm.formatANTD(alert.Amount), alert.From.Hex())
+        sm.logger.Printf("🛑 Very large transaction: %s ANTD from %s", sm.formatANTD(alert.Amount), alert.From.String())
     }
 }
 
@@ -442,11 +441,11 @@ func (sm *SupplyMonitor) logAlert(alert TransactionAlert) {
     sm.logger.Printf("%s ALERT [%s/%s]: %s", emoji, alert.Type, alert.Severity, alert.Message)
 
     if alert.TxHash != (common.Hash{}) {
-        sm.logger.Printf("   Transaction: %s", alert.TxHash.Hex())
+        sm.logger.Printf("   Transaction: %s", alert.TxHash.String())
         sm.logger.Printf("   Amount: %s ANTD", sm.formatANTD(alert.Amount))
-        sm.logger.Printf("   From: %s", alert.From.Hex())
-        if alert.To != (common.Address{}) {
-            sm.logger.Printf("   To: %s", alert.To.Hex())
+        sm.logger.Printf("   From: %s", alert.From.String())
+        if alert.To != (common.QuantumAddress{}) {
+            sm.logger.Printf("   To: %s", alert.To.String())
         }
         sm.logger.Printf("   Block: %d", alert.BlockNumber)
     }
@@ -465,7 +464,7 @@ func (sm *SupplyMonitor) GetSupplyStats() *SupplyStats {
     stats := &SupplyStats{
         TotalSupply:     sm.formatANTD(sm.totalSupply),
         UniqueAddresses: len(sm.distribution),
-        Distribution:    make(map[common.Address]string),
+        Distribution:    make(map[common.QuantumAddress]string),
         AlertCounts:     make(map[string]int),
         LastUpdated:     time.Now(),
     }
@@ -491,7 +490,7 @@ func (sm *SupplyMonitor) GetSupplyStats() *SupplyStats {
 // Returns the top N holders by balance
 func (sm *SupplyMonitor) getTopHolders(n int) []Holder {
     type holder struct {
-        address common.Address
+        address common.QuantumAddress
         balance *big.Int
     }
 
@@ -521,7 +520,7 @@ func (sm *SupplyMonitor) getTopHolders(n int) []Holder {
         percent.Mul(percent, big.NewFloat(100))
 
         result = append(result, Holder{
-            Address: holders[i].address.Hex(),
+            Address: holders[i].address.String(),
             Balance: sm.formatANTD(holders[i].balance),
             Percent: fmt.Sprintf("%.2f%%", percent),
         })
@@ -550,12 +549,12 @@ func (sm *SupplyMonitor) GetAlertHistory(limit int) []TransactionAlert {
 }
 
 // Returns statistics for a specific address
-func (sm *SupplyMonitor) GetAddressStats(addr common.Address) map[string]interface{} {
+func (sm *SupplyMonitor) GetAddressStats(addr common.QuantumAddress) map[string]interface{} {
     sm.mu.RLock()
     defer sm.mu.RUnlock()
 
     stats := make(map[string]interface{})
-    stats["address"] = addr.Hex()
+    stats["address"] = addr.String()
 
     if balance, exists := sm.distribution[addr]; exists {
         stats["balance"] = sm.formatANTD(balance)

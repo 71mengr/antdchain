@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 "container/heap"
 "encoding/json"
@@ -19,7 +18,7 @@ import (
 "github.com/antdaza/antdchain/antdc/p2p"
 "github.com/antdaza/antdchain/antdc/tx"
 chaincommon "github.com/antdaza/antdchain/common"
-"github.com/ethereum/go-ethereum/common"
+
 "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -205,13 +204,13 @@ func (p *TxPool) Clear()                    { p.clear() }
 func (p *TxPool) Size() int                 { return p.size() }
 func (p *TxPool) GetTransactionCounts() int { return p.size() }
 
-func (p *TxPool) GetTransactionCount(addr common.Address) int {
+func (p *TxPool) GetTransactionCount(addr common.QuantumAddress) int {
 p.mu.RLock()
 defer p.mu.RUnlock()
 return len(p.bySender[ethToQuantumAddress(addr)])
 }
 
-func (p *TxPool) GetPendingTransactionsByNonce(addr common.Address) []*tx.Tx {
+func (p *TxPool) GetPendingTransactionsByNonce(addr common.QuantumAddress) []*tx.Tx {
 p.mu.RLock()
 defer p.mu.RUnlock()
 list := p.bySender[ethToQuantumAddress(addr)]
@@ -220,11 +219,11 @@ copy(cpy, list)
 return cpy
 }
 
-func (p *TxPool) GetNextNonce(addr common.Address, _ p2p.Chain) uint64 {
+func (p *TxPool) GetNextNonce(addr common.QuantumAddress, _ p2p.Chain) uint64 {
 p.mu.RLock()
 defer p.mu.RUnlock()
 sender := ethToQuantumAddress(addr)
-stateNonce := p.chain.State().GetNonce(common.BytesToAddress(sender.Bytes()))
+stateNonce := p.chain.State().GetNonce(common.BytesToQuantumAddress(sender.Bytes()))
 if h := p.nonceTracker[sender]; h >= stateNonce {
 return h + 1
 }
@@ -300,7 +299,7 @@ return errors.New("too many pending from sender")
 }
 
 // BALANCE CHECK
-senderAddress := common.BytesToAddress(sender.Bytes())
+senderAddress := common.BytesToQuantumAddress(sender.Bytes())
 balance := p.chain.State().GetBalance(senderAddress)
 gasCost := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
 totalCost := new(big.Int).Add(t.Value, gasCost)
@@ -570,7 +569,7 @@ now := time.Now()
 
 for h, t := range p.txs {
 // Check for invalid nonce
-if t.Nonce < p.chain.State().GetNonce(common.BytesToAddress(t.From.Bytes())) {
+if t.Nonce < p.chain.State().GetNonce(common.BytesToQuantumAddress(t.From.Bytes())) {
 p.removeLocked(h)
 removed++
 txDroppedCounter.WithLabelValues("invalid_nonce").Inc()
@@ -687,7 +686,7 @@ txDroppedCounter.WithLabelValues("invalid_signature").Inc()
 continue
 }
 
-if st.Tx.Nonce < p.chain.State().GetNonce(common.BytesToAddress(st.Tx.From.Bytes())) {
+if st.Tx.Nonce < p.chain.State().GetNonce(common.BytesToQuantumAddress(st.Tx.From.Bytes())) {
 txDroppedCounter.WithLabelValues("stale_nonce").Inc()
 continue
 }
@@ -794,7 +793,7 @@ continue
 }
 
 // Get current state nonce
-stateNonce := p.chain.State().GetNonce(common.BytesToAddress(sender.Bytes()))
+stateNonce := p.chain.State().GetNonce(common.BytesToQuantumAddress(sender.Bytes()))
 
 // Check if first transaction has correct nonce
 if len(txs) > 0 && txs[0].Nonce > stateNonce {
@@ -822,7 +821,7 @@ func (p *TxPool) GetPendingTransactions() []*tx.Tx {
 return p.GetPending()
 }
 
-func ethToQuantumAddress(addr common.Address) chaincommon.QuantumAddress {
+func ethToQuantumAddress(addr common.QuantumAddress) chaincommon.QuantumAddress {
 var out chaincommon.QuantumAddress
 copy(out[:], addr.Bytes())
 return out

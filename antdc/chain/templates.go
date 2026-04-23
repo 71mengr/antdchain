@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 "context"
 "encoding/hex"
@@ -18,7 +17,7 @@ import (
 "github.com/antdaza/antdchain/antdc/state"
 "github.com/antdaza/antdchain/antdc/tx"
 "github.com/antdaza/antdchain/antdc/vm"
-"github.com/ethereum/go-ethereum/common"
+
 )
 
 // BlockTemplate represents a mining template
@@ -47,7 +46,7 @@ CoinbaseAux    map[string]string        `json:"coinbaseaux"`
 }
 
 // GenerateBlockTemplate generates a block template for mining
-func (bc *Blockchain) GenerateBlockTemplate(rewardAddr common.Address) (*BlockTemplate, error) {
+func (bc *Blockchain) GenerateBlockTemplate(rewardAddr common.QuantumAddress) (*BlockTemplate, error) {
 if bc == nil {
 return nil, errors.New("blockchain is nil")
 }
@@ -130,13 +129,13 @@ CoinbaseAux:    map[string]string{},
 }
 
 // CreateMiningBlock creates a mining block
-func (bc *Blockchain) CreateMiningBlock(rewardAddr common.Address) (*block.Block, []*tx.Tx, error) {
+func (bc *Blockchain) CreateMiningBlock(rewardAddr common.QuantumAddress) (*block.Block, []*tx.Tx, error) {
 return bc.CreatePoSBlock(rewardAddr)
 }
 
 // CreatePoSBlock creates a block for Proof-of-Stake consensus
-func (bc *Blockchain) CreatePoSBlock(miner common.Address) (*block.Block, []*tx.Tx, error) {
-if miner == (common.Address{}) {
+func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block, []*tx.Tx, error) {
+if miner == (common.QuantumAddress{}) {
 return nil, nil, errors.New("miner address is empty")
 }
 
@@ -200,7 +199,7 @@ continue
 }
 
 // Check correct nonce
-expectedNonce := bc.State().GetNonce(common.BytesToAddress(tx.From.Bytes()))
+expectedNonce := bc.State().GetNonce(common.BytesToQuantumAddress(tx.From.Bytes()))
 if tx.Nonce != expectedNonce {
 continue
 }
@@ -222,7 +221,7 @@ log.Printf("[blockchain] Including %d well-propagated transaction(s) in block", 
 
 extraData := []byte("ANTDChain-PoS")
 if bc.rotatingKingManager != nil {
-if rotatingKing := bc.rotatingKingManager.GetCurrentKing(); rotatingKing != (common.Address{}) {
+if rotatingKing := bc.rotatingKingManager.GetCurrentKing(); rotatingKing != (common.QuantumAddress{}) {
 extraData = []byte(fmt.Sprintf("ANTDChain-PoS|rk=%s", rotatingKing.Hex()))
 }
 }
@@ -274,7 +273,7 @@ return newBlock, includedTxs, nil
 // computeBlockFinalStateRoot computes the expected state root after executing
 // txs and applying block rewards on top of canonical state (without mutating it).
 type headerMinerBlockView struct {
-miner     common.Address
+miner     common.QuantumAddress
 blockTime uint64
 blockNum  uint64
 extra     []byte

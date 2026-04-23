@@ -3,7 +3,6 @@
 // for more information.
 
 package keystore
-
 import (
 	"crypto/rand"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+        "time"
 
 	"github.com/antdaza/antdchain/antdc/crypto/quantum"
 	"github.com/antdaza/antdchain/common"
@@ -288,24 +288,34 @@ func findKeystoreFile(addr common.QuantumAddress, dir string) (string, error) {
 	}
 
 	addrStr := addr.String()
-	var matches []string
+	var newestTime int64
+	var newestPath string
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if strings.HasSuffix(name, addrStr) {
-			matches = append(matches, name)
+		if !strings.HasPrefix(name, "UTC--") || !strings.HasSuffix(name, addrStr) {
+			continue
+		}
+		// Extract timestamp: "UTC--2006-01-02T15-04-05.000000000Z--..."
+		parts := strings.SplitN(name, "--", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		tsStr := strings.ReplaceAll(parts[1], "-", ":")
+		t, err := time.Parse("2006-01-02T15:04:05.000000000Z", tsStr)
+		if err != nil {
+			continue
+		}
+		if t.UnixNano() > newestTime {
+			newestTime = t.UnixNano()
+			newestPath = filepath.Join(dir, name)
 		}
 	}
-
-	if len(matches) == 0 {
+	if newestPath == "" {
 		return "", fmt.Errorf("no keystore file found for address %s", addrStr)
 	}
-	if len(matches) > 1 {
-		// If multiple, pick the newest by timestamp in filename
-		// This is a simple heuristic; we could parse timestamps.
-		// For now, return the first one.
-	}
-	return filepath.Join(dir, matches[0]), nil
+	return newestPath, nil
 }

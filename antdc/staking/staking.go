@@ -1,6 +1,5 @@
 
 package staking
-
 import (
     "context"
     "crypto/ecdsa"
@@ -11,7 +10,6 @@ import (
     "sync"
     "time"
 
-    "github.com/ethereum/go-ethereum/common"
     "github.com/ethereum/go-ethereum/crypto"
     "github.com/antdaza/antdchain/antdc/state"
 //    "github.com/antdaza/antdchain/antdc/types"
@@ -29,11 +27,11 @@ type StakingManager struct {
     mu sync.RWMutex
     
     // Staking storage
-    stakes      map[common.Address]*StakeInfo
+    stakes      map[common.QuantumAddress]*StakeInfo
     totalStaked *big.Int
     
     // Withdrawal queue
-    withdrawals map[common.Address]*WithdrawalRequest
+    withdrawals map[common.QuantumAddress]*WithdrawalRequest
     
     // Configuration
     minStakeAmount      *big.Int
@@ -49,7 +47,7 @@ type StakingManager struct {
 }
 
 type StakeInfo struct {
-    Address         common.Address
+    Address         common.QuantumAddress
     Amount          *big.Int
     StartTime       time.Time
     LockUntil       time.Time
@@ -61,7 +59,7 @@ type StakeInfo struct {
 }
 
 type WithdrawalRequest struct {
-    Address     common.Address
+    Address     common.QuantumAddress
     Amount      *big.Int
     RequestTime time.Time
     ProcessTime time.Time
@@ -79,14 +77,14 @@ const (
 
 type StakeEvent struct {
     Type      string
-    Address   common.Address
+    Address   common.QuantumAddress
     Amount    *big.Int
     Timestamp time.Time
     Block     uint64
 }
 
 type MinerInfo struct {
-    Address     common.Address
+    Address     common.QuantumAddress
     StakeAmount *big.Int
     IsActive    bool
     BlocksMined uint64
@@ -98,8 +96,8 @@ func NewStakingManager(statedb *state.State, minStake *big.Int) *StakingManager 
     }
     
     return &StakingManager{
-        stakes:         make(map[common.Address]*StakeInfo),
-        withdrawals:    make(map[common.Address]*WithdrawalRequest),
+        stakes:         make(map[common.QuantumAddress]*StakeInfo),
+        withdrawals:    make(map[common.QuantumAddress]*WithdrawalRequest),
         totalStaked:    big.NewInt(0),
         minStakeAmount: minStake,
         lockDuration:   7 * 24 * time.Hour, // 7 days
@@ -111,7 +109,7 @@ func NewStakingManager(statedb *state.State, minStake *big.Int) *StakingManager 
 }
 
 // Stake allows an address to stake tokens for mining eligibility
-func (sm *StakingManager) Stake(address common.Address, amount *big.Int, privKey *ecdsa.PrivateKey) error {
+func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, privKey *ecdsa.PrivateKey) error {
     sm.mu.Lock()
     defer sm.mu.Unlock()
     
@@ -176,7 +174,7 @@ func (sm *StakingManager) Stake(address common.Address, amount *big.Int, privKey
 }
 
 // GetStake returns the stake amount for an address
-func (sm *StakingManager) GetStake(address common.Address) (*big.Int, error) {
+func (sm *StakingManager) GetStake(address common.QuantumAddress) (*big.Int, error) {
     sm.mu.RLock()
     defer sm.mu.RUnlock()
     
@@ -193,11 +191,11 @@ func (sm *StakingManager) GetStake(address common.Address) (*big.Int, error) {
 }
 
 // GetEligibleMiners returns all addresses with sufficient stake
-func (sm *StakingManager) GetEligibleMiners(minStake *big.Int) []common.Address {
+func (sm *StakingManager) GetEligibleMiners(minStake *big.Int) []common.QuantumAddress {
     sm.mu.RLock()
     defer sm.mu.RUnlock()
     
-    var eligible []common.Address
+    var eligible []common.QuantumAddress
     for addr, stake := range sm.stakes {
         if stake.IsActive && stake.Amount.Cmp(minStake) >= 0 {
             eligible = append(eligible, addr)
@@ -208,7 +206,7 @@ func (sm *StakingManager) GetEligibleMiners(minStake *big.Int) []common.Address 
 }
 
 // Unstake initiates withdrawal of staked tokens
-func (sm *StakingManager) Unstake(address common.Address, privKey *ecdsa.PrivateKey) error {
+func (sm *StakingManager) Unstake(address common.QuantumAddress, privKey *ecdsa.PrivateKey) error {
     sm.mu.Lock()
     defer sm.mu.Unlock()
     
@@ -302,7 +300,7 @@ func (sm *StakingManager) ProcessWithdrawals() error {
 }
 
 // Slash penalizes a miner for misbehavior
-func (sm *StakingManager) Slash(address common.Address, reason string, reporter common.Address) error {
+func (sm *StakingManager) Slash(address common.QuantumAddress, reason string, reporter common.QuantumAddress) error {
     sm.mu.Lock()
     defer sm.mu.Unlock()
     
@@ -320,7 +318,7 @@ func (sm *StakingManager) Slash(address common.Address, reason string, reporter 
     sm.totalStaked.Sub(sm.totalStaked, slashAmount)
     
     // Burn slashed tokens or send to treasury
-    sm.statedb.AddBalance(common.HexToAddress("0x0000000000000000000000000000000000000000"), slashAmount)
+    sm.statedb.AddBalance(common.ParseQuantumAddress("0x0000000000000000000000000000000000000000"), slashAmount)
     
     stake.SlashCount++
     

@@ -1,11 +1,10 @@
 // rotatingking/dbinterface.go
 package rotatingking
-
 import (
 //    "context"
     "time"
     "math/big"
-    "github.com/ethereum/go-ethereum/common"
+    "github.com/antdaza/antdchain/common"
 )
 
 // Define all data structures needed for the interface
@@ -17,21 +16,21 @@ type RotatingKingState struct {
     RotationCount            uint64                      `json:"rotationCount"`
     KingsHistory             []KingRotation              `json:"kingsHistory"`
     TotalRewardsDistributed  *big.Int                    `json:"totalRewardsDistributed"`
-    KingRewards              map[common.Address]*big.Int `json:"kingRewards"`
+    KingRewards              map[common.QuantumAddress]*big.Int `json:"kingRewards"`
 }
 
 type RotatingKingConfig struct {
     RotationInterval uint64           `json:"rotationInterval"`
     RotationOffset   uint64           `json:"rotationOffset"`
-    KingAddresses    []common.Address `json:"kingAddresses"`
+    KingAddresses    []common.QuantumAddress `json:"kingAddresses"`
     ActivationDelay  uint64           `json:"activationDelay"`
     MinStakeRequired *big.Int         `json:"minStakeRequired"`
 }
 
 type KingRotation struct {
     BlockHeight  uint64         `json:"blockHeight"`
-    PreviousKing common.Address `json:"previousKing"`
-    NewKing      common.Address `json:"newKing"`
+    PreviousKing common.QuantumAddress `json:"previousKing"`
+    NewKing      common.QuantumAddress `json:"newKing"`
     Timestamp    time.Time      `json:"timestamp"`
     Reward       *big.Int       `json:"reward"`
     WasEligible  bool           `json:"wasEligible"`

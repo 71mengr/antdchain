@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 	"context"
 	"encoding/binary"
@@ -29,7 +28,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/vm"
 	chaincommon "github.com/antdaza/antdchain/common"
-	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/hashicorp/golang-lru"
 )
 
@@ -41,7 +40,7 @@ const (
 )
 
 // NewBlockchain creates a new blockchain instance with database-first design
-func NewBlockchain(statePath string, miner common.Address) (*Blockchain, error) {
+func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, error) {
 	initStart := time.Now()
 	log.Printf("[blockchain] Initializing blockchain from: %s", statePath)
 	minerQuantum, err := chaincommon.NewQuantumAddressFromBytes(miner.Bytes())
@@ -323,16 +322,16 @@ func NewBlockchain(statePath string, miner common.Address) (*Blockchain, error) 
 	// ====================
 	// INITIALIZE MAIN KING
 	// ====================
-	mainKingQuantum, err := chaincommon.NewQuantumAddressFromBytes(common.HexToAddress(GenesisMainKing).Bytes())
+	mainKingQuantum, err := chaincommon.NewQuantumAddressFromBytes(common.ParseQuantumAddress(GenesisMainKing).Bytes())
 	if err != nil {
 		chainDb.Close()
 		stateDb.Close()
 		return nil, fmt.Errorf("invalid quantum-resistant main king address: %w", err)
 	}
-	mainKing := common.Address(mainKingQuantum)
+	mainKing := common.QuantumAddress(mainKingQuantum)
 	bc.Pow().AutoRegisterIfEligible(mainKing, bc.state.GetBalance(mainKing))
 	log.Printf("[blockchain] Main King auto-registered: %s", mainKingQuantum.String())
-	if miner != (common.Address{}) && miner != mainKing {
+	if miner != (common.QuantumAddress{}) && miner != mainKing {
 		bc.Pow().AutoRegisterIfEligible(miner, bc.state.GetBalance(miner))
 		log.Printf("[blockchain] Local miner auto-checked for registration: %s", minerQuantum.String())
 	}

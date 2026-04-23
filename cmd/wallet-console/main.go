@@ -3,14 +3,12 @@
 // for more information.
 
 package main
-
 import (
     "fmt"
     "log"
     "os"
     "path/filepath"
 
-    "github.com/ethereum/go-ethereum/common"
     "github.com/urfave/cli/v2"
 
     "github.com/antdaza/antdchain/console"
@@ -199,7 +197,7 @@ func runWalletCLI(c *cli.Context) error {
     // Create a minimal blockchain (just for wallet operations)
     var bc *chain.Blockchain
     statePath := filepath.Join(walletDir, "state")
-    genesisAddr := common.HexToAddress("0x0000000000000000000000000000000000000000")
+    genesisAddr := common.ParseQuantumAddress("0x0000000000000000000000000000000000000000")
 
     // Only try to load blockchain if state exists
     if _, err := os.Stat(statePath); err == nil {

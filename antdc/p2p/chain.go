@@ -3,9 +3,8 @@
 // for more information.
 
 package p2p
-
 import (
-    "github.com/ethereum/go-ethereum/common"
+
     "github.com/antdaza/antdchain/antdc/block"
     "github.com/antdaza/antdchain/antdc/checkpoints"
     "github.com/antdaza/antdchain/antdc/pow"
@@ -52,6 +51,6 @@ type TxPool interface {
     RemoveTxs([]*tx.Tx)
     GetTransactionCounts() int
     Size() int
-    GetPendingTransactionsByNonce(addr common.Address) []*tx.Tx
-    GetNextNonce(addr common.Address, bc Chain) uint64
+    GetPendingTransactionsByNonce(addr common.QuantumAddress) []*tx.Tx
+    GetNextNonce(addr common.QuantumAddress, bc Chain) uint64
 }

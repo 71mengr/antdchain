@@ -1,6 +1,5 @@
 
 package tlsconfig
-
 import (
     "encoding/json"
     "fmt"

@@ -3,7 +3,6 @@
 // for more information.
 
 package main
-
 import (
 	"context"
 	"crypto/rand"
@@ -29,8 +28,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
@@ -61,8 +60,8 @@ type RotatingKingAPI struct {
 }
 
 type RotatingKingInfo struct {
-	CurrentKing             common.Address `json:"currentKing"`
-	NextKing                common.Address `json:"nextKing,omitempty"`
+	CurrentKing             common.QuantumAddress `json:"currentKing"`
+	NextKing                common.QuantumAddress `json:"nextKing,omitempty"`
 	BlocksUntilRotation     uint64         `json:"blocksUntilRotation"`
 	KingCount               int            `json:"kingCount"`
 	RotationCount           uint64         `json:"rotationCount"`
@@ -508,7 +507,7 @@ func triggerConfigurationSync(bc *chain.Blockchain, p2pNode *p2p.Node, logger *l
 
 	// Get our configuration
 	var ourCount int
-	if manager, ok := rkManager.(interface{ GetKingAddresses() []common.Address }); ok {
+	if manager, ok := rkManager.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 		addresses := manager.GetKingAddresses()
 		ourCount = len(addresses)
 
@@ -538,7 +537,7 @@ func triggerConfigurationSync(bc *chain.Blockchain, p2pNode *p2p.Node, logger *l
 				time.Sleep(30 * time.Second)
 
 				// Re-check our count
-				if manager, ok := rkManager.(interface{ GetKingAddresses() []common.Address }); ok {
+				if manager, ok := rkManager.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
 					currentCount := len(manager.GetKingAddresses())
 					if currentCount <= 4 {
 						logger.Warnf("🔄 STILL LOW (%d) - FORCING MANUAL CONFIG SYNC", currentCount)
@@ -565,11 +564,11 @@ func createConsoleNode(bc *chain.Blockchain, posMiningState *mining.PosMiningSta
 }
 
 func getGenesisStakers() []struct {
-	address common.Address
+	address common.QuantumAddress
 	stake   *big.Int
 } {
 	var stakers []struct {
-		address common.Address
+		address common.QuantumAddress
 		stake   *big.Int
 	}
 
@@ -579,12 +578,12 @@ func getGenesisStakers() []struct {
 		var config []map[string]string
 		if err := json.Unmarshal([]byte(genesisConfig), &config); err == nil {
 			for _, w := range config {
-				addr := common.HexToAddress(w["address"])
+				addr := common.ParseQuantumAddress(w["address"])
 				stakeStr := w["stake"]
 				if stake, ok := new(big.Int).SetString(stakeStr, 10); ok {
 					stakeWei := new(big.Int).Mul(stake, big.NewInt(1e18))
 					stakers = append(stakers, struct {
-						address common.Address
+						address common.QuantumAddress
 						stake   *big.Int
 					}{
 						address: addr,
@@ -598,7 +597,7 @@ func getGenesisStakers() []struct {
 	// Default genesis stakers if none configured
 	if len(stakers) == 0 {
 		stakers = []struct {
-			address common.Address
+			address common.QuantumAddress
 			stake   *big.Int
 		}{}
 	}
@@ -666,10 +665,10 @@ func runNode(c *cli.Context) error {
 	statePath := filepath.Join(dataDir, "state")
 
 	// Ensure genesis block exists
-	chain.EnsureGenesisBlock(statePath, common.BytesToAddress(tempWallet.Address().Bytes()))
+	chain.EnsureGenesisBlock(statePath, common.BytesToQuantumAddress(tempWallet.Address().Bytes()))
 
 	// Create blockchain
-	bc, err := chain.NewBlockchain(statePath, common.BytesToAddress(tempWallet.Address().Bytes()))
+	bc, err := chain.NewBlockchain(statePath, common.BytesToQuantumAddress(tempWallet.Address().Bytes()))
 	if err != nil {
 		logger.Fatal("Blockchain initialization failed:", err)
 	}
@@ -880,13 +879,13 @@ func runNode(c *cli.Context) error {
 	registeredCount := 0
 
 	// Check candidate addresses
-	candidateAddresses := []common.Address{
-		common.HexToAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
-		common.BytesToAddress(minerWallet.Address().Bytes()),       // Miner wallet
+	candidateAddresses := []common.QuantumAddress{
+		common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
+		common.BytesToQuantumAddress(minerWallet.Address().Bytes()),       // Miner wallet
 	}
 
 	for _, addr := range candidateAddresses {
-		if addr == (common.Address{}) {
+		if addr == (common.QuantumAddress{}) {
 			continue
 		}
 		balance := bc.State().GetBalance(addr)
@@ -954,8 +953,8 @@ func runNode(c *cli.Context) error {
 	// ==============================================
 	if startMining {
 		logger.Info("Starting PoS mining...")
-		addr := common.BytesToAddress(minerWallet.Address().Bytes())
-		if addr == (common.Address{}) {
+		addr := common.BytesToQuantumAddress(minerWallet.Address().Bytes())
+		if addr == (common.QuantumAddress{}) {
 			logger.Warn("No miner address available!")
 		} else {
 			logger.Infof("Mining to address: %s", addr.Hex())
@@ -1212,7 +1211,7 @@ func (api *EthAPI) Syncing() (interface{}, error) {
 }
 
 func (api *EthAPI) GetBalance(address string, _ interface{}) (string, error) {
-	bal := api.node.Blockchain().GetAccountBalance(common.HexToAddress(address))
+	bal := api.node.Blockchain().GetAccountBalance(common.ParseQuantumAddress(address))
 	if bal == nil {
 		bal = big.NewInt(0)
 	}
@@ -1220,7 +1219,7 @@ func (api *EthAPI) GetBalance(address string, _ interface{}) (string, error) {
 }
 
 func (api *EthAPI) GetTransactionCount(address string, _ interface{}) (string, error) {
-	nonce := api.node.Blockchain().State().GetNonce(common.HexToAddress(address))
+	nonce := api.node.Blockchain().State().GetNonce(common.ParseQuantumAddress(address))
 	return hexutil.EncodeUint64(nonce), nil
 }
 
@@ -1600,12 +1599,12 @@ func (r *RotatingKingAPI) GetInfo() (*RotatingKingInfo, error) {
 	}
 
 	// Set current king if available
-	if currentKing := rkManager.GetCurrentKing(); currentKing != (common.Address{}) {
+	if currentKing := rkManager.GetCurrentKing(); currentKing != (common.QuantumAddress{}) {
 		info.CurrentKing = currentKing
 	}
 
 	// Set next king if available
-	if nextKing := rkManager.GetNextKing(); nextKing != (common.Address{}) {
+	if nextKing := rkManager.GetNextKing(); nextKing != (common.QuantumAddress{}) {
 		info.NextKing = nextKing
 	}
 
@@ -1622,33 +1621,33 @@ func (r *RotatingKingAPI) GetInfo() (*RotatingKingInfo, error) {
 	return info, nil
 }
 
-func (r *RotatingKingAPI) GetCurrentKing() (common.Address, error) {
+func (r *RotatingKingAPI) GetCurrentKing() (common.QuantumAddress, error) {
 	if r.node == nil || r.node.Blockchain() == nil {
-		return common.Address{}, errors.New("blockchain not available")
+		return common.QuantumAddress{}, errors.New("blockchain not available")
 	}
 
 	rkManager := r.node.Blockchain().GetRotatingKingManager()
 	if rkManager == nil {
-		return common.Address{}, errors.New("rotating king manager not available")
+		return common.QuantumAddress{}, errors.New("rotating king manager not available")
 	}
 
 	return rkManager.GetCurrentKing(), nil
 }
 
-func (r *RotatingKingAPI) GetNextKing() (common.Address, error) {
+func (r *RotatingKingAPI) GetNextKing() (common.QuantumAddress, error) {
 	if r.node == nil || r.node.Blockchain() == nil {
-		return common.Address{}, errors.New("blockchain not available")
+		return common.QuantumAddress{}, errors.New("blockchain not available")
 	}
 
 	rkManager := r.node.Blockchain().GetRotatingKingManager()
 	if rkManager == nil {
-		return common.Address{}, errors.New("rotating king manager not available")
+		return common.QuantumAddress{}, errors.New("rotating king manager not available")
 	}
 
 	return rkManager.GetNextKing(), nil
 }
 
-func (r *RotatingKingAPI) GetKingAddresses() ([]common.Address, error) {
+func (r *RotatingKingAPI) GetKingAddresses() ([]common.QuantumAddress, error) {
 	if r.node == nil || r.node.Blockchain() == nil {
 		return nil, errors.New("blockchain not available")
 	}
@@ -1666,7 +1665,7 @@ func (r *RotatingKingAPI) GetKingStats(addressStr string) (*KingStats, error) {
 		return nil, errors.New("blockchain not available")
 	}
 
-	address := common.HexToAddress(addressStr)
+	address := common.ParseQuantumAddress(addressStr)
 	rkManager := r.node.Blockchain().GetRotatingKingManager()
 	if rkManager == nil {
 		return nil, errors.New("rotating king manager not available")
@@ -1771,15 +1770,15 @@ func (r *RotatingKingAPI) Info() (*RotatingKingInfo, error) {
 	return r.GetInfo()
 }
 
-func (r *RotatingKingAPI) CurrentKing() (common.Address, error) {
+func (r *RotatingKingAPI) CurrentKing() (common.QuantumAddress, error) {
 	return r.GetCurrentKing()
 }
 
-func (r *RotatingKingAPI) NextKing() (common.Address, error) {
+func (r *RotatingKingAPI) NextKing() (common.QuantumAddress, error) {
 	return r.GetNextKing()
 }
 
-func (r *RotatingKingAPI) KingAddresses() ([]common.Address, error) {
+func (r *RotatingKingAPI) KingAddresses() ([]common.QuantumAddress, error) {
 	return r.GetKingAddresses()
 }
 

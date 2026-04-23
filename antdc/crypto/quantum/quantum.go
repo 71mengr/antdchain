@@ -1,5 +1,4 @@
 package quantum
-
 import (
 "crypto/rand"
 "errors"

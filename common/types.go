@@ -1,5 +1,4 @@
 package common
-
 import (
 "encoding/json"
 "errors"
@@ -52,4 +51,16 @@ return err
 }
 *a = parsed
 return nil
+}
+
+// BytesToQuantumAddress converts a byte slice to a 20‑byte QuantumAddress.
+// If the input is longer than 20 bytes, it takes the last 20 bytes.
+// If shorter, it left‑pads with zeros.
+func BytesToQuantumAddress(b []byte) QuantumAddress {
+    var addr QuantumAddress
+    if len(b) > QuantumAddressLength {
+        b = b[len(b)-QuantumAddressLength:]
+    }
+    copy(addr[QuantumAddressLength-len(b):], b)
+    return addr
 }

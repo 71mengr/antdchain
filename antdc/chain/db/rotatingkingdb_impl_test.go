@@ -1,5 +1,4 @@
 package db
-
 import (
 "math/big"
 "testing"
@@ -7,7 +6,7 @@ import (
 
 "github.com/antdaza/antdchain/antdc/rotatingking"
 "github.com/cockroachdb/pebble"
-"github.com/ethereum/go-ethereum/common"
+
 )
 
 func openTestPebble(t *testing.T) *pebble.DB {
@@ -51,9 +50,9 @@ func TestWriteAndGetRotationEventsInRange(t *testing.T) {
 rdb := &PebbleRotatingKingDB{db: openTestPebble(t)}
 
 events := []rotatingking.KingRotation{
-{BlockHeight: 99, NewKing: common.HexToAddress("0x0000000000000000000000000000000000000001"), Timestamp: time.Unix(999, 0), Reward: big.NewInt(1)},
-{BlockHeight: 100, NewKing: common.HexToAddress("0x0000000000000000000000000000000000000002"), Timestamp: time.Unix(1000, 0), Reward: big.NewInt(2)},
-{BlockHeight: 101, NewKing: common.HexToAddress("0x0000000000000000000000000000000000000003"), Timestamp: time.Unix(1001, 0), Reward: big.NewInt(3)},
+{BlockHeight: 99, NewKing: common.ParseQuantumAddress("0x0000000000000000000000000000000000000001"), Timestamp: time.Unix(999, 0), Reward: big.NewInt(1)},
+{BlockHeight: 100, NewKing: common.ParseQuantumAddress("0x0000000000000000000000000000000000000002"), Timestamp: time.Unix(1000, 0), Reward: big.NewInt(2)},
+{BlockHeight: 101, NewKing: common.ParseQuantumAddress("0x0000000000000000000000000000000000000003"), Timestamp: time.Unix(1001, 0), Reward: big.NewInt(3)},
 }
 
 for i := range events {

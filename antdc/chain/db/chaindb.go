@@ -1,6 +1,5 @@
 // chain/db/chaindb.go
 package db
-
 import (
     "encoding/json"
     "errors"
@@ -9,10 +8,11 @@ import (
     "path/filepath"
     
     "github.com/cockroachdb/pebble"
-    "github.com/ethereum/go-ethereum/common"
+
     "github.com/ethereum/go-ethereum/rlp"
     "github.com/antdaza/antdchain/antdc/block"
     "github.com/antdaza/antdchain/antdc/rotatingking"
+    "github.com/antdaza/antdchain/common"
 )
 
 var (

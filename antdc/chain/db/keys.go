@@ -1,9 +1,8 @@
 // chain/db/keys.go
 package db
-
 import (
     "encoding/binary"
-    "github.com/ethereum/go-ethereum/common"
+    "github.com/antdaza/antdchain/common"
 )
 
 // Key prefixes

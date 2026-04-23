@@ -3,14 +3,12 @@
 // for more information.
 
 package chain
-
 import (
     "bytes"
     "crypto/sha256"
     "math/big"
     "strings"
 
-    "github.com/ethereum/go-ethereum/common"
     "github.com/antdaza/antdchain/antdc/block"
     "github.com/antdaza/antdchain/antdc/tx"
 )

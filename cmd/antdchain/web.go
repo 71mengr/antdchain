@@ -3,7 +3,6 @@
 // for more information.
 
 package main
-
 import (
 "embed"
 "encoding/hex"
@@ -15,7 +14,6 @@ import (
 "strings"
 "time"
 
-"github.com/ethereum/go-ethereum/common"
 "github.com/gorilla/mux"
 )
 
@@ -224,11 +222,11 @@ continue
 for _, tx := range blk.Txs {
 // Filter by address if specified
 if address != "" {
-addr := common.HexToAddress(address)
-txFrom := common.BytesToAddress(tx.From.Bytes())
-txTo := common.Address{}
+addr := common.ParseQuantumAddress(address)
+txFrom := common.BytesToQuantumAddress(tx.From.Bytes())
+txTo := common.QuantumAddress{}
 if tx.To != nil {
-txTo = common.BytesToAddress(tx.To.Bytes())
+txTo = common.BytesToQuantumAddress(tx.To.Bytes())
 }
 if txFrom != addr && (tx.To == nil || txTo != addr) {
 continue
@@ -322,7 +320,7 @@ func (ws *WebServer) apiWalletBalance(w http.ResponseWriter, r *http.Request) {
 vars := mux.Vars(r)
 address := vars["address"]
 
-addr := common.HexToAddress(address)
+addr := common.ParseQuantumAddress(address)
 balance := ws.node.Blockchain().GetAccountBalance(addr)
 
 json.NewEncoder(w).Encode(map[string]interface{}{

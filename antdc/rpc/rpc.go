@@ -3,7 +3,6 @@
 // for more information.
 
 package rpc
-
 import (
 "encoding/hex"
 "encoding/json"
@@ -17,7 +16,7 @@ import (
 "github.com/antdaza/antdchain/antdc/chain"
 "github.com/antdaza/antdchain/antdc/tx"
 "github.com/antdaza/antdchain/antdc/wallet"
-"github.com/ethereum/go-ethereum/common"
+
 "github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -123,7 +122,7 @@ break
 
 }
 
-address := common.HexToAddress(addr)
+address := common.ParseQuantumAddress(addr)
 
 balance := s.bc.State().GetBalance(address)
 
@@ -285,9 +284,9 @@ break
 
 }
 
-from := common.HexToAddress(params.From)
+from := common.ParseQuantumAddress(params.From)
 
-to := common.HexToAddress(params.To)
+to := common.ParseQuantumAddress(params.To)
 
 amount, ok1 := new(big.Int).SetString(params.Amount, 10)
 
@@ -515,7 +514,7 @@ gas := uint64(3000000) // Contract deployment gas
 
 gasPrice := big.NewInt(1000000000) // 1 Gwei
 
-t, err := w.CreateTx(common.Address{}, value, dataBytes, gas, gasPrice)
+t, err := w.CreateTx(common.QuantumAddress{}, value, dataBytes, gas, gasPrice)
 
 if err != nil {
 

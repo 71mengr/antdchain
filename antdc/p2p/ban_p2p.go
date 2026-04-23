@@ -3,7 +3,6 @@
 // for more information.
 
 package p2p
-
 import (
 	"encoding/json"
     "strings"
@@ -11,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/libp2p/go-libp2p/core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/sirupsen/logrus"
@@ -344,7 +342,7 @@ func (bm *BanManager) verifyBlockAgainstCheckpoints(height uint64, blockHash com
 	// Verify additional context if available in checkpoint
 	if blk != nil && blk.Header != nil {
 		// Try to extract miner and rotating king from block
-		var miner, rotatingKing common.Address
+		var miner, rotatingKing common.QuantumAddress
 		
 		if len(blk.Txs) > 0 {
 			// Could extract from coinbase transaction

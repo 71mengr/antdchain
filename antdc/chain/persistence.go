@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 //    "encoding/json"
     "fmt"

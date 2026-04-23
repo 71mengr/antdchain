@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 "context"
 "errors"
@@ -16,7 +15,7 @@ import (
 "github.com/antdaza/antdchain/antdc/chain/db"
 "github.com/antdaza/antdchain/antdc/checkpoints"
 "github.com/cockroachdb/pebble"
-"github.com/ethereum/go-ethereum/common"
+
 "github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -777,7 +776,7 @@ return nil
 blockHash := b.Hash()
 
 // Get rotating king address
-var rotatingKing common.Address
+var rotatingKing common.QuantumAddress
 if bc.rotatingKingManager != nil {
 rotatingKing = bc.rotatingKingManager.GetCurrentKing()
 }

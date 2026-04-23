@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 "context"
 "encoding/binary"
@@ -31,7 +30,7 @@ import (
 "github.com/antdaza/antdchain/antdc/tx"
 "github.com/antdaza/antdchain/antdc/vm"
 "github.com/cockroachdb/pebble"
-"github.com/ethereum/go-ethereum/common"
+
 "github.com/ethereum/go-ethereum/rlp"
 "github.com/hashicorp/golang-lru"
 "github.com/prometheus/client_golang/prometheus"
@@ -556,7 +555,7 @@ return bc.rewardDistributor
 }
 
 // GetAccountBalance returns account balance
-func (bc *Blockchain) GetAccountBalance(addr common.Address) *big.Int {
+func (bc *Blockchain) GetAccountBalance(addr common.QuantumAddress) *big.Int {
 return bc.GetState().GetBalance(addr)
 }
 
@@ -599,20 +598,20 @@ bc.p2pBroadcaster = broadcaster
 }
 
 // GetCurrentRotatingKing returns current rotating king address
-func (bc *Blockchain) GetCurrentRotatingKing() common.Address {
+func (bc *Blockchain) GetCurrentRotatingKing() common.QuantumAddress {
 if bc.rotatingKingManager != nil {
 return bc.rotatingKingManager.GetCurrentKing()
 }
-return common.Address{}
+return common.QuantumAddress{}
 }
 
 // GetBlocksMinedBy returns number of blocks mined by an address (with scan limit)
-func (bc *Blockchain) GetBlocksMinedBy(addr common.Address) uint64 {
+func (bc *Blockchain) GetBlocksMinedBy(addr common.QuantumAddress) uint64 {
 return bc.GetBlocksMinedByLimited(addr, 10000) // Default limit of 10,000 blocks
 }
 
 // GetBlocksMinedByLimited returns number of blocks mined by an address with scan limit
-func (bc *Blockchain) GetBlocksMinedByLimited(addr common.Address, maxScan uint64) uint64 {
+func (bc *Blockchain) GetBlocksMinedByLimited(addr common.QuantumAddress, maxScan uint64) uint64 {
 currentHeight := bc.GetChainHeight()
 if currentHeight == 0 {
 return 0
@@ -676,7 +675,7 @@ if valid, err := t.Verify(); err != nil || !valid {
 return fmt.Errorf("invalid signature: %w", err)
 }
 
-from := common.BytesToAddress(t.From.Bytes())
+from := common.BytesToQuantumAddress(t.From.Bytes())
 currentNonce := bc.state.GetNonce(from)
 if t.Nonce != currentNonce {
 return fmt.Errorf("invalid nonce: expected %d, got %d", currentNonce, t.Nonce)
@@ -699,7 +698,7 @@ return fmt.Errorf("invalid signature: %w", err)
 }
 
 // Standard validation
-currentNonce := bc.State().GetNonce(common.BytesToAddress(t.From.Bytes()))
+currentNonce := bc.State().GetNonce(common.BytesToQuantumAddress(t.From.Bytes()))
 if t.Nonce != currentNonce {
 return fmt.Errorf("invalid nonce: expected %d, got %d", currentNonce, t.Nonce)
 }
@@ -1327,7 +1326,7 @@ func (w *BlockWrapper) Number() uint64 {
 return w.block.Header.Number.Uint64()
 }
 
-func (w *BlockWrapper) Miner() common.Address {
+func (w *BlockWrapper) Miner() common.QuantumAddress {
 return w.block.Header.Coinbase
 }
 

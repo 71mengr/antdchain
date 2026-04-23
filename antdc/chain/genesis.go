@@ -3,7 +3,6 @@
 // for more information.
 
 package chain
-
 import (
 "encoding/json"
 "fmt"
@@ -16,7 +15,7 @@ import (
 "github.com/antdaza/antdchain/antdc/pow"
 "github.com/antdaza/antdchain/antdc/state"
 chaincommon "github.com/antdaza/antdchain/common"
-"github.com/ethereum/go-ethereum/common"
+
 )
 
 // Genesis parameters
@@ -29,7 +28,7 @@ GenesisMainKing           = "0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"
 GenesisMainKingBalanceStr = "60000000000000000000000000"
 )
 
-func EnsureGenesisBlock(statePath string, miner common.Address) (*block.Block, error) {
+func EnsureGenesisBlock(statePath string, miner common.QuantumAddress) (*block.Block, error) {
 // Try to load existing genesis block
 genesis, err := loadGenesisBlock(statePath)
 if err == nil && genesis != nil {
@@ -44,7 +43,7 @@ parsedMainKing, err := chaincommon.ParseQuantumAddress(GenesisMainKing)
 if err != nil {
 return nil, fmt.Errorf("invalid genesis main king quantum address: %w", err)
 }
-mainKing := common.Address(parsedMainKing)
+mainKing := common.QuantumAddress(parsedMainKing)
 
 // Initialize state
 s, err := state.NewState(statePath)
