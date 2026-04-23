@@ -131,7 +131,7 @@ func ownerAddr(keyHex string) (common.QuantumAddress, error) {
     if err != nil {
         return common.QuantumAddress{}, err
     }
-    return crypto.PubkeyToAddress(pk.PublicKey), nil
+    return common.BytesToQuantumAddress(crypto.PubkeyToAddress(pk.PublicKey).Bytes()), nil
 }
 
 func weiToANTD(w *big.Int) string {
@@ -154,7 +154,10 @@ func cmdStatus(ctx *cli.Context) error {
     fmt.Println("=== ANTDChain King Status ===")
     
     // Get main king from reward distributor
-    mainKing := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY") // Default main king
+    mainKing, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY") // Default main king
+    if err != nil {
+        return fmt.Errorf("invalid default main king address: %w", err)
+    }
     fmt.Printf("Main King : %s\n", mainKing.String())
     fmt.Printf("  Balance : %s ANTD\n\n", weiToANTD(bc.GetAccountBalance(mainKing)))
 
@@ -183,7 +186,10 @@ func cmdProposeMain(ctx *cli.Context) error {
     if ctx.NArg() != 1 {
         return fmt.Errorf("need exactly one address")
     }
-    newKing := common.ParseQuantumAddress(ctx.Args().First())
+    newKing, err := common.ParseQuantumAddress(ctx.Args().First())
+    if err != nil {
+        return fmt.Errorf("invalid new main king address: %w", err)
+    }
 
     bc, err := loadChain(ctx)
     if err != nil {
@@ -222,7 +228,11 @@ func cmdProposeRotating(ctx *cli.Context) error {
     }
     var addrs []common.QuantumAddress
     for _, a := range ctx.Args().Slice() {
-        addrs = append(addrs, common.ParseQuantumAddress(a))
+        addr, err := common.ParseQuantumAddress(a)
+        if err != nil {
+            return fmt.Errorf("invalid rotating king address %q: %w", a, err)
+        }
+        addrs = append(addrs, addr)
     }
 
     bc, err := loadChain(ctx)

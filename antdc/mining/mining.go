@@ -242,7 +242,7 @@ func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
 
     // Automatic staking check — no manual registration needed
     currentBalance := bc.State().GetBalance(rewardAddr)
-    bc.Pow().AutoRegisterIfEligible(rewardAddr, currentBalance)
+    bc.Pow().AutoRegisterIfEligible(rewardAddr, currentBalance, nil)
 
     log.Printf("[miner] Auto-checked staking eligibility for %s (balance: %s ANTD)",
         rewardAddr.String()[:12],
@@ -337,7 +337,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         ms.mu.RLock()
         configuredMiner = ms.minerAddress
         if ms.privateKey != nil {
-            loadedKeyAddress = crypto.PubkeyToAddress(ms.privateKey.PublicKey)
+            loadedKeyAddress = common.BytesToQuantumAddress(crypto.PubkeyToAddress(ms.privateKey.PublicKey).Bytes())
             if expectedMiner == configuredMiner || expectedMiner == loadedKeyAddress {
                 eligiblePrivKey = ms.privateKey
             }
@@ -654,7 +654,7 @@ func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreStore *keystore.Key
     var targetAccount accounts.Account
     found := false
     for _, acc := range keystoreStore.Accounts() {
-        if acc.Address == ms.minerAddress {
+        if common.BytesToQuantumAddress(acc.Address.Bytes()) == ms.minerAddress {
             targetAccount = acc
             found = true
             break
@@ -701,7 +701,7 @@ func (ms *PosMiningState) LoadPrivateKeyFromFile(filepath, password string) erro
         return fmt.Errorf("failed to decrypt key: %w", err)
     }
 
-    keyAddress := crypto.PubkeyToAddress(key.PrivateKey.PublicKey)
+    keyAddress := common.BytesToQuantumAddress(crypto.PubkeyToAddress(key.PrivateKey.PublicKey).Bytes())
     if keyAddress != ms.minerAddress {
         return fmt.Errorf("key address mismatch: expected %s, got %s",
             ms.minerAddress.String(), keyAddress.String())
