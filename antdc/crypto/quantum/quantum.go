@@ -35,6 +35,37 @@ return nil, nil, err
 return privKeyBytes, pubKeyBytes, nil
 }
 
+// DeriveKeyFromSeed deterministically generates an ML‑DSA‑65 keypair from a 32-byte seed.
+func DeriveKeyFromSeed(seed []byte) (privKeyBytes, pubKeyBytes []byte, err error) {
+if len(seed) != 32 {
+return nil, nil, errors.New("seed must be exactly 32 bytes")
+}
+var seedArr [32]byte
+copy(seedArr[:], seed)
+
+pubKey, privKey := mldsa65.NewKeyFromSeed(&seedArr)
+privKeyBytes, err = privKey.MarshalBinary()
+if err != nil {
+return nil, nil, err
+}
+pubKeyBytes, err = pubKey.MarshalBinary()
+if err != nil {
+return nil, nil, err
+}
+return privKeyBytes, pubKeyBytes, nil
+}
+
+func ExtractSeedFromPrivateKey(privKeyBytes []byte) []byte {
+privKey := new(mldsa65.PrivateKey)
+if err := privKey.UnmarshalBinary(privKeyBytes); err != nil {
+return nil
+}
+if withSeed, ok := any(privKey).(interface{ Seed() []byte }); ok {
+return withSeed.Seed()
+}
+return nil
+}
+
 func Sign(privKeyBytes, message []byte) ([]byte, error) {
 privKeyBytes, err := NormalizePrivateKey(privKeyBytes)
 if err != nil {
@@ -79,10 +110,11 @@ if len(privKeyBytes) == mldsa65.PrivateKeySize {
 return append([]byte(nil), privKeyBytes...), nil
 }
 if len(privKeyBytes) == mldsa65.SeedSize {
-var seed [mldsa65.SeedSize]byte
-copy(seed[:], privKeyBytes)
-_, priv := mldsa65.NewKeyFromSeed(&seed)
-return priv.MarshalBinary()
+priv, _, err := DeriveKeyFromSeed(privKeyBytes)
+if err != nil {
+return nil, err
+}
+return priv, nil
 }
 return nil, errors.New("invalid private key length: expected packed private key or seed")
 }

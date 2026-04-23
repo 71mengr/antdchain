@@ -2921,14 +2921,50 @@ func (c *Console) handleImport(parts []string) {
 		fmt.Printf("Failed to import wallet: private key is empty\n")
 		return
 	}
-	if len(privKeyBytes) != 32 && len(privKeyBytes) != 4032 {
+	var (
+		importPrivKey []byte
+		expectedAddr  common.QuantumAddress
+	)
+
+	switch len(privKeyBytes) {
+	case 32:
+		fullPriv, fullPub, err := quantum.DeriveKeyFromSeed(privKeyBytes)
+		if err != nil {
+			fmt.Printf("Failed to import wallet: invalid seed: %v\n", err)
+			return
+		}
+		importPrivKey = fullPriv
+		expectedAddr, err = common.ParseQuantumAddress(quantum.PubKeyToAddress(fullPub))
+		if err != nil {
+			fmt.Printf("Failed to import wallet: failed to derive address from seed: %v\n", err)
+			return
+		}
+
+	case 4032:
+		pubKey, err := quantum.DerivePublicKey(privKeyBytes)
+		if err != nil {
+			fmt.Printf("Failed to import wallet: invalid ML-DSA-65 private key: %v\n", err)
+			return
+		}
+		importPrivKey = privKeyBytes
+		expectedAddr, err = common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+		if err != nil {
+			fmt.Printf("Failed to import wallet: failed to derive address from private key: %v\n", err)
+			return
+		}
+
+	default:
 		fmt.Printf("Failed to import wallet: invalid private key length: got %d bytes; expected 32-byte seed (64 hex chars) or 4032-byte packed ML-DSA-65 private key (8064 hex chars)\n", len(privKeyBytes))
 		return
 	}
 
-	addr, err := qkeystore.ImportAccount(privKeyBytes, password, c.node.GetKeystoreDir())
+	addr, err := qkeystore.ImportAccount(importPrivKey, password, c.node.GetKeystoreDir())
 	if err != nil {
 		fmt.Printf("Failed to import wallet: %v\n", err)
+		return
+	}
+	if expectedAddr != (common.QuantumAddress{}) && addr != expectedAddr {
+		fmt.Printf("Failed to import wallet: address mismatch after import\n")
 		return
 	}
 
@@ -2959,6 +2995,10 @@ func (c *Console) handleExport(parts []string) {
 		fmt.Printf("❌ Failed to export wallet: %v\n", err)
 		return
 	}
+	if len(privKeyBytes) != quantum.MLDSA65PrivateKeySize {
+		fmt.Printf("❌ Failed to export wallet: unexpected private key length %d bytes\n", len(privKeyBytes))
+		return
+	}
 
 	privateKeyHex := hex.EncodeToString(privKeyBytes)
 	fmt.Printf("�� Private key for %s:\n", qAddr.String())
@@ -2969,6 +3009,10 @@ func (c *Console) handleExport(parts []string) {
 			end = len(privateKeyHex)
 		}
 		fmt.Println(privateKeyHex[i:end])
+	}
+	if seed := quantum.ExtractSeedFromPrivateKey(privKeyBytes); len(seed) == 32 {
+		fmt.Println("Seed (if available):")
+		fmt.Printf("0x%s\n", hex.EncodeToString(seed))
 	}
 	fmt.Printf("⚠️ Keep this private key secure and never share it!\n")
 }
