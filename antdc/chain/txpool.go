@@ -17,8 +17,7 @@ import (
 
 "github.com/antdaza/antdchain/antdc/p2p"
 "github.com/antdaza/antdchain/antdc/tx"
-chaincommon "github.com/antdaza/antdchain/common"
-
+"github.com/antdaza/antdchain/common"
 "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -118,10 +117,10 @@ return x
 type TxPool struct {
 mu           sync.RWMutex
 txs          map[common.Hash]*tx.Tx
-bySender     map[chaincommon.QuantumAddress][]*tx.Tx
+bySender     map[common.QuantumAddress][]*tx.Tx
 submitHeight map[common.Hash]uint64
 submitTime   map[common.Hash]time.Time
-nonceTracker map[chaincommon.QuantumAddress]uint64
+nonceTracker map[common.QuantumAddress]uint64
 
 // Priority queue for pending transactions
 pendingHeap *TxHeap
@@ -147,10 +146,10 @@ heap.Init(h)
 
 return &TxPool{
 txs:          make(map[common.Hash]*tx.Tx),
-bySender:     make(map[chaincommon.QuantumAddress][]*tx.Tx),
+bySender:     make(map[common.QuantumAddress][]*tx.Tx),
 submitHeight: make(map[common.Hash]uint64),
 submitTime:   make(map[common.Hash]time.Time),
-nonceTracker: make(map[chaincommon.QuantumAddress]uint64),
+nonceTracker: make(map[common.QuantumAddress]uint64),
 pendingHeap:  h,
 
 // Default configuration
@@ -448,10 +447,10 @@ p.mu.Lock()
 defer p.mu.Unlock()
 
 p.txs = make(map[common.Hash]*tx.Tx)
-p.bySender = make(map[chaincommon.QuantumAddress][]*tx.Tx)
+p.bySender = make(map[common.QuantumAddress][]*tx.Tx)
 p.submitHeight = make(map[common.Hash]uint64)
 p.submitTime = make(map[common.Hash]time.Time)
-p.nonceTracker = make(map[chaincommon.QuantumAddress]uint64)
+p.nonceTracker = make(map[common.QuantumAddress]uint64)
 p.pendingHeap = &TxHeap{}
 heap.Init(p.pendingHeap)
 
@@ -489,7 +488,7 @@ return p.GetPending()
 }
 
 func (p *TxPool) rebuildNonceTracker() {
-p.nonceTracker = make(map[chaincommon.QuantumAddress]uint64)
+p.nonceTracker = make(map[common.QuantumAddress]uint64)
 for _, t := range p.txs {
 if t.Nonce > p.nonceTracker[t.From] {
 p.nonceTracker[t.From] = t.Nonce
@@ -821,8 +820,8 @@ func (p *TxPool) GetPendingTransactions() []*tx.Tx {
 return p.GetPending()
 }
 
-func ethToQuantumAddress(addr common.QuantumAddress) chaincommon.QuantumAddress {
-var out chaincommon.QuantumAddress
+func ethToQuantumAddress(addr common.QuantumAddress) common.QuantumAddress {
+var out common.QuantumAddress
 copy(out[:], addr.Bytes())
 return out
 }

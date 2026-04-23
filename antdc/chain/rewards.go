@@ -7,6 +7,7 @@ import (
 "errors"
 "fmt"
 "github.com/antdaza/antdchain/antdc/block"
+"github.com/antdaza/antdchain/common"
 "github.com/antdaza/antdchain/antdc/reward"
 "github.com/antdaza/antdchain/antdc/rotatingking"
 
@@ -123,13 +124,13 @@ go bc.syncRotatingKingForBlock(b.Header.Number.Uint64())
 
 log.Printf("[blockchain] Rewards distributed for block %d:", b.Header.Number.Uint64())
 log.Printf("  • Miner (%s): %s ANTD (25%%)",
-b.Header.Coinbase.Hex()[:10], formatWei(distribution.MinerReward))
+b.Header.Coinbase.String()[:10], formatWei(distribution.MinerReward))
 log.Printf("  • Main King (%s): %s ANTD (10%%)",
-distribution.MainKingAddress.Hex()[:10], formatWei(distribution.MainKingReward))
+distribution.MainKingAddress.String()[:10], formatWei(distribution.MainKingReward))
 
 if distribution.RotatingKingEligible {
 log.Printf("  • Rotating King (%s): %s ANTD (65%%)",
-distribution.RotatingKingAddress.Hex()[:10], formatWei(distribution.RotatingKingReward))
+distribution.RotatingKingAddress.String()[:10], formatWei(distribution.RotatingKingReward))
 } else {
 log.Printf("  • Rotating King: Not eligible")
 totalMainKing := new(big.Int).Add(distribution.MainKingReward, distribution.RotatingKingReward)
@@ -161,7 +162,7 @@ blockHeight := b.Header.Number.Uint64()
 blockHash := b.Hash()
 
 log.Printf("[blockchain] ✓ Block %d validated successfully:", blockHeight)
-log.Printf("   • Hash: %s", blockHash.Hex()[:12])
+log.Printf("   • Hash: %s", blockHash.String()[:12])
 log.Printf("   • Transactions: %d", len(b.Txs))
 log.Printf("   • Gas used: %d/%d", gasUsed, b.Header.GasLimit)
 
@@ -171,15 +172,15 @@ log.Printf("   • Total fees: %s ANTD", formatBalance(totalFees))
 
 log.Printf("   • Total reward: %s ANTD", formatBalance(distribution.TotalReward))
 log.Printf("   • Miner reward: %s ANTD (25%%) to %s",
-formatBalance(distribution.MinerReward), b.Header.Coinbase.Hex()[:10])
+formatBalance(distribution.MinerReward), b.Header.Coinbase.String()[:10])
 log.Printf("   • Main King reward: %s ANTD (10%%) to %s",
-formatBalance(distribution.MainKingReward), distribution.MainKingAddress.Hex()[:10])
+formatBalance(distribution.MainKingReward), distribution.MainKingAddress.String()[:10])
 
 // Better logging for rotating king status
 if distribution.RotatingKingEligible {
 log.Printf("   • Rotating King reward: %s ANTD (65%%) to %s",
 formatBalance(distribution.RotatingKingReward),
-distribution.RotatingKingAddress.Hex()[:10])
+distribution.RotatingKingAddress.String()[:10])
 
 // Log eligibility status with details
 if bc.rotatingKingManager != nil {
@@ -204,7 +205,7 @@ log.Printf("   • Rotating King: Not eligible (Main King receives rotating shar
 // ADDED: Explain why not eligible
 if bc.rotatingKingManager != nil && distribution.RotatingKingAddress != (common.QuantumAddress{}) {
 king := distribution.RotatingKingAddress
-log.Printf("   • Rotating King Address: %s", king.Hex()[:10])
+log.Printf("   • Rotating King Address: %s", king.String()[:10])
 
 // Check if address is in rotation list
 addresses := bc.rotatingKingManager.GetKingAddresses()
@@ -228,7 +229,7 @@ marker := " "
 if isCurrent {
 marker = "→"
 }
-log.Printf("      %s [%d] %s", marker, i, addr.Hex())
+log.Printf("      %s [%d] %s", marker, i, addr.String())
 }
 } else {
 log.Printf("   • ⚠️ Rotating king list is EMPTY!")

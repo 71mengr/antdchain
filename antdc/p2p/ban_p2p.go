@@ -14,6 +14,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/sirupsen/logrus"
 	"github.com/antdaza/antdchain/antdc/block"
+        "github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/antdc/checkpoints"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
 	"github.com/antdaza/antdchain/antdc/tx"

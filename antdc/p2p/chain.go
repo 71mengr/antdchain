@@ -11,6 +11,7 @@ import (
     "github.com/antdaza/antdchain/antdc/state"
     "github.com/antdaza/antdchain/antdc/tx"
     "github.com/antdaza/antdchain/antdc/reward"
+    "github.com/antdaza/antdchain/common"
 )
 
 // Chain is the interface required by P2P and TxPool

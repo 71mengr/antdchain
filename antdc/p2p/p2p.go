@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/antdaza/antdchain/antdc/block"
+        "github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/antdc/checkpoints"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
@@ -350,7 +351,7 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 
 	n.logger.Infof("BLOCK BROADCAST #%d | hash=%s | txs=%d | size=%d KB",
 		b.Header.Number.Uint64(),
-		b.Hash().Hex()[:12],
+		b.Hash().String()[:12],
 		len(b.Txs),
 		len(data)/1024,
 	)
@@ -411,7 +412,7 @@ func (n *Node) BroadcastTx(t *tx.Tx) error {
 	n.knownTxsMu.RUnlock()
 
 	if recentlyBroadcast {
-		n.logger.Debugf("Already recently broadcast tx %s, skipping", hash.Hex()[:10])
+		n.logger.Debugf("Already recently broadcast tx %s, skipping", hash.String()[:10])
 		return nil
 	}
 
@@ -434,7 +435,7 @@ func (n *Node) BroadcastTx(t *tx.Tx) error {
 	n.knownTxsMu.Unlock()
 
 	n.logger.Infof("Broadcast tx %s (nonce=%d, value=%s)",
-		hash.Hex()[:10],
+		hash.String()[:10],
 		t.Nonce,
 		t.Value.String(),
 	)
@@ -520,7 +521,7 @@ func (n *Node) handleMessages() {
 				continue
 			}
 			n.logger.Infof("Received king rotation event: %s → %s at height %d (eligible=%v)",
-				event.PreviousKing.Hex()[:8], event.NewKing.Hex()[:8], event.BlockHeight, event.Eligible)
+				event.PreviousKing.String()[:8], event.NewKing.String()[:8], event.BlockHeight, event.Eligible)
 
 			n.processMu.Lock()
 			mgr := n.chain.GetRotatingKingManager()
@@ -559,7 +560,7 @@ func (n *Node) handleMessages() {
 			}
 
 			n.logger.Infof("Received block %d | hash=%s | from=%s",
-				blk.Header.Number.Uint64(), blk.Hash().Hex()[:12], msg.GetFrom().String()[:8])
+				blk.Header.Number.Uint64(), blk.Hash().String()[:12], msg.GetFrom().String()[:8])
 
 			// If we're at height 0 and receive any block, force sync
 			currentHeight := n.currentHeight()
@@ -601,12 +602,12 @@ func (n *Node) handleMessages() {
 			n.knownTxsMu.RUnlock()
 
 			if recentlySeen {
-				n.logger.Debugf("Already recently saw tx %s, ignoring", hash.Hex()[:10])
+				n.logger.Debugf("Already recently saw tx %s, ignoring", hash.String()[:10])
 				continue
 			}
 
 			n.logger.Infof("Received tx %s from %s (nonce=%d)",
-				hash.Hex()[:10], msg.GetFrom().String()[:8], txObj.Nonce)
+				hash.String()[:10], msg.GetFrom().String()[:8], txObj.Nonce)
 
 			n.processMu.Lock()
 			err := n.chain.TxPool().AddTx(&txObj, n.chain)
@@ -634,9 +635,9 @@ func (n *Node) handleMessages() {
 					// Small delay to let the local node fully process it first
 					time.Sleep(50 * time.Millisecond)
 					if err := n.BroadcastTx(tx); err != nil {
-						n.logger.Debugf("Failed to re-broadcast tx %s: %v", tx.Hash().Hex()[:10], err)
+						n.logger.Debugf("Failed to re-broadcast tx %s: %v", tx.Hash().String()[:10], err)
 					} else {
-						n.logger.Debugf("Re-broadcasted tx %s to network", tx.Hash().Hex()[:10])
+						n.logger.Debugf("Re-broadcasted tx %s to network", tx.Hash().String()[:10])
 					}
 				}(&txObj)
 			}
@@ -1467,7 +1468,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	} else {
 		// Add ban manager with checkpoint support
 		node.IntegrateBanManagerWithCheckpoints(cp)
-		node.logger.Infof("Checkpoints initialized with genesis hash: %s", genesisHash.Hex())
+		node.logger.Infof("Checkpoints initialized with genesis hash: %s", genesisHash.String())
 	}
 
 	return node, nil
@@ -2083,7 +2084,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 	// ORPHAN CHECK: Parent not in chain
 	if !n.chain.HasBlock(blk.Header.ParentHash) {
 		n.logger.Warnf("REJECTING ORPHAN: Block %d (parent %s not found)",
-			num, blk.Header.ParentHash.Hex()[:8])
+			num, blk.Header.ParentHash.String()[:8])
 
 		// If this orphan is far ahead, we might need to sync
 		if num > currentHeight+10 {
@@ -2093,7 +2094,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 		}
 
 		return fmt.Errorf("orphan block rejected: parent %s not found",
-			blk.Header.ParentHash.Hex()[:8])
+			blk.Header.ParentHash.String()[:8])
 	}
 
 	// BLOCK EXISTS AT SAME HEIGHT (fork)
@@ -2102,7 +2103,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 			return nil // Duplicate
 		}
 		n.logger.Warnf("REJECTING FORK: Different block at height %d (ours: %s, theirs: %s)",
-			num, existing.Hash().Hex()[:8], hash.Hex()[:8])
+			num, existing.Hash().String()[:8], hash.String()[:8])
 		return fmt.Errorf("fork block rejected at height %d", num)
 	}
 
@@ -2118,7 +2119,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 
 		if parent.Hash() != blk.Header.ParentHash {
 			n.logger.Warnf("Wrong parent during sync: expected %s, got %s",
-				parent.Hash().Hex()[:8], blk.Header.ParentHash.Hex()[:8])
+				parent.Hash().String()[:8], blk.Header.ParentHash.String()[:8])
 			return fmt.Errorf("wrong parent during sync")
 		}
 
@@ -2164,7 +2165,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 	}
 
 	// Should not reach here
-	n.logger.Warnf("Unexpected block processing state: height=%d, hash=%s", num, hash.Hex()[:8])
+	n.logger.Warnf("Unexpected block processing state: height=%d, hash=%s", num, hash.String()[:8])
 	return fmt.Errorf("unexpected block state")
 }
 
@@ -2578,7 +2579,7 @@ func (n *Node) BroadcastKingRotation(event *rotatingking.KingRotation) error {
 	}
 
 	n.logger.Infof("Broadcast forced rotation: %s → %s at height %d",
-		event.PreviousKing.Hex()[:8], event.NewKing.Hex()[:8], event.BlockHeight)
+		event.PreviousKing.String()[:8], event.NewKing.String()[:8], event.BlockHeight)
 	return nil
 }
 
@@ -3460,7 +3461,7 @@ func (n *Node) sendKingConfig(peerID peer.ID, config rotatingking.RotatingKingCo
 
 	// Log the addresses being sent
 	for i, addr := range config.KingAddresses {
-		n.logger.Debugf("  Address %d: %s", i+1, addr.Hex())
+		n.logger.Debugf("  Address %d: %s", i+1, addr.String())
 	}
 
 	data, err := json.Marshal(configMsg)
@@ -3570,7 +3571,7 @@ func (n *Node) processKingRotation(rotation *rotatingking.KingRotation, source p
 	}
 
 	n.logger.Infof("Received king rotation: %s → %s at block %d",
-		rotation.PreviousKing.Hex()[:8], rotation.NewKing.Hex()[:8], rotation.BlockHeight)
+		rotation.PreviousKing.String()[:8], rotation.NewKing.String()[:8], rotation.BlockHeight)
 
 	n.processMu.Lock()
 	mgr := n.chain.GetRotatingKingManager()
@@ -3601,40 +3602,42 @@ func (n *Node) parseKingConfig(configData map[string]interface{}) (rotatingking.
 	// Parse KingAddresses - try different possible field names
 	var addresses []common.QuantumAddress
 
-	// Try "KingAddresses" (capital)
+	// Helper to parse a list of address strings
+	parseAddressList := func(addrsData []interface{}) {
+		for _, addr := range addrsData {
+			addrStr, ok := addr.(string)
+			if !ok {
+				continue
+			}
+			quantumAddr, err := common.ParseQuantumAddress(addrStr)
+			if err != nil {
+				n.logger.Warnf("Skipping invalid quantum address in config: %s (%v)", addrStr, err)
+				continue
+			}
+			addresses = append(addresses, quantumAddr)
+		}
+	}
+
+	// Try different field names
 	if addrsData, ok := configData["KingAddresses"].([]interface{}); ok {
 		n.logger.Debugf("Found KingAddresses array with %d items", len(addrsData))
-		for _, addr := range addrsData {
-			if addrStr, ok := addr.(string); ok {
-				addresses = append(addresses, common.ParseQuantumAddress(addrStr))
-			}
-		}
+		parseAddressList(addrsData)
 	} else if addrsData, ok := configData["kingAddresses"].([]interface{}); ok {
-		// Try "kingAddresses" (lowercase)
 		n.logger.Debugf("Found kingAddresses array with %d items", len(addrsData))
-		for _, addr := range addrsData {
-			if addrStr, ok := addr.(string); ok {
-				addresses = append(addresses, common.ParseQuantumAddress(addrStr))
-			}
-		}
+		parseAddressList(addrsData)
 	} else if addrsData, ok := configData["addresses"].([]interface{}); ok {
-		// Try "addresses"
 		n.logger.Debugf("Found addresses array with %d items", len(addrsData))
-		for _, addr := range addrsData {
-			if addrStr, ok := addr.(string); ok {
-				addresses = append(addresses, common.ParseQuantumAddress(addrStr))
-			}
-		}
+		parseAddressList(addrsData)
 	} else {
 		n.logger.Warn("No addresses array found in config data")
-		// Try to see what fields are available
+		// Debug: show available fields
 		for key, value := range configData {
 			n.logger.Debugf("Key: %s, Type: %T, Value: %v", key, value, value)
 		}
 	}
 
 	config.KingAddresses = addresses
-	n.logger.Debugf("Parsed %d addresses", len(addresses))
+	n.logger.Debugf("Parsed %d valid addresses", len(addresses))
 
 	// Parse RotationInterval
 	if interval, ok := configData["RotationInterval"].(float64); ok {
@@ -3915,7 +3918,7 @@ func (n *Node) processKingRotationEvent(event *KingRotationEvent, source peer.ID
 	}
 
 	n.logger.Infof("Received king rotation event: %s → %s at height %d (eligible=%v)",
-		event.PreviousKing.Hex()[:8], event.NewKing.Hex()[:8], event.BlockHeight, event.Eligible)
+		event.PreviousKing.String()[:8], event.NewKing.String()[:8], event.BlockHeight, event.Eligible)
 
 	n.processMu.Lock()
 	mgr := n.chain.GetRotatingKingManager()
@@ -4258,7 +4261,7 @@ func (n *Node) DebugKingConfiguration() {
 		addresses := manager.GetKingAddresses()
 		n.logger.Infof("DEBUG: GetKingAddresses() returned %d addresses:", len(addresses))
 		for i, addr := range addresses {
-			n.logger.Infof("  [%d] %s", i, addr.Hex())
+			n.logger.Infof("  [%d] %s", i, addr.String())
 		}
 	}
 
@@ -4268,7 +4271,7 @@ func (n *Node) DebugKingConfiguration() {
 		config := configManager.GetConfig()
 		n.logger.Infof("DEBUG: GetConfig() returned %d addresses:", len(config.KingAddresses))
 		for i, addr := range config.KingAddresses {
-			n.logger.Infof("  [%d] %s", i, addr.Hex())
+			n.logger.Infof("  [%d] %s", i, addr.String())
 		}
 	}
 }
@@ -4290,8 +4293,8 @@ func (n *Node) CheckRotationHistory() {
 		for i, rot := range history {
 			n.logger.Infof("  [%d] Block %d: %s -> %s",
 				i, rot.BlockHeight,
-				rot.PreviousKing.Hex()[:8],
-				rot.NewKing.Hex()[:8])
+				rot.PreviousKing.String()[:8],
+				rot.NewKing.String()[:8])
 		}
 	}
 }
@@ -4369,7 +4372,7 @@ func (n *Node) CheckCurrentConfig() {
 	n.logger.Info("=== CURRENT KING CONFIGURATION ===")
 	n.logger.Infof("Addresses: %d", len(config.KingAddresses))
 	for i, addr := range config.KingAddresses {
-		n.logger.Infof("  [%d] %s", i+1, addr.Hex())
+		n.logger.Infof("  [%d] %s", i+1, addr.String())
 	}
 	n.logger.Infof("Rotation Interval: %d", config.RotationInterval)
 	n.logger.Infof("Activation Delay: %d", config.ActivationDelay)
@@ -4987,8 +4990,8 @@ func (n *Node) BroadcastRotationProposal(proposal *rotatingking.RotationProposal
 		logrus.Fields{
 			"proposalId":  proposal.ProposalID[:8],
 			"height":      proposal.BlockHeight,
-			"currentKing": proposal.CurrentKing.Hex()[:8],
-			"nextKing":    proposal.NextKing.Hex()[:8],
+			"currentKing": proposal.CurrentKing.String()[:8],
+			"nextKing":    proposal.NextKing.String()[:8],
 		})
 
 	data, err := json.Marshal(proposal)
@@ -5132,18 +5135,24 @@ func (n *Node) BroadcastRotation(event *rotatingking.KingRotationBroadcast) erro
 }
 
 func (n *Node) isImportantAddress(addr common.QuantumAddress) bool {
-	// Define important addresses (main king, known validators, etc.)
-	importantAddresses := []common.QuantumAddress{
-		common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"), // Main King
-		// Add other important addresses HERE
-	}
+    // Pre-parse important addresses
+    mainKing, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+    if err != nil {
+        // Fallback to zero address if parsing fails (should never happen with valid string)
+        mainKing = common.QuantumAddress{}
+    }
 
-	for _, important := range importantAddresses {
-		if addr == important {
-			return true
-		}
-	}
-	return false
+    importantAddresses := []common.QuantumAddress{
+        mainKing,
+        // Add other important addresses here
+    }
+
+    for _, important := range importantAddresses {
+        if addr == important {
+            return true
+        }
+    }
+    return false
 }
 
 func (n *Node) addressInList(addr common.QuantumAddress, list []common.QuantumAddress) bool {
@@ -5166,7 +5175,7 @@ func (n *Node) checkAndSyncKingConfig() {
 	localKing := mgr.GetCurrentKing()
 
 	n.logger.Infof("🔍 Checking rotating king config: %d addresses, current king: %s",
-		localCount, localKing.Hex()[:10])
+		localCount, localKing.String()[:10])
 
 	// Check if we have the minimum expected configuration
 	if localCount < 2 {
@@ -5311,7 +5320,7 @@ func (n *Node) healthCheckRotatingKingConfig() {
 
 	if !kingFound && currentKing != (common.QuantumAddress{}) {
 		n.logger.Warnf("⚠️ CONFIGURATION HEALTH: Current king %s not in address list",
-			currentKing.Hex()[:10])
+			currentKing.String()[:10])
 		// Reset to first address
 		if len(currentList) > 0 {
 			mgr.ForceRotateToAddress(currentList[0], "health-check-repair")
@@ -5321,7 +5330,7 @@ func (n *Node) healthCheckRotatingKingConfig() {
 	// Broadcast our config if healthy
 	if len(currentList) >= 2 && kingFound {
 		n.logger.Debugf("✅ Configuration healthy: %d addresses, king=%s",
-			len(currentList), currentKing.Hex()[:10])
+			len(currentList), currentKing.String()[:10])
 		// Periodically broadcast to help other nodes
 		n.BroadcastCurrentKingConfig()
 	}

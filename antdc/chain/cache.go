@@ -7,8 +7,8 @@ import (
     "github.com/hashicorp/golang-lru/v2/simplelru"
     "github.com/prometheus/client_golang/prometheus"
     "github.com/prometheus/client_golang/prometheus/promauto"
-
     "github.com/antdaza/antdchain/antdc/block"
+    "github.com/antdaza/antdchain/common"
 )
 
 var (

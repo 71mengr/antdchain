@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
+        "github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/antdc/chain/db"
 	"github.com/antdaza/antdchain/antdc/checkpoints"
 	"github.com/antdaza/antdchain/antdc/monitoring"
@@ -99,7 +100,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		latest, err = chainDb.ReadBlockByHash(headHash)
 		if err != nil {
 			chainDb.Close()
-			return nil, fmt.Errorf("failed to read head block %s: %w", headHash.Hex(), err)
+			return nil, fmt.Errorf("failed to read head block %s: %w", headHash.String(), err)
 		}
 		if latest == nil {
 			log.Printf("[blockchain] Head block not found, will create genesis")
@@ -116,7 +117,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 				}
 				latest = repairedTip
 				log.Printf("[blockchain] Using alternative tip: height=%d, hash=%s",
-					latest.Header.Number.Uint64(), latest.Hash().Hex())
+					latest.Header.Number.Uint64(), latest.Hash().String())
 			}
 		}
 	}
@@ -151,10 +152,10 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		latest = genesis
 		genesisCreated = true
 
-		log.Printf("[blockchain] Genesis block created and stored: %s", genesis.Hash().Hex())
+		log.Printf("[blockchain] Genesis block created and stored: %s", genesis.Hash().String())
 	} else {
 		log.Printf("[blockchain] Existing chain tip loaded: height=%d, hash=%s",
-			latest.Header.Number.Uint64(), latest.Hash().Hex())
+			latest.Header.Number.Uint64(), latest.Hash().String())
 	}
 
 	// ====================
@@ -393,8 +394,8 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		currentRoot := stateDb.Root()
 		if latest.Header.Root != currentRoot {
 			log.Printf("[blockchain] Warning: State root mismatch!")
-			log.Printf("[blockchain]   Latest block root: %s", latest.Header.Root.Hex())
-			log.Printf("[blockchain]   Current state root: %s", currentRoot.Hex())
+			log.Printf("[blockchain]   Latest block root: %s", latest.Header.Root.String())
+			log.Printf("[blockchain]   Current state root: %s", currentRoot.String())
 			log.Printf("[blockchain]   Will attempt limited state repair if needed")
 
 			// Don't auto-rebuild - just log warning
@@ -410,10 +411,10 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	initTime := time.Since(initStart)
 	log.Printf("[blockchain] Blockchain initialized successfully in %v!", initTime)
 	log.Printf("[blockchain]   Chain height:    %d", bc.GetChainHeight())
-	log.Printf("[blockchain]   State root:      %s", stateDb.Root().Hex())
-	log.Printf("[blockchain]   Tip hash:        %s", latest.Hash().Hex())
+	log.Printf("[blockchain]   State root:      %s", stateDb.Root().String())
+	log.Printf("[blockchain]   Tip hash:        %s", latest.Hash().String())
 	log.Printf("[blockchain]   PoS difficulty:  %s", posEngine.GetDifficulty().String())
-	log.Printf("[blockchain]   Miner address:   %s", miner.Hex())
+	log.Printf("[blockchain]   Miner address:   %s", miner.String())
 	log.Printf("[blockchain]   Is Main King:    %v", isMainKingNode)
 	log.Printf("[blockchain]   Cache size:      %d blocks", DefaultCacheSize)
 
@@ -604,7 +605,7 @@ func (bc *Blockchain) rebuildStateFromHeight(fromHeight, toHeight uint64) error 
 	rebuildTime := time.Since(startTime)
 	log.Printf("[blockchain] State rebuild completed in %v (%d blocks replayed)",
 		rebuildTime, blocksReplayed)
-	log.Printf("[blockchain] New state root: %s", bc.state.Root().Hex())
+	log.Printf("[blockchain] New state root: %s", bc.state.Root().String())
 
 	return nil
 }
@@ -760,7 +761,7 @@ func migrateLegacyJSONBlocksToDB(chainDb *db.ChainDB, statePath string) (int, er
 			// Write to database
 			if err := chainDb.WriteBlock(blk); err != nil {
 				log.Printf("[migration] Warning: Failed to write block %s: %v", 
-					legacyBlock.Header.Hash().Hex(), err)
+					legacyBlock.Header.Hash().String(), err)
 				continue
 			}
 

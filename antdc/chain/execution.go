@@ -15,7 +15,7 @@ import (
 "github.com/antdaza/antdchain/antdc/block"
 "github.com/antdaza/antdchain/antdc/tx"
 "github.com/antdaza/antdchain/antdc/vm"
-chaincommon "github.com/antdaza/antdchain/common"
+"github.com/antdaza/antdchain/common"
 
 )
 
@@ -70,7 +70,7 @@ return txs
 }
 
 // Group transactions by sender
-txsBySender := make(map[chaincommon.QuantumAddress][]*tx.Tx)
+txsBySender := make(map[common.QuantumAddress][]*tx.Tx)
 for _, tx := range txs {
 if tx != nil {
 txsBySender[tx.From] = append(txsBySender[tx.From], tx)
@@ -169,7 +169,7 @@ func (bc *Blockchain) applyBlockTransactions(b *block.Block) error {
 // Apply all transactions in the block
 for _, tx := range b.Txs {
 if err := bc.applyTransaction(tx); err != nil {
-return fmt.Errorf("failed to apply tx %s: %w", tx.Hash().Hex(), err)
+return fmt.Errorf("failed to apply tx %s: %w", tx.Hash().String(), err)
 }
 }
 return nil
@@ -237,7 +237,7 @@ contractAddr := common.BytesToQuantumAddress(contractAddrBytes[:20])
 
 // Check if contract already exists
 if state.GetBalance(contractAddr).Sign() > 0 || len(state.GetCode(contractAddr)) > 0 {
-return fmt.Errorf("contract address already exists: %s", contractAddr.Hex())
+return fmt.Errorf("contract address already exists: %s", contractAddr.String())
 }
 
 // Set initial balance
@@ -249,7 +249,7 @@ state.SetCode(contractAddr, t.Data)
 }
 
 log.Printf("[blockchain] Contract created: %s by %s with value %s",
-contractAddr.Hex()[:10], t.From.String()[:10], formatWei(t.Value))
+contractAddr.String()[:10], t.From.String()[:10], formatWei(t.Value))
 
 return nil
 }
@@ -278,14 +278,14 @@ currentBalance := state.GetBalance(to)
 newBalance := new(big.Int).Add(currentBalance, t.Value)
 state.SetBalance(to, newBalance)
 log.Printf("[blockchain] Contract call to %s: value %s, data %d bytes",
-to.Hex()[:10], formatWei(t.Value), len(t.Data))
+to.String()[:10], formatWei(t.Value), len(t.Data))
 } else {
 // Data to non-contract
 currentBalance := state.GetBalance(to)
 newBalance := new(big.Int).Add(currentBalance, t.Value)
 state.SetBalance(to, newBalance)
 log.Printf("[blockchain] Data tx to EOA %s: value %s, data %d bytes",
-to.Hex()[:10], formatWei(t.Value), len(t.Data))
+to.String()[:10], formatWei(t.Value), len(t.Data))
 }
 } else {
 // Simple transfer
@@ -293,7 +293,7 @@ currentBalance := state.GetBalance(to)
 newBalance := new(big.Int).Add(currentBalance, t.Value)
 state.SetBalance(to, newBalance)
 log.Printf("[blockchain] Transfer: %s → %s: %s ANTD",
-t.From.String()[:10], to.Hex()[:10], formatWei(t.Value))
+t.From.String()[:10], to.String()[:10], formatWei(t.Value))
 }
 
 return nil

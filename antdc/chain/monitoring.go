@@ -6,6 +6,7 @@ package chain
 import (
 "fmt"
 "github.com/antdaza/antdchain/antdc/block"
+"github.com/antdaza/antdchain/common"
 "github.com/antdaza/antdchain/antdc/monitoring"
 "github.com/antdaza/antdchain/antdc/state"
 "github.com/antdaza/antdchain/antdc/tx"

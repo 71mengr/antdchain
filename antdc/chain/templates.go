@@ -14,6 +14,7 @@ import (
 "time"
 
 "github.com/antdaza/antdchain/antdc/block"
+"github.com/antdaza/antdchain/common"
 "github.com/antdaza/antdchain/antdc/state"
 "github.com/antdaza/antdchain/antdc/tx"
 "github.com/antdaza/antdchain/antdc/vm"
@@ -74,8 +75,8 @@ continue // Skip invalid transactions
 
 txEntry := map[string]interface{}{
 "data":    hex.EncodeToString(data),
-"txid":    t.Hash().Hex(),
-"hash":    t.Hash().Hex(),
+"txid":    t.Hash().String(),
+"hash":    t.Hash().String(),
 "depends": []int{},
 "fee":     fee.Int64(),
 "sigops":  1,
@@ -105,7 +106,7 @@ parentHeight := parent.Header.Number.Uint64()
 
 return &BlockTemplate{
 Height:         parentHeight + 1,
-PrevHash:       parent.Hash().Hex(),
+PrevHash:       parent.Hash().String(),
 CoinbaseValue:  coinbaseValue.String(),
 Target:         targetHex,
 CurTime:        now,
@@ -118,7 +119,7 @@ NonceRange:     "00000000ffffffff",
 SigOpLimit:     80000,
 SizeLimit:      4000000,
 WeightLimit:    4000000,
-LongPollID:     parent.Hash().Hex() + fmt.Sprintf("%d", len(transactions)),
+LongPollID:     parent.Hash().String() + fmt.Sprintf("%d", len(transactions)),
 DefaultWitness: "",
 Capabilities:   []string{"proposal"},
 Rules:          []string{},
@@ -166,7 +167,7 @@ parent.Header.Number.Uint64()+1,
 currentTime,
 )
 if err != nil || !eligible {
-return nil, nil, fmt.Errorf("miner %s not eligible: %w", miner.Hex(), err)
+return nil, nil, fmt.Errorf("miner %s not eligible: %w", miner.String(), err)
 }
 }
 
@@ -222,7 +223,7 @@ log.Printf("[blockchain] Including %d well-propagated transaction(s) in block", 
 extraData := []byte("ANTDChain-PoS")
 if bc.rotatingKingManager != nil {
 if rotatingKing := bc.rotatingKingManager.GetCurrentKing(); rotatingKing != (common.QuantumAddress{}) {
-extraData = []byte(fmt.Sprintf("ANTDChain-PoS|rk=%s", rotatingKing.Hex()))
+extraData = []byte(fmt.Sprintf("ANTDChain-PoS|rk=%s", rotatingKing.String()))
 }
 }
 

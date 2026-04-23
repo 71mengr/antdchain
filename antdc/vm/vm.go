@@ -7,7 +7,7 @@ import (
 "context"
 
 "errors"
-
+"fmt"
 "math/big"
 
 "github.com/antdaza/antdchain/antdc/state"
@@ -125,23 +125,23 @@ return v.s.Root().Bytes(), gasUsed, nil
 }
 
 // parseInstructions converts transaction data to instructions (simplified).
-
 func parseInstructions(data []byte) ([]Instruction, error) {
+    // TODO: implement a proper bytecode parser.
+    // Currently returns a hardcoded example for testing.
 
-// Simplified: assume data is a list of opcodes and args (e.g., "PUSH 100 TRANSFER 0x... 50")
+    // Parse the example address safely
+    addr, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+    if err != nil {
+        return nil, fmt.Errorf("invalid hardcoded quantum address: %w", err)
+    }
 
-//TODO: use a proper bytecode format
-
-instr := []Instruction{
-
-{Opcode: "PUSH", Args: []interface{}{big.NewInt(100)}},
-
-{Opcode: "TRANSFER", Args: []interface{}{common.ParseQuantumAddress("0x123..."), big.NewInt(50)}},
+    instr := []Instruction{
+        {Opcode: "PUSH", Args: []interface{}{big.NewInt(100)}},
+        {Opcode: "TRANSFER", Args: []interface{}{addr, big.NewInt(50)}},
+    }
+    return instr, nil
 }
 
-return instr, nil
-
-}
 
 // executeInstruction executes a single instruction.
 

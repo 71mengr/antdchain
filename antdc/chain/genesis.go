@@ -14,7 +14,7 @@ import (
 "github.com/antdaza/antdchain/antdc/block"
 "github.com/antdaza/antdchain/antdc/pow"
 "github.com/antdaza/antdchain/antdc/state"
-chaincommon "github.com/antdaza/antdchain/common"
+"github.com/antdaza/antdchain/common"
 
 )
 
@@ -32,14 +32,14 @@ func EnsureGenesisBlock(statePath string, miner common.QuantumAddress) (*block.B
 // Try to load existing genesis block
 genesis, err := loadGenesisBlock(statePath)
 if err == nil && genesis != nil {
-log.Printf("[genesis] Using existing genesis block: %s", genesis.Hash().Hex())
+log.Printf("[genesis] Using existing genesis block: %s", genesis.Hash().String())
 return genesis, nil
 }
 
 // No valid genesis found → create fixed one
 log.Printf("[genesis] No valid genesis found — creating fixed genesis block")
 
-parsedMainKing, err := chaincommon.ParseQuantumAddress(GenesisMainKing)
+parsedMainKing, err := common.ParseQuantumAddress(GenesisMainKing)
 if err != nil {
 return nil, fmt.Errorf("invalid genesis main king quantum address: %w", err)
 }
@@ -99,11 +99,11 @@ balanceAntd := new(big.Float).Quo(balanceFloat, big.NewFloat(1e18))
 // Verify hash consistency
 genesisHash := genesis.Hash()
 log.Printf("[genesis] Created FIXED genesis block:")
-log.Printf("   Hash:      %s", genesisHash.Hex())
-log.Printf("   Miner:     %s", mainKing.Hex())
+log.Printf("   Hash:      %s", genesisHash.String())
+log.Printf("   Miner:     %s", mainKing.String())
 log.Printf("   Balance:   %.0f ANTD", balanceAntd)
 log.Printf("   Timestamp: %d", header.Time)
-log.Printf("   StateRoot: %s", s.Root().Hex())
+log.Printf("   StateRoot: %s", s.Root().String())
 log.Printf("   Difficulty: %s", header.Difficulty.String())
 
 return genesis, nil
@@ -149,13 +149,13 @@ return err
 // Save as clean JSON
 data := map[string]interface{}{
 "block": genesis,
-"hash":  genesis.Hash().Hex(),
+"hash":  genesis.Hash().String(),
 "info": map[string]interface{}{
-"miner":      genesis.Header.Coinbase.Hex(),
+"miner":      genesis.Header.Coinbase.String(),
 "timestamp":  genesis.Header.Time,
 "difficulty": genesis.Header.Difficulty.String(),
 "extra":      string(genesis.Header.Extra),
-"stateRoot":  genesis.Header.Root.Hex(),
+"stateRoot":  genesis.Header.Root.String(),
 },
 }
 

@@ -12,6 +12,7 @@ import (
 "time"
 
 "github.com/antdaza/antdchain/antdc/block"
+"github.com/antdaza/antdchain/common"
 "github.com/antdaza/antdchain/antdc/reward"
 "github.com/antdaza/antdchain/antdc/rotatingking"
 
@@ -397,10 +398,10 @@ if method.IsValid() {
 // Call with the default address
 params := []reflect.Value{reflect.ValueOf(defaultAddress)}
 method.Call(params)
-log.Printf("✅ Rotating King system initialized with address: %s", defaultAddress.Hex())
+log.Printf("✅ Rotating King system initialized with address: %s", defaultAddress.String())
 return
 }
 }
 
-log.Printf("⚠️  Could not initialize rotating king with address %s", defaultAddress.Hex())
+log.Printf("⚠️  Could not initialize rotating king with address %s", defaultAddress.String())
 }

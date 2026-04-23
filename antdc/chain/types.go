@@ -6,7 +6,7 @@ package chain
 import (
     "math/big"
     "github.com/antdaza/antdchain/antdc/rotatingking"
-
+    "github.com/antdaza/antdchain/common"
     )
 // RotatingKingManager interface for managing rotating kings
 type RotatingKingManager interface {

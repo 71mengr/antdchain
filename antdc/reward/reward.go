@@ -492,11 +492,10 @@ rkManager.RecordRewardDistribution(currentRotatingKing, rotReward, blockNumber)
 // === AUTO-REGISTER / UPDATE STAKERS IN PoS ENGINE ===
 // This is the core of the new design: anyone with ≥1M ANTD becomes a block producer automatically
 
-posEngine.AutoRegisterIfEligible(miner, statedb.GetBalance(miner))
-posEngine.AutoRegisterIfEligible(rd.mainKing, statedb.GetBalance(rd.mainKing))
-
+posEngine.AutoRegisterIfEligible(miner, statedb.GetBalance(miner), nil)
+posEngine.AutoRegisterIfEligible(rd.mainKing, statedb.GetBalance(rd.mainKing), nil)
 if rotatingEligible {
-posEngine.AutoRegisterIfEligible(currentRotatingKing, statedb.GetBalance(currentRotatingKing))
+    posEngine.AutoRegisterIfEligible(currentRotatingKing, statedb.GetBalance(currentRotatingKing), nil)
 }
 
 return &RewardDistribution{

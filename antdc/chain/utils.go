@@ -10,6 +10,7 @@ import (
     "strings"
 
     "github.com/antdaza/antdchain/antdc/block"
+    "github.com/antdaza/antdchain/common"
     "github.com/antdaza/antdchain/antdc/tx"
 )
 
