@@ -2960,9 +2960,16 @@ func (c *Console) handleExport(parts []string) {
 		return
 	}
 
-        privateKey := "0x" + hex.EncodeToString(privKeyBytes)
-
-        fmt.Printf("�� Private key for %s: %s\n", qAddr.String(), privateKey)
+	privateKeyHex := hex.EncodeToString(privKeyBytes)
+	fmt.Printf("�� Private key for %s:\n", qAddr.String())
+	fmt.Println("0x")
+	for i := 0; i < len(privateKeyHex); i += 128 {
+		end := i + 128
+		if end > len(privateKeyHex) {
+			end = len(privateKeyHex)
+		}
+		fmt.Println(privateKeyHex[i:end])
+	}
 	fmt.Printf("⚠️ Keep this private key secure and never share it!\n")
 }
 
