@@ -3,6 +3,7 @@
 // for more information.
 
 package chain
+
 import (
 	"context"
 	"encoding/binary"
@@ -18,7 +19,6 @@ import (
 	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
-        "github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/antdc/chain/db"
 	"github.com/antdaza/antdchain/antdc/checkpoints"
 	"github.com/antdaza/antdchain/antdc/monitoring"
@@ -28,6 +28,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/vm"
+	"github.com/antdaza/antdchain/common"
 	chaincommon "github.com/antdaza/antdchain/common"
 
 	"github.com/hashicorp/golang-lru"
@@ -73,7 +74,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	log.Printf("[blockchain] Initializing chain database...")
 	chainDbPath := filepath.Join(statePath, "chain")
 	if err := os.MkdirAll(chainDbPath, os.ModePerm); err != nil {
-	    return nil, fmt.Errorf("failed to create chain db directory: %w", err)
+		return nil, fmt.Errorf("failed to create chain db directory: %w", err)
 	}
 	chainDb, err := db.NewChainDB(statePath)
 	if err != nil {
@@ -193,11 +194,11 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	log.Printf("[blockchain] Creating blockchain instance...")
 
 	bc := &Blockchain{
-		db:                  chainDb,
-		state:               stateDb,
-		txPool:              nil,
-		pow:                 nil,
-//		checkpoints:         checkpointMgr,
+		db:     chainDb,
+		state:  stateDb,
+		txPool: nil,
+		pow:    nil,
+		//		checkpoints:         checkpointMgr,
 		statePath:           statePath,
 		rewardDistributor:   nil,
 		governance:          nil,
@@ -217,7 +218,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		reorgDepth:          atomic.Uint64{},
 		ancientStore:        nil,
 		finalizedHeight:     atomic.Uint64{},
-                orphanBlocks: make(map[common.Hash]*orphanBlock),
+		orphanBlocks:        make(map[common.Hash]*orphanBlock),
 	}
 
 	// Set atomic fields
@@ -323,17 +324,23 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	// ====================
 	// INITIALIZE MAIN KING
 	// ====================
-	mainKingQuantum, err := chaincommon.NewQuantumAddressFromBytes(common.ParseQuantumAddress(GenesisMainKing).Bytes())
+	mainKingParsed, err := common.ParseQuantumAddress(GenesisMainKing)
+	if err != nil {
+		chainDb.Close()
+		stateDb.Close()
+		return nil, fmt.Errorf("invalid main king address: %w", err)
+	}
+	mainKingQuantum, err := chaincommon.NewQuantumAddressFromBytes(mainKingParsed.Bytes())
 	if err != nil {
 		chainDb.Close()
 		stateDb.Close()
 		return nil, fmt.Errorf("invalid quantum-resistant main king address: %w", err)
 	}
 	mainKing := common.QuantumAddress(mainKingQuantum)
-	bc.Pow().AutoRegisterIfEligible(mainKing, bc.state.GetBalance(mainKing))
+	bc.Pow().AutoRegisterIfEligible(mainKing, bc.state.GetBalance(mainKing), nil)
 	log.Printf("[blockchain] Main King auto-registered: %s", mainKingQuantum.String())
 	if miner != (common.QuantumAddress{}) && miner != mainKing {
-		bc.Pow().AutoRegisterIfEligible(miner, bc.state.GetBalance(miner))
+		bc.Pow().AutoRegisterIfEligible(miner, bc.state.GetBalance(miner), nil)
 		log.Printf("[blockchain] Local miner auto-checked for registration: %s", minerQuantum.String())
 	}
 	// ====================
@@ -373,12 +380,12 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	}
 
 	isMainKingNode := miner == mainKing
-	
+
 	// Create monitoring adapter that implements both interfaces
 	monitoringAdapter := &blockchainAdapter{
 		Blockchain: bc,
 	}
-	
+
 	bc.monitor = monitoring.NewSupplyMonitor(monitoringAdapter, cfg, isMainKingNode)
 
 	// Start monitoring in background
@@ -721,7 +728,7 @@ func migrateLegacyJSONBlocksToDB(chainDb *db.ChainDB, statePath string) (int, er
 	}
 
 	log.Printf("[migration] Scanning legacy blocks in %s", blocksDir)
-	
+
 	files, err := os.ReadDir(blocksDir)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read blocks directory: %w", err)
@@ -760,13 +767,13 @@ func migrateLegacyJSONBlocksToDB(chainDb *db.ChainDB, statePath string) (int, er
 
 			// Write to database
 			if err := chainDb.WriteBlock(blk); err != nil {
-				log.Printf("[migration] Warning: Failed to write block %s: %v", 
+				log.Printf("[migration] Warning: Failed to write block %s: %v",
 					legacyBlock.Header.Hash().String(), err)
 				continue
 			}
 
 			migrated++
-			
+
 			// Log progress
 			if migrated%100 == 0 {
 				log.Printf("[migration] Migrated %d blocks...", migrated)
