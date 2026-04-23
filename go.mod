@@ -3,7 +3,7 @@ module github.com/antdaza/antdchain
 go 1.24.11
 
 require (
-	github.com/cloudflare/circl v1.6.1
+	github.com/cloudflare/circl v1.6.3
 	github.com/ethereum/go-ethereum v1.16.7
 	github.com/gorilla/mux v1.8.0
 	github.com/ipfs/go-cid v0.4.1
@@ -15,7 +15,6 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/urfave/cli/v2 v2.27.7
-	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/crypto v0.36.0
 	golang.org/x/term v0.37.0
 )

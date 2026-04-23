@@ -1,8 +1,6 @@
-// Copyright © 2025 ANTDChain Contributors
-// Licensed under the MIT License (MIT). See LICENSE in the repository root
-// for more information.
 
 package keystore
+
 import (
 	"crypto/rand"
 	"encoding/json"
@@ -11,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-        "time"
+	"time"
 
 	"github.com/antdaza/antdchain/antdc/crypto/quantum"
 	"github.com/antdaza/antdchain/common"
@@ -22,9 +20,7 @@ const (
 	keyTypeMLDSA65  = "ml-dsa-65"
 )
 
-// NewAccount generates a new ML‑DSA‑65 key pair, encrypts it with the password,
-// and saves the keystore file in the specified directory.
-// Returns the 0q quantum address.
+// NewAccount generates a new ML‑DSA‑65 keypair, encrypts it, and saves the keystore file.
 func NewAccount(password, keystoreDir string) (common.QuantumAddress, error) {
 	if password == "" {
 		return common.QuantumAddress{}, errors.New("password cannot be empty")
@@ -46,15 +42,14 @@ func NewAccount(password, keystoreDir string) (common.QuantumAddress, error) {
 	if err := saveAccount(addr, privKey, password, keystoreDir); err != nil {
 		return common.QuantumAddress{}, err
 	}
-
 	return addr, nil
 }
 
-// ImportAccount imports an existing private key (as raw bytes), encrypts it,
-// and saves the keystore file.
+// ImportAccount imports a packed 4032‑byte ML‑DSA‑65 private key, encrypts it, and saves the keystore.
 func ImportAccount(privKey []byte, password, keystoreDir string) (common.QuantumAddress, error) {
-	if len(privKey) == 0 {
-		return common.QuantumAddress{}, errors.New("private key is empty")
+	// Only accept the full packed private key
+	if len(privKey) != quantum.MLDSA65PrivateKeySize {
+		return common.QuantumAddress{}, fmt.Errorf("invalid private key length: expected %d bytes, got %d", quantum.MLDSA65PrivateKeySize, len(privKey))
 	}
 	if password == "" {
 		return common.QuantumAddress{}, errors.New("password cannot be empty")
@@ -63,14 +58,10 @@ func ImportAccount(privKey []byte, password, keystoreDir string) (common.Quantum
 		return common.QuantumAddress{}, fmt.Errorf("failed to create keystore directory: %w", err)
 	}
 
-	privKey, err := quantum.NormalizePrivateKey(privKey)
-	if err != nil {
-		return common.QuantumAddress{}, fmt.Errorf("invalid private key: %w", err)
-	}
-
+	// Validate the key by extracting the public part
 	pubKey, err := quantum.DerivePublicKey(privKey)
 	if err != nil {
-		return common.QuantumAddress{}, fmt.Errorf("failed to derive public key: %w", err)
+		return common.QuantumAddress{}, fmt.Errorf("invalid ML‑DSA‑65 private key: %w", err)
 	}
 
 	addr, err := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
@@ -78,7 +69,7 @@ func ImportAccount(privKey []byte, password, keystoreDir string) (common.Quantum
 		return common.QuantumAddress{}, fmt.Errorf("failed to derive address: %w", err)
 	}
 
-	// Check if an account with this address already exists
+	// Avoid accidental overwrites
 	if fileExists(filepath.Join(keystoreDir, accountFileName(addr))) {
 		return common.QuantumAddress{}, fmt.Errorf("account %s already exists", addr.String())
 	}
@@ -86,11 +77,10 @@ func ImportAccount(privKey []byte, password, keystoreDir string) (common.Quantum
 	if err := saveAccount(addr, privKey, password, keystoreDir); err != nil {
 		return common.QuantumAddress{}, err
 	}
-
 	return addr, nil
 }
 
-// Unlock decrypts the keystore file for the given address and returns the raw private key.
+// Unlock decrypts the keystore file for the given address and returns the raw private key bytes (4032 bytes).
 func Unlock(addr common.QuantumAddress, password, keystoreDir string) ([]byte, error) {
 	if password == "" {
 		return nil, errors.New("password cannot be empty")
@@ -114,11 +104,11 @@ func Unlock(addr common.QuantumAddress, password, keystoreDir string) ([]byte, e
 	return decryptKey(&ks, password)
 }
 
-// ListAccounts returns all quantum addresses found in the keystore directory.
+// ListAccounts returns all quantum addresses in the keystore directory.
 func ListAccounts(keystoreDir string) ([]common.QuantumAddress, error) {
 	entries, err := os.ReadDir(keystoreDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to read keystore directory: %w", err)
@@ -139,10 +129,8 @@ func ListAccounts(keystoreDir string) ([]common.QuantumAddress, error) {
 		if len(parts) < 3 {
 			continue
 		}
-		addrStr := parts[2]
-		addr, err := common.ParseQuantumAddress(addrStr)
+		addr, err := common.ParseQuantumAddress(parts[2])
 		if err != nil {
-			// Log but continue; might be an invalid file
 			continue
 		}
 		addresses = append(addresses, addr)
@@ -159,8 +147,7 @@ func DeleteAccount(addr common.QuantumAddress, keystoreDir string) error {
 	return os.Remove(path)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal functions
+// ─── Internal helpers ──────────────────────────────────────────────────────
 
 func saveAccount(addr common.QuantumAddress, privKey []byte, password, dir string) error {
 	ks, err := encryptKey(privKey, addr, password)
@@ -174,7 +161,6 @@ func saveAccount(addr common.QuantumAddress, privKey []byte, password, dir strin
 	}
 
 	path := filepath.Join(dir, accountFileName(addr))
-	// Write with restricted permissions (owner read/write only)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write keystore file: %w", err)
 	}
@@ -233,7 +219,7 @@ func decryptKey(ks *KeyStore, password string) ([]byte, error) {
 		return nil, fmt.Errorf("unsupported keystore version: %d", ks.Version)
 	}
 
-	// Extract KDF parameters
+	// Extract salt
 	saltHex, ok := ks.Crypto.KDFParams["salt"].(string)
 	if !ok {
 		return nil, errors.New("missing salt in kdfparams")
@@ -243,7 +229,6 @@ func decryptKey(ks *KeyStore, password string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid salt: %w", err)
 	}
 
-	// Derive key
 	derivedKey, err := deriveKey(password, salt)
 	if err != nil {
 		return nil, err
@@ -268,7 +253,7 @@ func decryptKey(ks *KeyStore, password string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Verify the private key matches the address (optional but recommended)
+	// Verify the key corresponds to the address stored in the file
 	pubKey, err := quantum.DerivePublicKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive public key: %w", err)
@@ -284,8 +269,7 @@ func decryptKey(ks *KeyStore, password string) ([]byte, error) {
 	return privKey, nil
 }
 
-// findKeystoreFile locates the keystore file for a given address.
-// It scans the directory for files ending with the address.
+// findKeystoreFile picks the newest file for the given address.
 func findKeystoreFile(addr common.QuantumAddress, dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -304,7 +288,7 @@ func findKeystoreFile(addr common.QuantumAddress, dir string) (string, error) {
 		if !strings.HasPrefix(name, "UTC--") || !strings.HasSuffix(name, addrStr) {
 			continue
 		}
-		// Extract timestamp: "UTC--2006-01-02T15-04-05.000000000Z--..."
+
 		parts := strings.SplitN(name, "--", 3)
 		if len(parts) < 3 {
 			continue
