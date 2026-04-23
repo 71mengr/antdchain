@@ -197,7 +197,7 @@ func runWalletCLI(c *cli.Context) error {
     // Create a minimal blockchain (just for wallet operations)
     var bc *chain.Blockchain
     statePath := filepath.Join(walletDir, "state")
-    genesisAddr := common.ParseQuantumAddress("0x0000000000000000000000000000000000000000")
+    genesisAddr, _ := common.ParseQuantumAddress("0x0000000000000000000000000000000000000000")
 
     // Only try to load blockchain if state exists
     if _, err := os.Stat(statePath); err == nil {
