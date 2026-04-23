@@ -2921,6 +2921,10 @@ func (c *Console) handleImport(parts []string) {
 		fmt.Printf("Failed to import wallet: private key is empty\n")
 		return
 	}
+	if len(privKeyBytes) != 32 && len(privKeyBytes) != 4032 {
+		fmt.Printf("Failed to import wallet: invalid private key length: got %d bytes; expected 32-byte seed (64 hex chars) or 4032-byte packed ML-DSA-65 private key (8064 hex chars)\n", len(privKeyBytes))
+		return
+	}
 
 	addr, err := qkeystore.ImportAccount(privKeyBytes, password, c.node.GetKeystoreDir())
 	if err != nil {
