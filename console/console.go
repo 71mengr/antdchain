@@ -232,7 +232,7 @@ func (c *RPCClient) GetBalance(address common.QuantumAddress) (*big.Int, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := c.client.CallContext(ctx, &result, "eth_getBalance", address.Hex(), "latest")
+	err := c.client.CallContext(ctx, &result, "eth_getBalance", address.String(), "latest")
 	if err != nil {
 		return nil, fmt.Errorf("RPC call failed: %w", err)
 	}
@@ -247,7 +247,7 @@ func (c *RPCClient) GetNonce(address common.QuantumAddress) (uint64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := c.client.CallContext(ctx, &result, "eth_getTransactionCount", address.Hex(), "latest")
+	err := c.client.CallContext(ctx, &result, "eth_getTransactionCount", address.String(), "latest")
 	if err != nil {
 		return 0, fmt.Errorf("RPC call failed: %w", err)
 	}
@@ -582,7 +582,7 @@ func (c *Console) handleRKAddressRPC() {
 
 	fmt.Println("👑 CURRENT ROTATING KING")
 	fmt.Println("════════════════════════════════════════════════")
-	fmt.Printf("Address: %s\n", addr.Hex())
+	fmt.Printf("Address: %s\n", addr.String())
 	fmt.Printf("Balance: %s ANTD\n", formatBalance(balance))
 	fmt.Println("════════════════════════════════════════════════")
 }
@@ -619,7 +619,7 @@ func (c *Console) handleRKNextRPC() {
 
 	fmt.Println("⏭️ NEXT ROTATING KING")
 	fmt.Println("════════════════════════════════════════════════")
-	fmt.Printf("Address: %s\n", nextKing.Hex())
+	fmt.Printf("Address: %s\n", nextKing.String())
 	fmt.Printf("Balance: %s ANTD\n", formatBalance(balance))
 	fmt.Println("════════════════════════════════════════════════")
 }
@@ -637,9 +637,9 @@ func (c *Console) handleRKListRPC() {
 	for i, addr := range addresses {
 		balance, err := c.rpcClient.GetBalance(addr)
 		if err != nil {
-			fmt.Printf("%d. %s\n", i+1, addr.Hex())
+			fmt.Printf("%d. %s\n", i+1, addr.String())
 		} else {
-			fmt.Printf("%d. %s - %s ANTD\n", i+1, addr.Hex(), formatBalance(balance))
+			fmt.Printf("%d. %s - %s ANTD\n", i+1, addr.String(), formatBalance(balance))
 		}
 	}
 
@@ -725,7 +725,7 @@ func handleNonce(rpcClient *RPCClient, addrStr string) {
 		return
 	}
 
-	fmt.Printf("🔢 Nonce for %s: %d\n", addr.Hex(), nonce)
+	fmt.Printf("🔢 Nonce for %s: %d\n", addr.String(), nonce)
 }
 
 func handleGasPrice(rpcClient *RPCClient) {
@@ -753,7 +753,7 @@ func (c *Console) handleRemoteBalance(rpcClient *RPCClient, parts []string) {
 		return
 	}
 
-	fmt.Printf("💰 Balance for %s: %s ANTD\n", addr.Hex(), formatBalance(balance))
+	fmt.Printf("💰 Balance for %s: %s ANTD\n", addr.String(), formatBalance(balance))
 }
 
 func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
@@ -821,12 +821,12 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 	}
 
 	if !found {
-		fmt.Printf("❌ Wallet %s not found in local keystore\n", fromAddr.Hex())
+		fmt.Printf("❌ Wallet %s not found in local keystore\n", fromAddr.String())
 		return
 	}
 
 	// Get password
-	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", fromAddr.Hex()))
+	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", fromAddr.String()))
 	if err != nil {
 		fmt.Printf("❌ Failed to read password: %v\n", err)
 		return
@@ -879,7 +879,7 @@ func (c *Console) handleRemoteSend(rpcClient *RPCClient, parts []string) {
 		return
 	}
 
-	fmt.Printf("✅ Transaction sent: %s\n", txHash.Hex())
+	fmt.Printf("✅ Transaction sent: %s\n", txHash.String())
 }
 
 func (c *Console) handleRemoteStatus(rpcClient *RPCClient) {
@@ -906,7 +906,7 @@ func (c *Console) handleAddress() {
 
 	fmt.Println("Your wallet addresses:")
 	for i, acc := range accounts {
-		fmt.Printf("  %d. %s\n", i+1, acc.Address.Hex())
+		fmt.Printf("  %d. %s\n", i+1, acc.Address.String())
 	}
 }
 
@@ -1039,7 +1039,7 @@ func (n *Node) rebroadcastStaleTransactions(maxAge time.Duration) {
 	for _, tx := range pendingTxs {
 		if err := n.p2pNode.BroadcastTx(tx); err != nil {
 			log.Printf("[AutoRebroadcast] Failed to rebroadcast tx %s: %v",
-				tx.Hash().Hex()[:10], err)
+				tx.Hash().String()[:10], err)
 		} else {
 			count++
 		}
@@ -1158,7 +1158,7 @@ func (n *Node) SetMinerWallet(w MinerWallet) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.minerWallet = w
-	log.Printf("Miner wallet updated to: %s", w.Address().Hex())
+	log.Printf("Miner wallet updated to: %s", w.Address().String())
 }
 
 // GetDataDir returns the platform-appropriate data directory
@@ -1434,19 +1434,19 @@ func (c *Console) Start() {
 			}
 
 			if c.checkStakerRegistration(addr) {
-				fmt.Printf("✅ %s is registered as a staker\n", addr.Hex())
+				fmt.Printf("✅ %s is registered as a staker\n", addr.String())
 			} else {
 				c.node.mu.RLock()
 				balance := c.node.blockchain.State().GetBalance(addr)
 				c.node.mu.RUnlock()
 
 				minStake := new(big.Int).Mul(big.NewInt(1000000), big.NewInt(1e18))
-				fmt.Printf("❌ %s is NOT registered as a staker\n", addr.Hex())
+				fmt.Printf("❌ %s is NOT registered as a staker\n", addr.String())
 				fmt.Printf("   Balance: %s ANTD\n", formatBalance(balance))
 				fmt.Printf("   Required: %s ANTD (1,000,000 ANTD)\n", formatBalance(minStake))
 
 				if balance.Cmp(minStake) >= 0 {
-					fmt.Printf("💡 Use: register-worker %s 1000000\n", addr.Hex())
+					fmt.Printf("💡 Use: register-worker %s 1000000\n", addr.String())
 				} else {
 					fmt.Printf("💡 Need more ANTD to register\n")
 				}
@@ -1562,7 +1562,7 @@ func (c *Console) handleAddressStats(parts []string) {
 	balance := c.node.blockchain.State().GetBalance(addr)
 	c.node.mu.RUnlock()
 
-	fmt.Printf("📈 Address Statistics for %s:\n", addr.Hex())
+	fmt.Printf("📈 Address Statistics for %s:\n", addr.String())
 	fmt.Printf("  Balance: %s ANTD\n", formatBalance(balance))
 	fmt.Printf("  Transaction Count: <not available>\n")
 	fmt.Printf("  Is Main King: <not available>\n")
@@ -1592,17 +1592,17 @@ func (c *Console) handleSetAddress(parts []string) {
 	}
 
 	if !found {
-		fmt.Printf("Wallet %s not found in keystore\n", addr.Hex())
+		fmt.Printf("Wallet %s not found in keystore\n", addr.String())
 		fmt.Printf("Available wallets:\n")
 		for _, acc := range c.node.Keystore().Accounts() {
-			fmt.Printf("  %s\n", acc.Address.Hex())
+			fmt.Printf("  %s\n", acc.Address.String())
 		}
 		return
 	}
 
 	c.node.SetMinerWalletAddress(addr)
 
-	fmt.Printf("Mining address set to: %s\n", addr.Hex())
+	fmt.Printf("Mining address set to: %s\n", addr.String())
 	fmt.Printf("Keystore file: %s\n", file)
 
 	c.node.mu.RLock()
@@ -1698,7 +1698,7 @@ func (c *Console) handleSend(parts []string) {
 	balance := state.GetBalance(fromAddr)
 	c.node.mu.RUnlock()
 
-	fmt.Printf("\n📊 Current State for %s:\n", fromAddr.Hex())
+	fmt.Printf("\n📊 Current State for %s:\n", fromAddr.String())
 	fmt.Printf("   Balance: %s ANTD\n", formatBalance(balance))
 	fmt.Printf("   Nonce:   %d\n", stateNonce)
 
@@ -1726,7 +1726,7 @@ func (c *Console) handleSend(parts []string) {
 				if common.BytesToQuantumAddress(pendingTx.From.Bytes()) == fromAddr && pendingTx.Nonce == stateNonce {
 					suggestedNonce = stateNonce
 					replaceTxHash = pendingTx.Hash()
-					nonceSource = fmt.Sprintf("replace %s", replaceTxHash.Hex()[:8])
+					nonceSource = fmt.Sprintf("replace %s", replaceTxHash.String()[:8])
 					break
 				}
 			}
@@ -1737,7 +1737,7 @@ func (c *Console) handleSend(parts []string) {
 				for _, pendingTx := range pending {
 					if common.BytesToQuantumAddress(pendingTx.From.Bytes()) == fromAddr {
 						fmt.Printf("   - Nonce %d: %s\n",
-							pendingTx.Nonce, pendingTx.Hash().Hex()[:8])
+							pendingTx.Nonce, pendingTx.Hash().String()[:8])
 					}
 				}
 				return
@@ -1794,8 +1794,8 @@ func (c *Console) handleSend(parts []string) {
 
 	// TRANSACTION SUMMARY
 	fmt.Printf("\n📝 TRANSACTION SUMMARY\n")
-	fmt.Printf("   From:           %s\n", fromAddr.Hex())
-	fmt.Printf("   To:             %s\n", toAddr.Hex())
+	fmt.Printf("   From:           %s\n", fromAddr.String())
+	fmt.Printf("   To:             %s\n", toAddr.String())
 	fmt.Printf("   Amount:         %s ANTD\n", formatBalance(amount))
 	fmt.Printf("   Nonce:          %d (%s)\n", suggestedNonce, nonceSource)
 	fmt.Printf("   Gas Limit:      %d\n", gasLimit)
@@ -1807,7 +1807,7 @@ func (c *Console) handleSend(parts []string) {
 		formatBalance(new(big.Int).Sub(balance, totalCost)))
 
 	if replaceMode {
-		fmt.Printf("   Mode:           🔄 REPLACE %s\n", replaceTxHash.Hex()[:8])
+		fmt.Printf("   Mode:           🔄 REPLACE %s\n", replaceTxHash.String()[:8])
 	}
 
 	if !c.confirmAction("\nSend this transaction?") {
@@ -1825,17 +1825,17 @@ func (c *Console) handleSend(parts []string) {
 	}
 
 	if !found {
-		fmt.Printf("❌ Wallet %s not found in keystore\n", fromAddr.Hex())
+		fmt.Printf("❌ Wallet %s not found in keystore\n", fromAddr.String())
 		fmt.Printf("   Keystore directory: %s\n", c.node.GetKeystoreDir())
 		fmt.Printf("   Available wallets:\n")
 		for _, acc := range c.node.Keystore().Accounts() {
-			fmt.Printf("   - %s\n", acc.Address.Hex())
+			fmt.Printf("   - %s\n", acc.Address.String())
 		}
 		return
 	}
 
 	// DECRYPT PRIVATE KEY
-	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", fromAddr.Hex()))
+	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", fromAddr.String()))
 	if err != nil {
 		fmt.Printf("❌ Failed to read password: %v\n", err)
 		return
@@ -1883,7 +1883,7 @@ func (c *Console) handleSend(parts []string) {
 	}
 
 	txHash := txm.Hash()
-	fmt.Printf("✅ Transaction created: %s\n", txHash.Hex())
+	fmt.Printf("✅ Transaction created: %s\n", txHash.String())
 
 	// REMOVE REPLACED TRANSACTION
 	if replaceMode && replaceTxHash != (common.Hash{}) {
@@ -1891,7 +1891,7 @@ func (c *Console) handleSend(parts []string) {
 		txPool := c.node.blockchain.TxPool()
 		if chainTxPool, ok := txPool.(*chain.TxPool); ok {
 			chainTxPool.RemoveTx(replaceTxHash)
-			fmt.Printf("🗑️  Removed old transaction: %s\n", replaceTxHash.Hex()[:8])
+			fmt.Printf("🗑️  Removed old transaction: %s\n", replaceTxHash.String()[:8])
 		}
 		c.node.mu.Unlock()
 	}
@@ -1950,9 +1950,9 @@ func (c *Console) handleSend(parts []string) {
 	// FINAL CONFIRMATION
 	fmt.Printf("\n🎉 TRANSACTION SUCCESSFULLY CREATED!\n")
 	fmt.Printf("══════════════════════════════════════════════════════════\n")
-	fmt.Printf("   Transaction Hash: %s\n", txHash.Hex())
-	fmt.Printf("   From:            %s\n", fromAddr.Hex())
-	fmt.Printf("   To:              %s\n", toAddr.Hex())
+	fmt.Printf("   Transaction Hash: %s\n", txHash.String())
+	fmt.Printf("   From:            %s\n", fromAddr.String())
+	fmt.Printf("   To:              %s\n", toAddr.String())
 	fmt.Printf("   Amount:          %s ANTD\n", formatBalance(amount))
 	fmt.Printf("   Nonce:           %d\n", txm.Nonce)
 	fmt.Printf("   Gas Price:       %s Gwei\n",
@@ -1972,11 +1972,11 @@ func (c *Console) handleSend(parts []string) {
 
 	// Show next steps
 	fmt.Printf("\n📋 Next Steps:\n")
-	fmt.Printf("   1. Check status:      gettx %s\n", txHash.Hex())
+	fmt.Printf("   1. Check status:      gettx %s\n", txHash.String())
 	fmt.Printf("   2. View pool:         txpool\n")
-	fmt.Printf("   3. Check balance:     balance %s\n", fromAddr.Hex())
+	fmt.Printf("   3. Check balance:     balance %s\n", fromAddr.String())
 	if replaceMode {
-		fmt.Printf("   4. Old tx removed:   cleartx %s\n", replaceTxHash.Hex())
+		fmt.Printf("   4. Old tx removed:   cleartx %s\n", replaceTxHash.String())
 	}
 
 	// Verify transaction is in pool
@@ -2019,7 +2019,7 @@ func (c *Console) handleCheckTx(parts []string) {
 		return
 	}
 
-	fmt.Printf("\n🔍 Checking transaction: %s\n", txHash.Hex())
+	fmt.Printf("\n🔍 Checking transaction: %s\n", txHash.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
 
 	found := false
@@ -2035,7 +2035,7 @@ func (c *Console) handleCheckTx(parts []string) {
 		for _, tx := range block.Txs {
 			if tx.Hash() == txHash {
 				fmt.Printf("📦 CONFIRMED in block %d\n", i)
-				fmt.Printf("   Block:     %s\n", block.Hash().Hex()[:8])
+				fmt.Printf("   Block:     %s\n", block.Hash().String()[:8])
 				fmt.Printf("   Height:    %d\n", i)
 				fmt.Printf("   From:      %s\n", tx.From.String())
 				if tx.To != nil {
@@ -2115,7 +2115,7 @@ func (c *Console) handleTxDebug(parts []string) {
 
 	addr := common.ParseQuantumAddress(parts[1])
 
-	fmt.Printf("\n🔧 Transaction Debug for %s\n", addr.Hex())
+	fmt.Printf("\n🔧 Transaction Debug for %s\n", addr.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
 
 	c.node.mu.RLock()
@@ -2159,7 +2159,7 @@ func (c *Console) handleTxDebug(parts []string) {
 			}
 
 			fmt.Printf("  %d. Nonce %d [%s]\n", i+1, tx.Nonce, status)
-			fmt.Printf("     Hash:   %s\n", tx.Hash().Hex()[:8])
+			fmt.Printf("     Hash:   %s\n", tx.Hash().String()[:8])
 			if tx.To != nil {
 				fmt.Printf("     To:     %s\n", tx.To.String())
 			}
@@ -2193,7 +2193,7 @@ func (c *Console) handleListWorkers() {
 	// Check if this miner is registered as a staker
 	minerAddress := c.node.miningState.GetMinerAddress()
 	if minerAddress != (common.QuantumAddress{}) {
-		fmt.Printf("\nCurrent Miner: %s\n", minerAddress.Hex())
+		fmt.Printf("\nCurrent Miner: %s\n", minerAddress.String())
 
 		// Get balance
 		c.node.mu.RLock()
@@ -2222,7 +2222,7 @@ func (c *Console) handleWorkerInfo(addressStr string) {
 	isCurrentMiner := minerAddress == address
 
 	fmt.Println("=== Worker Information ===")
-	fmt.Printf("Address: %s\n", address.Hex())
+	fmt.Printf("Address: %s\n", address.String())
 
 	// Get balance
 	c.node.mu.RLock()
@@ -2302,7 +2302,7 @@ func (c *Console) handleStartMining() {
 			balance := c.node.blockchain.State().GetBalance(acc.Address)
 			c.node.mu.RUnlock()
 			fmt.Printf("   %d. %s → %s ANTD\n",
-				i+1, acc.Address.Hex(), formatBalance(balance))
+				i+1, acc.Address.String(), formatBalance(balance))
 		}
 		return
 	}
@@ -2310,7 +2310,7 @@ func (c *Console) handleStartMining() {
 	// Check if private key is loaded
 	stats := c.node.miningState.GetMiningStatistics()
 	if hasKey, ok := stats["has_private_key"].(bool); ok && !hasKey {
-		fmt.Printf("⚠️  WARNING: No private key loaded for %s\n", minerAddress.Hex())
+		fmt.Printf("⚠️  WARNING: No private key loaded for %s\n", minerAddress.String())
 		fmt.Println("   Blocks cannot be signed without private key!")
 		fmt.Println("   Use: unlock <address> to load private key from keystore")
 
@@ -2340,12 +2340,12 @@ func (c *Console) handleStartMining() {
 	} else {
 		fmt.Printf("❌ Address not registered and insufficient balance\n")
 		fmt.Printf("   Need 1,000,000 ANTD, have %s ANTD\n", formatBalance(balance))
-		fmt.Printf("💡 Use: register-worker %s 1000000\n", minerAddress.Hex())
+		fmt.Printf("💡 Use: register-worker %s 1000000\n", minerAddress.String())
 		return
 	}
 
 	if registered {
-		fmt.Printf("✅ Starting PoS mining with address: %s\n", minerAddress.Hex())
+		fmt.Printf("✅ Starting PoS mining with address: %s\n", minerAddress.String())
 		mining.StartPosMining(c.node.blockchain, c.node.miningState, minerAddress, c.node.p2pNode)
 		fmt.Println("✓ PoS mining started. Waiting for your turn to mine blocks...")
 	}
@@ -2390,7 +2390,7 @@ func (c *Console) handleDebugTransactionFlow(parts []string) {
 
 	fromAddr := common.ParseQuantumAddress(parts[1])
 
-	fmt.Printf("\n🔍 Debug Transaction Flow for %s\n", fromAddr.Hex())
+	fmt.Printf("\n🔍 Debug Transaction Flow for %s\n", fromAddr.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
 
 	// Get state
@@ -2423,7 +2423,7 @@ func (c *Console) handleDebugTransactionFlow(parts []string) {
 		})
 
 		for _, tx := range pendingFromThis {
-			fmt.Printf("  • Nonce: %d, Hash: %s\n", tx.Nonce, tx.Hash().Hex()[:8])
+			fmt.Printf("  • Nonce: %d, Hash: %s\n", tx.Nonce, tx.Hash().String()[:8])
 		}
 	}
 
@@ -2436,7 +2436,7 @@ func (c *Console) handleDebugTransactionFlow(parts []string) {
 	fmt.Printf("\nNext Nonce Calculation:\n")
 	fmt.Printf("  State nonce: %d\n", stateNonce)
 
-	fmt.Printf("\n💡 Send a test transaction with: send %s 0x0000... 0.01\n", fromAddr.Hex())
+	fmt.Printf("\n💡 Send a test transaction with: send %s 0x0000... 0.01\n", fromAddr.String())
 }
 
 // Fix the GetSubmitTime call in handleTxPool
@@ -2479,7 +2479,7 @@ func (c *Console) handleTxPool(parts []string) {
 
 		// Get nonce information
 		stateNonce := c.node.blockchain.State().GetNonce(addr)
-		fmt.Printf("%d. Address: %s\n", addressNum, addr.Hex())
+		fmt.Printf("%d. Address: %s\n", addressNum, addr.String())
 		fmt.Printf("   State nonce: %d | Pending txs: %d\n", stateNonce, len(txs))
 
 		for i, transaction := range txs {
@@ -2491,7 +2491,7 @@ func (c *Console) handleTxPool(parts []string) {
 			}
 
 			fmt.Printf("   ┌─ TX %d: %s\n", i+1, status)
-			fmt.Printf("   │  Hash:    %s\n", transaction.Hash().Hex())
+			fmt.Printf("   │  Hash:    %s\n", transaction.Hash().String())
 			if transaction.To != nil {
 				fmt.Printf("   │  To:      %s\n", transaction.To.String())
 			} else {
@@ -2576,21 +2576,21 @@ func (c *Console) handleClearTx(parts []string) {
 	inBlock, blockNum := c.isTxInBlock(txHash)
 	if inBlock {
 		fmt.Printf("❌ Transaction %s is in block %d and cannot be removed\n",
-			txHash.Hex()[:8], blockNum)
+			txHash.String()[:8], blockNum)
 		return
 	}
 
 	c.node.mu.Lock()
 	defer c.node.mu.Unlock()
 
-	fmt.Printf("🔄 Attempting to remove transaction %s from pool...\n", txHash.Hex())
+	fmt.Printf("🔄 Attempting to remove transaction %s from pool...\n", txHash.String())
 
 	// Try to remove from pool
 	txPool := c.node.blockchain.TxPool()
 
 	if chainTxPool, ok := txPool.(*chain.TxPool); ok {
 		chainTxPool.RemoveTx(txHash)
-		fmt.Printf("✅ Transaction %s removed from pool\n", txHash.Hex())
+		fmt.Printf("✅ Transaction %s removed from pool\n", txHash.String())
 	} else {
 		fmt.Printf("❌ Cannot remove transaction - unsupported pool type\n")
 	}
@@ -2603,7 +2603,7 @@ func (c *Console) handleGetTx(parts []string) {
 	}
 
 	txHash := common.HexToHash(parts[1])
-	fmt.Printf("\n🔍 Transaction Details: %s\n", txHash.Hex())
+	fmt.Printf("\n🔍 Transaction Details: %s\n", txHash.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
 
 	found := false
@@ -2619,7 +2619,7 @@ func (c *Console) handleGetTx(parts []string) {
 		for _, transaction := range block.Txs {
 			if transaction.Hash() == txHash {
 				fmt.Printf("📦 Found in block %d\n", i)
-				fmt.Printf("   Block hash: %s\n", block.Hash().Hex()[:8])
+				fmt.Printf("   Block hash: %s\n", block.Hash().String()[:8])
 				fmt.Printf("   From: %s\n", transaction.From.String())
 				if transaction.To != nil {
 					fmt.Printf("   To: %s\n", transaction.To.String())
@@ -2692,7 +2692,7 @@ func (c *Console) handleSendDebug(parts []string) {
 
 	fromAddr := common.ParseQuantumAddress(parts[1])
 
-	fmt.Printf("\n🔧 Debug Send for address %s\n", fromAddr.Hex())
+	fmt.Printf("\n🔧 Debug Send for address %s\n", fromAddr.String())
 	fmt.Printf("════════════════════════════════════════════════\n")
 
 	// Get current state
@@ -2733,7 +2733,7 @@ func (c *Console) handleSendDebug(parts []string) {
 			}
 
 			fmt.Printf("  %d. Nonce: %d %s (Hash: %s)\n",
-				i+1, tx.Nonce, status, tx.Hash().Hex()[:8])
+				i+1, tx.Nonce, status, tx.Hash().String()[:8])
 		}
 	}
 
@@ -2743,7 +2743,7 @@ func (c *Console) handleSendDebug(parts []string) {
 	fmt.Printf("  Mining enabled: %v\n", c.node.miningState.IsEnabled())
 
 	fmt.Printf("\n💡 Test command:\n")
-	fmt.Printf("  send %s 0x0000...0000 0.01\n", fromAddr.Hex())
+	fmt.Printf("  send %s 0x0000...0000 0.01\n", fromAddr.String())
 }
 
 // GetUnlockedPrivateKey – safe, works with any go-ethereum version
@@ -2993,14 +2993,14 @@ func (c *Console) handleGetBlockInfo(parts []string) {
 		return
 	}
 	fmt.Printf("Block %d:\n", blockNumber)
-	fmt.Printf("  Hash: %s\n", blk.Hash().Hex())
+	fmt.Printf("  Hash: %s\n", blk.Hash().String())
 	fmt.Printf("  Timestamp: %d\n", blk.Header.Time)
 	if blk.Header.Difficulty != nil {
 		fmt.Printf("  Difficulty: %s\n", blk.Header.Difficulty.String())
 	}
 	fmt.Printf("  Gas Used: %d / %d\n", blk.Header.GasUsed, blk.Header.GasLimit)
 	fmt.Printf("  Transactions: %d\n", len(blk.Txs))
-	fmt.Printf("  Miner: %s\n", blk.Header.Coinbase.Hex())
+	fmt.Printf("  Miner: %s\n", blk.Header.Coinbase.String())
 }
 
 func (c *Console) handleLock(parts []string) {
@@ -3025,7 +3025,7 @@ func (c *Console) handleUnlock(parts []string) {
 	addr := common.ParseQuantumAddress(parts[1])
 
 	// Read password
-	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", addr.Hex()))
+	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", addr.String()))
 	if err != nil {
 		fmt.Printf("❌ Failed to read password: %v\n", err)
 		return
@@ -3052,10 +3052,10 @@ func (c *Console) handleUnlock(parts []string) {
 		}
 
 		if keyFile == "" {
-			fmt.Printf("❌ Wallet %s not found in keystore\n", addr.Hex())
+			fmt.Printf("❌ Wallet %s not found in keystore\n", addr.String())
 			fmt.Println("   Available wallets:")
 			for _, acc := range c.node.Keystore().Accounts() {
-				fmt.Printf("   • %s\n", acc.Address.Hex())
+				fmt.Printf("   • %s\n", acc.Address.String())
 			}
 			return
 		}
@@ -3066,7 +3066,7 @@ func (c *Console) handleUnlock(parts []string) {
 			return
 		}
 
-		fmt.Printf("✅ Wallet %s unlocked successfully!\n", addr.Hex())
+		fmt.Printf("✅ Wallet %s unlocked successfully!\n", addr.String())
 		fmt.Printf("   Private key loaded from: %s\n", filepath.Base(keyFile))
 	}
 }
@@ -3115,7 +3115,7 @@ func (c *Console) handleStatus() {
 		fmt.Printf("  Miner Address    : <not set>\n")
 		fmt.Println("     → Use 'setaddress <your-wallet>' to receive mining rewards")
 	} else {
-		fmt.Printf("  Miner Address    : %s\n", rewardAddr.Hex())
+		fmt.Printf("  Miner Address    : %s\n", rewardAddr.String())
 		c.node.mu.RLock()
 		balance := c.node.blockchain.State().GetBalance(rewardAddr)
 		c.node.mu.RUnlock()
@@ -3173,7 +3173,7 @@ func (c *Console) handleDebugChain() {
 		if blk == nil {
 			break
 		}
-		fmt.Printf("Block %d: Hash=%s, ParentHash=%s\n", i, blk.Hash().Hex(), blk.Header.ParentHash.Hex())
+		fmt.Printf("Block %d: Hash=%s, ParentHash=%s\n", i, blk.Hash().String(), blk.Header.ParentHash.String())
 	}
 }
 
@@ -3405,7 +3405,7 @@ func (c *Console) handleDebugTx(parts []string) {
 	c.node.mu.RLock()
 	defer c.node.mu.RUnlock()
 
-	fmt.Printf("🔍 Searching for transaction %s\n", txHash.Hex())
+	fmt.Printf("🔍 Searching for transaction %s\n", txHash.String())
 
 	// Check if transaction exists in any block
 	found := false
@@ -3416,7 +3416,7 @@ func (c *Console) handleDebugTx(parts []string) {
 		}
 		for _, transaction := range blk.Txs {
 			if transaction.Hash() == txHash {
-				fmt.Printf("📦 Transaction %s found in block %d\n", txHash.Hex(), i)
+				fmt.Printf("📦 Transaction %s found in block %d\n", txHash.String(), i)
 				fmt.Printf("   From: %s\n", transaction.From.String())
 				if transaction.To != nil {
 					fmt.Printf("   To: %s\n", transaction.To.String())
@@ -3445,7 +3445,7 @@ func (c *Console) handleDebugTx(parts []string) {
 	}
 
 	if !found {
-		fmt.Printf("❌ Transaction %s not found in any block\n", txHash.Hex())
+		fmt.Printf("❌ Transaction %s not found in any block\n", txHash.String())
 		fmt.Printf("💡 Note: Transaction pool inspection is currently limited\n")
 	}
 }
@@ -3677,7 +3677,7 @@ func (c *Console) handleRKAddress(rkManager reward.RotatingKingManager) {
 
 	fmt.Println("👑 CURRENT ROTATING KING")
 	fmt.Println("════════════════════════════════════════════════")
-	fmt.Printf("Address:       %s\n", currentKing.Hex())
+	fmt.Printf("Address:       %s\n", currentKing.String())
 	fmt.Printf("Balance:       %s ANTD\n", formatBalance(balance))
 	fmt.Printf("Blocks Mined:  <not available>\n")
 	fmt.Printf("Block Height:  %d\n", height)
@@ -3761,7 +3761,7 @@ func (c *Console) handleRKNext(rkManager reward.RotatingKingManager) {
 
 	fmt.Println("⏭️ NEXT ROTATING KING")
 	fmt.Println("════════════════════════════════════════════════")
-	fmt.Printf("Address:           %s\n", nextKing.Hex())
+	fmt.Printf("Address:           %s\n", nextKing.String())
 	fmt.Printf("Balance:           %s ANTD\n", formatBalance(balance))
 	fmt.Printf("Blocks Mined:      <not available>\n")
 	fmt.Printf("Becomes King At:   Block %d\n", nextRotation)
@@ -3810,7 +3810,7 @@ func (c *Console) handleRKList(rkManager reward.RotatingKingManager) {
 			status = "⚜️ MAIN KING"
 		}
 
-		fmt.Printf("%d. %s\n", i+1, addr.Hex())
+		fmt.Printf("%d. %s\n", i+1, addr.String())
 		if status != "" {
 			fmt.Printf("   [%s]\n", status)
 		}
@@ -3873,8 +3873,8 @@ func (c *Console) handleRKHistory(rkManager reward.RotatingKingManager, limit in
 		fmt.Printf("  Time:       %s (%s ago)\n",
 			rotation.Timestamp.Format("2006-01-02 15:04:05"),
 			age)
-		fmt.Printf("  From:       %s\n", rotation.PreviousKing.Hex())
-		fmt.Printf("  To:         %s\n", rotation.NewKing.Hex())
+		fmt.Printf("  From:       %s\n", rotation.PreviousKing.String())
+		fmt.Printf("  To:         %s\n", rotation.NewKing.String())
 
 		if rotation.Reward != nil && rotation.Reward.Sign() > 0 {
 			fmt.Printf("  Reward:     %s ANTD\n", formatBalance(rotation.Reward))
@@ -3917,7 +3917,7 @@ func (c *Console) handleRKRotate(rkManager reward.RotatingKingManager, index int
 	if index == -1 {
 		targetIndex = (currentIndex + 1) % len(addresses)
 		targetAddr = addresses[targetIndex]
-		fmt.Printf("Rotating to next king: %s (#%d)\n", targetAddr.Hex(), targetIndex+1)
+		fmt.Printf("Rotating to next king: %s (#%d)\n", targetAddr.String(), targetIndex+1)
 	} else {
 		if index < 0 || index >= len(addresses) {
 			fmt.Printf("❌ Invalid index %d. Valid range: 0-%d\n", index, len(addresses)-1)
@@ -3925,7 +3925,7 @@ func (c *Console) handleRKRotate(rkManager reward.RotatingKingManager, index int
 		}
 		targetIndex = index
 		targetAddr = addresses[targetIndex]
-		fmt.Printf("Forcing rotation to: %s (#%d)\n", targetAddr.Hex(), targetIndex+1)
+		fmt.Printf("Forcing rotation to: %s (#%d)\n", targetAddr.String(), targetIndex+1)
 	}
 
 	if !c.confirmAction("Confirm force rotation? (will be persisted and broadcast to network)") {
@@ -3947,7 +3947,7 @@ func (c *Console) handleRKRotate(rkManager reward.RotatingKingManager, index int
 		return
 	}
 
-	fmt.Printf("✅ Force rotation successful: now serving %s\n", targetAddr.Hex())
+	fmt.Printf("✅ Force rotation successful: now serving %s\n", targetAddr.String())
 
 	// Broadcast via P2P
 	if err := c.broadcastKingRotation(previousKing, targetAddr, reason); err != nil {
@@ -3973,8 +3973,8 @@ func (c *Console) handleRKRotate(rkManager reward.RotatingKingManager, index int
 	}
 
 	// Final status
-	fmt.Printf("\n👑 New Current King: %s\n", targetAddr.Hex())
-	fmt.Printf("   From: %s\n", previousKing.Hex())
+	fmt.Printf("\n👑 New Current King: %s\n", targetAddr.String())
+	fmt.Printf("   From: %s\n", previousKing.String())
 	fmt.Printf("   Reason: %s\n", reason)
 	fmt.Printf("   Block Height: %d\n", currentHeight)
 	fmt.Printf("   Broadcast: %v\n", c.node.p2pNode != nil)
@@ -4039,7 +4039,7 @@ func (n *Node) SaveKingListToDB(addresses []common.QuantumAddress, height uint64
 		"addresses":  addresses,
 		"height":     height,
 		"timestamp":  time.Now().Unix(),
-		"block_hash": n.blockchain.GetBlock(height).Hash().Hex(),
+		"block_hash": n.blockchain.GetBlock(height).Hash().String(),
 	}
 
 	filePath := filepath.Join(n.GetDataDir(), "king_list_backup.json")
@@ -4146,13 +4146,13 @@ func (c *Console) handleRKSetMiner(rkManager reward.RotatingKingManager) {
 	}
 
 	if !hasKey {
-		fmt.Printf("❌ Wallet %s not found in keystore\n", currentKing.Hex())
+		fmt.Printf("❌ Wallet %s not found in keystore\n", currentKing.String())
 		fmt.Println("   You need the private key to mine as this address")
 		return
 	}
 
 	c.node.SetMinerWalletAddress(currentKing)
-	fmt.Printf("✅ Miner address set to current rotating king: %s\n", currentKing.Hex())
+	fmt.Printf("✅ Miner address set to current rotating king: %s\n", currentKing.String())
 	fmt.Println("💡 Use 'startmining' to begin mining as rotating king")
 }
 
@@ -4169,7 +4169,7 @@ func (c *Console) handleRKInfo(rkManager reward.RotatingKingManager, addrStr str
 	isCurrentKing := rkManager.IsCurrentKing(addr)
 	addresses := rkManager.GetKingAddresses()
 
-	fmt.Printf("📋 KING INFORMATION: %s\n", addr.Hex())
+	fmt.Printf("📋 KING INFORMATION: %s\n", addr.String())
 	fmt.Println("════════════════════════════════════════════════")
 
 	fmt.Printf("Balance:           %s ANTD\n", formatBalance(balance))
@@ -4301,7 +4301,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	addresses := rkManager.GetKingAddresses()
 	for _, kingAddr := range addresses {
 		if kingAddr == addr {
-			fmt.Printf("❌ Address %s is already in rotation\n", addr.Hex())
+			fmt.Printf("❌ Address %s is already in rotation\n", addr.String())
 			position := getAddressPosition(addresses, addr)
 			if position >= 0 {
 				fmt.Printf("   Position: %d/%d\n", position+1, len(addresses))
@@ -4322,13 +4322,13 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 
 	// Additional validation checks
 	if balance.Sign() == 0 {
-		fmt.Printf("❌ Address %s has zero balance\n", addr.Hex())
+		fmt.Printf("❌ Address %s has zero balance\n", addr.String())
 		fmt.Println("   Address must have some ANTD balance to be eligible")
 		return
 	}
 
 	if balance.Cmp(minStakeRequired) < 0 {
-		fmt.Printf("❌ Address %s does not meet minimum stake requirement\n", addr.Hex())
+		fmt.Printf("❌ Address %s does not meet minimum stake requirement\n", addr.String())
 		fmt.Printf("   Current balance: %s ANTD\n", formatBalance(balance))
 		fmt.Printf("   Required minimum: %s ANTD\n", formatBalance(minStakeRequired))
 
@@ -4348,7 +4348,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	}
 
 	if !hasKey {
-		fmt.Printf("⚠️  Note: Address %s not found in local keystore\n", addr.Hex())
+		fmt.Printf("⚠️  Note: Address %s not found in local keystore\n", addr.String())
 		fmt.Println("   This address can still receive rotating king rewards")
 		fmt.Println("   However, you won't be able to mine as this rotating king")
 	}
@@ -4356,8 +4356,8 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	// Show summary and confirm
 	fmt.Printf("\n📋 Governance Proposal: Add Address to Rotation\n")
 	fmt.Printf("══════════════════════════════════════════════════════════\n")
-	fmt.Printf("   Proposal ID:      governance_add_%d_%s\n", currentHeight, addr.Hex()[:8])
-	fmt.Printf("   Address:          %s\n", addr.Hex())
+	fmt.Printf("   Proposal ID:      governance_add_%d_%s\n", currentHeight, addr.String()[:8])
+	fmt.Printf("   Address:          %s\n", addr.String())
 	fmt.Printf("   Balance:          %s ANTD\n", formatBalance(balance))
 	fmt.Printf("   Meets 1k ANTD Min: %v ✅\n", balance.Cmp(minStakeRequired) >= 0)
 	fmt.Printf("   Has Private Key:  %v\n", hasKey)
@@ -4380,8 +4380,8 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 
 	if !isMainKing {
 		fmt.Println("❌ Only Main King can create governance proposals")
-		fmt.Printf("   Main King: %s\n", mainKing.Hex())
-		fmt.Printf("   Your address: %s\n", minerAddr.Hex())
+		fmt.Printf("   Main King: %s\n", mainKing.String())
+		fmt.Printf("   Your address: %s\n", minerAddr.String())
 		return
 	}
 
@@ -4395,7 +4395,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	}
 
 	if !foundMainKing {
-		fmt.Printf("⚠️  Note: Main King wallet %s not found in local keystore\n", mainKing.Hex())
+		fmt.Printf("⚠️  Note: Main King wallet %s not found in local keystore\n", mainKing.String())
 		fmt.Println("   You can still create proposals, but execution may require the key")
 	}
 
@@ -4439,8 +4439,8 @@ func (c *Console) createLocalGovernanceProposal(mainKing common.QuantumAddress, 
 	proposalInfo := map[string]interface{}{
 		"proposal_id":       fmt.Sprintf("local_%d", currentTime),
 		"type":              "add_to_rotation",
-		"proposed_by":       mainKing.Hex(),
-		"address":           addr.Hex(),
+		"proposed_by":       mainKing.String(),
+		"address":           addr.String(),
 		"balance":           balance.String(),
 		"has_private_key":   hasKey,
 		"created":           currentTime,
@@ -4542,8 +4542,8 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 	fmt.Printf("\n🎉 GOVERNANCE PROPOSAL CREATED!\n")
 	fmt.Printf("══════════════════════════════════════════════════════════\n")
 	fmt.Printf("   Proposal ID:      %d\n", proposalID)
-	fmt.Printf("   From (Main King): %s\n", common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY").Hex())
-	fmt.Printf("   Action:           Add %s to rotation\n", addr.Hex())
+	fmt.Printf("   From (Main King): %s\n", common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY").String())
+	fmt.Printf("   Action:           Add %s to rotation\n", addr.String())
 	fmt.Printf("   New Total Kings:  %d\n", len(newRotatingKings))
 	fmt.Printf("   Created:          %s\n", time.Unix(int64(currentTime), 0).Format(time.RFC3339))
 	fmt.Printf("   Can Execute:      %s\n", time.Unix(int64(executionTime), 0).Format(time.RFC3339))
@@ -4560,7 +4560,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 
 	// Show what will happen after execution
 	fmt.Printf("\n🔄 After Execution:\n")
-	fmt.Printf("   • Address %s will be added to rotation list\n", addr.Hex()[:8])
+	fmt.Printf("   • Address %s will be added to rotation list\n", addr.String()[:8])
 	fmt.Printf("   • Will receive 5%% rewards when serving as king\n")
 	fmt.Printf("   • Must maintain minimum %s ANTD stake\n", formatBalance(minStakeRequired))
 	fmt.Printf("   • Rotation order preserved (added to end)\n")
@@ -4579,7 +4579,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 		if kingAddr == rkManager.GetCurrentKing() {
 			status = " 👑"
 		}
-		fmt.Printf("     %d. %s%s\n", i+1, kingAddr.Hex()[:8], status)
+		fmt.Printf("     %d. %s%s\n", i+1, kingAddr.String()[:8], status)
 	}
 
 	fmt.Printf("\n   Proposed (%d addresses):\n", len(newRotatingKings))
@@ -4591,14 +4591,14 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 		if kingAddr == addr {
 			status = " 🆕"
 		}
-		fmt.Printf("     %d. %s%s\n", i+1, kingAddr.Hex()[:8], status)
+		fmt.Printf("     %d. %s%s\n", i+1, kingAddr.String()[:8], status)
 	}
 
 	// Show monitoring commands
 	fmt.Printf("\n🔍 Monitoring Commands:\n")
 	fmt.Printf("   Check proposal:    rotatingking governance proposal %d\n", proposalID)
 	fmt.Printf("   List proposals:    rotatingking governance proposals\n")
-	fmt.Printf("   Check address:     rotatingking info %s\n", addr.Hex())
+	fmt.Printf("   Check address:     rotatingking info %s\n", addr.String())
 	fmt.Printf("   Rotation status:   rotatingking status\n")
 	fmt.Printf("   Check timelock:    rotatingking governance timelock\n")
 
@@ -4648,7 +4648,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 
 	// Show address eligibility information
 	fmt.Printf("\n📈 Address Eligibility:\n")
-	fmt.Printf("   Address:        %s\n", addr.Hex())
+	fmt.Printf("   Address:        %s\n", addr.String())
 	fmt.Printf("   Current Balance: %s ANTD\n", formatBalance(balance))
 	fmt.Printf("   Minimum Required: %s ANTD\n", formatBalance(minStakeRequired))
 
@@ -4676,7 +4676,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 	fmt.Printf("   2. Only Main King can create proposals\n")
 	fmt.Printf("   3. Anyone can execute the proposal after timelock\n")
 	fmt.Printf("   4. Address must maintain minimum stake\n")
-	fmt.Printf("   5. Verify address %s is correct\n", addr.Hex())
+	fmt.Printf("   5. Verify address %s is correct\n", addr.String())
 	fmt.Printf("   6. Proposal is saved locally and can be shared\n")
 	fmt.Printf("   7. Changes affect all network nodes\n")
 
@@ -4685,7 +4685,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 	fmt.Printf("   1. Wait 48 hours for timelock to expire\n")
 	fmt.Printf("   2. Execute proposal: rotatingking governance execute %d\n", proposalID)
 	fmt.Printf("   3. Monitor rotation: rotatingking status\n")
-	fmt.Printf("   4. Check rewards: rotatingking rewards %s\n", addr.Hex())
+	fmt.Printf("   4. Check rewards: rotatingking rewards %s\n", addr.String())
 	fmt.Printf("   5. Verify execution: getblockinfo latest\n")
 
 	// Save proposal info to file for reference
@@ -4693,7 +4693,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 	proposalInfo := map[string]interface{}{
 		"proposal_id":            proposalID,
 		"type":                   "add_to_rotation",
-		"address":                addr.Hex(),
+		"address":                addr.String(),
 		"balance":                balance.String(),
 		"balance_formatted":      formatBalance(balance),
 		"has_private_key":        hasKey,
@@ -4725,7 +4725,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 					"Min Stake: %s ANTD\n"+
 					"New rotation size: %d addresses\n",
 				proposalID,
-				addr.Hex(),
+				addr.String(),
 				time.Unix(int64(currentTime), 0).Format("2006-01-02 15:04"),
 				time.Unix(int64(executionTime), 0).Format("2006-01-02 15:04"),
 				formatBalance(balance),
@@ -4801,7 +4801,7 @@ func (c *Console) handleRKGovernanceProposal(govController interface{}, id uint6
 						addrs := make([]string, value.Len())
 						for j := 0; j < value.Len(); j++ {
 							addr := value.Index(j).Interface().(common.QuantumAddress)
-							addrs[j] = addr.Hex()
+							addrs[j] = addr.String()
 						}
 						fieldValue = fmt.Sprintf("[%s]", strings.Join(addrs, ", "))
 					} else {
@@ -4869,7 +4869,7 @@ func (c *Console) handleRKGovernanceProposals(govController interface{}) {
 						propType = fmt.Sprintf("%v", value.Interface())
 					case "Executor":
 						if addr, ok := value.Interface().(common.QuantumAddress); ok {
-							executor = addr.Hex()[:8]
+							executor = addr.String()[:8]
 						}
 					case "CreatedTimestamp":
 						if ts, ok := value.Interface().(uint64); ok {
@@ -5003,7 +5003,7 @@ func (c *Console) handleRKGovernanceExecute(govController interface{}, id uint64
 		// Confirm execution
 		fmt.Printf("Proposal #%d is ready for execution\n", id)
 		if executor != (common.QuantumAddress{}) {
-			fmt.Printf("Proposed by: %s\n", executor.Hex())
+			fmt.Printf("Proposed by: %s\n", executor.String())
 		}
 		fmt.Printf("ETA: %s\n", time.Unix(int64(eta), 0).Format(time.RFC3339))
 		fmt.Printf("Current time: %s\n", time.Unix(int64(now), 0).Format(time.RFC3339))
@@ -5032,7 +5032,7 @@ func (c *Console) handleRKGovernanceExecute(govController interface{}, id uint64
 
 		fmt.Printf("✅ Proposal #%d executed successfully!\n", id)
 		fmt.Printf("   Executed at: %s\n", time.Unix(int64(now), 0).Format(time.RFC3339))
-		fmt.Printf("   Executed by: %s\n", caller.Hex())
+		fmt.Printf("   Executed by: %s\n", caller.String())
 
 	} else {
 		fmt.Printf("❌ Cannot execute proposals - interface not available\n")
@@ -5201,12 +5201,12 @@ func (c *Console) handleRKGovernanceRemove(rkManager reward.RotatingKingManager,
 			found = true
 
 			if rkManager.IsCurrentKing(addr) {
-				fmt.Printf("❌ Cannot remove current king %s\n", addr.Hex())
+				fmt.Printf("❌ Cannot remove current king %s\n", addr.String())
 				fmt.Println("   Rotate to another king first")
 				return
 			}
 
-			if !c.confirmAction(fmt.Sprintf("Remove %s from rotation?", addr.Hex())) {
+			if !c.confirmAction(fmt.Sprintf("Remove %s from rotation?", addr.String())) {
 				return
 			}
 
@@ -5215,7 +5215,7 @@ func (c *Console) handleRKGovernanceRemove(rkManager reward.RotatingKingManager,
 			newAddresses = append(newAddresses, addresses[:i]...)
 			newAddresses = append(newAddresses, addresses[i+1:]...)
 
-			fmt.Printf("✅ Address %s removed from rotation\n", addr.Hex())
+			fmt.Printf("✅ Address %s removed from rotation\n", addr.String())
 			fmt.Printf("   New rotation count: %d\n", len(newAddresses))
 			fmt.Println("💡 Note: Actual removal requires governance transaction")
 			return
@@ -5223,7 +5223,7 @@ func (c *Console) handleRKGovernanceRemove(rkManager reward.RotatingKingManager,
 	}
 
 	if !found {
-		fmt.Printf("❌ Address %s is not in rotation\n", addr.Hex())
+		fmt.Printf("❌ Address %s is not in rotation\n", addr.String())
 	}
 }
 
@@ -5358,7 +5358,7 @@ func (c *Console) handleRKAdd(addrStr string) {
 	currentList := rkManager.GetKingAddresses()
 	for _, king := range currentList {
 		if king == addr {
-			fmt.Printf("❌ Address %s is already in the rotating king list\n", addr.Hex())
+			fmt.Printf("❌ Address %s is already in the rotating king list\n", addr.String())
 			position := 0
 			for i, k := range currentList {
 				if k == addr {
@@ -5385,7 +5385,7 @@ func (c *Console) handleRKAdd(addrStr string) {
 	// Confirm action
 	fmt.Printf("\n📝 Add Address to Rotating King List\n")
 	fmt.Printf("════════════════════════════════════════════════\n")
-	fmt.Printf("   Address:      %s\n", addr.Hex())
+	fmt.Printf("   Address:      %s\n", addr.String())
 	fmt.Printf("   Balance:      %s ANTD (>= 100,000 ANTD ✓)\n", formatBalance(balance))
 	fmt.Printf("   Current Kings: %d\n", len(currentList))
 	fmt.Printf("   New Total:     %d\n", len(currentList)+1)
@@ -5415,7 +5415,7 @@ func (c *Console) handleRKAdd(addrStr string) {
 		return
 	}
 
-	fmt.Printf("✅ Address %s added to rotating king list\n", addr.Hex())
+	fmt.Printf("✅ Address %s added to rotating king list\n", addr.String())
 	fmt.Printf("   New total: %d kings\n", len(newList))
 	fmt.Printf("   Saved to database ✓\n")
 
@@ -5446,7 +5446,7 @@ func (c *Console) broadcastKingUpdate(newList []common.QuantumAddress, height ui
 		NewList:     newList,
 		Added:       addr,
 		Timestamp:   time.Now(),
-		Reason:      fmt.Sprintf("%s: %s", action, addr.Hex()[:8]),
+		Reason:      fmt.Sprintf("%s: %s", action, addr.String()[:8]),
 	}
 
 	// Direct broadcast
@@ -5466,7 +5466,7 @@ func (c *Console) persistKingListToDatabase(rkManager interface{}, newList []com
 		"addresses":  newList,
 		"height":     height,
 		"timestamp":  time.Now().Unix(),
-		"block_hash": c.node.blockchain.GetBlock(height).Hash().Hex(),
+		"block_hash": c.node.blockchain.GetBlock(height).Hash().String(),
 	}
 
 	dataDir := c.node.GetDataDir()
@@ -5499,7 +5499,7 @@ func (c *Console) handleRKRewards(parts []string) {
 	}
 
 	// Try to get rewards for address
-	fmt.Printf("Rewards for %s:\n", addr.Hex())
+	fmt.Printf("Rewards for %s:\n", addr.String())
 
 	// Check if address is a rotating king
 	addresses := make([]common.QuantumAddress, 0)
@@ -5539,7 +5539,7 @@ func (c *Console) handleRKRewards(parts []string) {
 
 	if eligible && !isKing {
 		fmt.Printf("\n💡 To become a Rotating King:\n")
-		fmt.Printf("   Use: rk add %s\n", addr.Hex())
+		fmt.Printf("   Use: rk add %s\n", addr.String())
 	}
 }
 
@@ -5551,7 +5551,7 @@ func (n *Node) SetMinerWalletAddress(addr common.QuantumAddress) {
 		log.Printf("Miner wallet address set to: %s", qAddr.String())
 		return
 	}
-	log.Printf("Miner wallet address set to: %s", addr.Hex())
+	log.Printf("Miner wallet address set to: %s", addr.String())
 }
 
 func (n *Node) MinerWalletAddress() common.QuantumAddress {
@@ -5596,10 +5596,10 @@ func (c *Console) handleRebroadcast(parts []string) {
 		if c.node.p2pNode != nil {
 			if err := c.node.p2pNode.BroadcastTx(tx); err != nil {
 				failed++
-				fmt.Printf("   ❌ Failed to rebroadcast %s: %v\n", tx.Hash().Hex()[:8], err)
+				fmt.Printf("   ❌ Failed to rebroadcast %s: %v\n", tx.Hash().String()[:8], err)
 			} else {
 				successful++
-				fmt.Printf("   ✅ Rebroadcast %s\n", tx.Hash().Hex()[:8])
+				fmt.Printf("   ✅ Rebroadcast %s\n", tx.Hash().String()[:8])
 			}
 		}
 	}
@@ -5671,12 +5671,12 @@ func (c *Console) handleRebroadcastTx(txHashStr string) {
 		return
 	}
 
-	fmt.Printf("📡 Rebroadcasting transaction %s...\n", txHash.Hex()[:8])
+	fmt.Printf("📡 Rebroadcasting transaction %s...\n", txHash.String()[:8])
 
 	if err := c.node.p2pNode.BroadcastTx(foundTx); err != nil {
 		fmt.Printf("❌ Failed to rebroadcast: %v\n", err)
 	} else {
-		fmt.Printf("✅ Transaction %s rebroadcast successfully\n", txHash.Hex()[:8])
+		fmt.Printf("✅ Transaction %s rebroadcast successfully\n", txHash.String()[:8])
 	}
 }
 
@@ -5727,7 +5727,7 @@ func (c *Console) handleMempoolInfo(parts []string) {
 	}
 
 	for addr, count := range txsByAddress {
-		fmt.Printf("   %s: %d tx(s)\n", addr.Hex()[:8], count)
+		fmt.Printf("   %s: %d tx(s)\n", addr.String()[:8], count)
 	}
 
 	// Show fee distribution
@@ -5760,7 +5760,7 @@ func (c *Console) handleMempoolInfo(parts []string) {
 
 			fmt.Printf("   %d. %s: %s ANTD (%.2f ANTD/byte)\n",
 				i+1,
-				tx.Hash().Hex()[:8],
+				tx.Hash().String()[:8],
 				formatBalance(fee),
 				feePerByte,
 			)
@@ -5896,7 +5896,7 @@ func (c *Console) handleRKDBStatus(parts []string) {
 		if err == nil && record != nil {
 			fmt.Printf("\n📦 LAST SYNCED BLOCK:\n")
 			fmt.Printf("Block Height:        %d\n", record.BlockHeight)
-			fmt.Printf("Block Hash:          %s\n", record.BlockHash.Hex())
+			fmt.Printf("Block Hash:          %s\n", record.BlockHash.String())
 			fmt.Printf("Timestamp:           %s\n", record.Timestamp.Format(time.RFC3339))
 			fmt.Printf("Sync Duration:       %v\n", record.SyncDuration)
 
@@ -6037,8 +6037,8 @@ func (c *Console) handleRKDBHistory(parts []string) {
 			fmt.Printf("Rotation #%d:\n", len(rotations)-i)
 			fmt.Printf("  Block:      %d\n", rotation.BlockHeight)
 			fmt.Printf("  Timestamp:  %s\n", rotation.Timestamp.Format("2006-01-02 15:04:05"))
-			fmt.Printf("  From:       %s\n", rotation.PreviousKing.Hex())
-			fmt.Printf("  To:         %s\n", rotation.NewKing.Hex())
+			fmt.Printf("  From:       %s\n", rotation.PreviousKing.String())
+			fmt.Printf("  To:         %s\n", rotation.NewKing.String())
 			fmt.Printf("  Eligible:   %v\n", rotation.WasEligible)
 
 			if rotation.Reward != nil && rotation.Reward.Sign() > 0 {
@@ -6164,7 +6164,7 @@ func (n *Node) AutoUnlockMinerWallet() error {
 	}
 
 	if keyFile == "" {
-		return fmt.Errorf("miner wallet %s not found in keystore", n.minerWalletAddress.Hex())
+		return fmt.Errorf("miner wallet %s not found in keystore", n.minerWalletAddress.String())
 	}
 
 	for _, pwd := range commonPasswords {
@@ -6204,8 +6204,8 @@ func (c *Console) handleCheckEligibility(parts []string) {
 	timestamp := uint64(time.Now().Unix())
 
 	fmt.Printf("🔍 Checking eligibility for block %d:\n", height)
-	fmt.Printf("   Miner: %s\n", minerAddr.Hex())
-	fmt.Printf("   Parent hash: %s\n", parent.Hash().Hex())
+	fmt.Printf("   Miner: %s\n", minerAddr.String())
+	fmt.Printf("   Parent hash: %s\n", parent.Hash().String())
 	fmt.Printf("   Timestamp: %d\n", timestamp)
 
 	// Use reflection to call VerifyMinerEligibility
@@ -6264,7 +6264,7 @@ func (c *Console) broadcastKingRotation(previousKing, newKing common.QuantumAddr
 
 	// Log the rotation for debugging
 	log.Printf("[console] Broadcasting rotation: %s -> %s at height %d",
-		previousKing.Hex()[:8], newKing.Hex()[:8], currentHeight)
+		previousKing.String()[:8], newKing.String()[:8], currentHeight)
 
 	return c.node.p2pNode.BroadcastKingRotation(&rotation)
 }
