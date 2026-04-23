@@ -21,7 +21,8 @@ import (
     "github.com/antdaza/antdchain/antdc/chain"
     "github.com/antdaza/antdchain/antdc/p2p"
     "github.com/antdaza/antdchain/antdc/pow"
-    chaincommon "github.com/antdaza/antdchain/common"
+    "github.com/antdaza/antdchain/common"
+    "github.com/antdaza/antdchain/common/hexutil"
 )
 
 // Configuration constants (can be made configurable via environment variables)
@@ -165,10 +166,10 @@ func (ms *PosMiningState) SetMinerAddress(addr common.QuantumAddress) error {
     }
 
     ms.minerAddress = addr
-    if qAddr, err := chaincommon.NewQuantumAddressFromBytes(addr.Bytes()); err == nil {
+    if qAddr, err := common.NewQuantumAddressFromBytes(addr.Bytes()); err == nil {
         log.Printf("[miner] PoS miner address set → %s", qAddr.String())
     } else {
-        log.Printf("[miner] PoS miner address set → %s", addr.Hex())
+        log.Printf("[miner] PoS miner address set → %s", addr.String())
     }
     return nil
 }
@@ -177,7 +178,7 @@ func (ms *PosMiningState) SetPrivateKey(privKey *ecdsa.PrivateKey) {
     ms.mu.Lock()
     defer ms.mu.Unlock()
     ms.privateKey = privKey
-    log.Printf("[miner] Private key set for address: %s", crypto.PubkeyToAddress(privKey.PublicKey).Hex())
+    log.Printf("[miner] Private key set for address: %s", crypto.PubkeyToAddress(privKey.PublicKey).String())
 }
 
 func (ms *PosMiningState) SetPrivateKeyFromBytes(keyBytes []byte) error {
@@ -190,7 +191,10 @@ func (ms *PosMiningState) SetPrivateKeyFromBytes(keyBytes []byte) error {
 }
 
 func (ms *PosMiningState) SetPrivateKeyFromHex(hexKey string) error {
-    keyBytes := common.FromHex(hexKey)
+    keyBytes, err := hexutil.Decode(hexKey)
+    if err != nil {
+        return fmt.Errorf("invalid hex key: %w", err)
+    }
     return ms.SetPrivateKeyFromBytes(keyBytes)
 }
 
@@ -241,11 +245,11 @@ func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
     bc.Pow().AutoRegisterIfEligible(rewardAddr, currentBalance)
 
     log.Printf("[miner] Auto-checked staking eligibility for %s (balance: %s ANTD)",
-        rewardAddr.Hex()[:12],
+        rewardAddr.String()[:12],
         new(big.Int).Div(currentBalance, big.NewInt(1e18)).String())
 
     state.mining = true
-    log.Printf("[miner] PoS Mining STARTED → %s", rewardAddr.Hex())
+    log.Printf("[miner] PoS Mining STARTED → %s", rewardAddr.String())
     go posMiningLoop(bc, state, rewardAddr, p2pNode)
 }
 
@@ -347,9 +351,9 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
             if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
                 hasKey := loadedKeyAddress != (common.QuantumAddress{})
                 log.Printf("[miner] Waiting — expected: %s configured: %s key: %s (loaded key: %v)",
-                    expectedMiner.Hex()[:12],
-                    configuredMiner.Hex()[:12],
-                    loadedKeyAddress.Hex()[:12],
+                    expectedMiner.String()[:12],
+                    configuredMiner.String()[:12],
+                    loadedKeyAddress.String()[:12],
                     hasKey,
                 )
             }
@@ -360,7 +364,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         // YES! It's our turn and we have the private key
         consecutiveMisses = 0
         miningEligibilityChecks.WithLabelValues("eligible").Inc()
-        log.Printf("[miner] ✅ OUR TURN! Mining block %d as %s", height, expectedMiner.Hex()[:12])
+        log.Printf("[miner] ✅ OUR TURN! Mining block %d as %s", height, expectedMiner.String()[:12])
 
         currentTime := uint64(time.Now().Unix())
         eligible, err := ms.powEngine.VerifyMinerEligibility(expectedMiner, parent.Hash(), height, currentTime)
@@ -420,7 +424,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         ms.powEngine.RecordBlockMined(expectedMiner, height)
 
         log.Printf("[miner] 🎉 BLOCK #%d MINED by %s! Reward: %s ANTD",
-            height, expectedMiner.Hex()[:12],
+            height, expectedMiner.String()[:12],
             new(big.Int).Div(blockReward, big.NewInt(1e18)).String())
         log.Printf("[miner]   Total mined this session: %d", totalMined)
 
@@ -525,7 +529,7 @@ func verifyBlockSignature(
         
         if recoveredAddr != expectedAddr {
             return false, fmt.Errorf("signature public key mismatch: recovered %s, expected %s",
-                recoveredAddr.Hex(), expectedAddr.Hex())
+                recoveredAddr.String(), expectedAddr.String())
         }
     }
 
@@ -557,7 +561,7 @@ func broadcastMinedBlock(p *p2p.Node, blk *block.Block, ms *PosMiningState) {
             }
         } else {
             log.Printf("[miner] Block %d broadcasted successfully (miner: %s)",
-                blk.Header.Number.Uint64(), blk.Header.Coinbase.Hex()[:12])
+                blk.Header.Number.Uint64(), blk.Header.Coinbase.String()[:12])
             miningBroadcastSuccess.Inc()
             return
         }
@@ -615,7 +619,7 @@ func (ms *PosMiningState) GetMiningStatistics() map[string]interface{} {
     stats := map[string]interface{}{
         "mining_enabled":          ms.enabled,
         "is_mining":               ms.mining,
-        "miner_address":           ms.minerAddress.Hex(),
+        "miner_address":           ms.minerAddress.String(),
         "blocks_mined":            ms.blocksMined,
         "total_rewards_antd":       formatWei(ms.totalRewards),
         "total_rewards_wei":       ms.totalRewards.String(),
@@ -658,7 +662,7 @@ func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreStore *keystore.Key
     }
 
     if !found {
-        return fmt.Errorf("address %s not found in keystore", ms.minerAddress.Hex())
+        return fmt.Errorf("address %s not found in keystore", ms.minerAddress.String())
     }
 
     keyjson, err := os.ReadFile(targetAccount.URL.Path)
@@ -672,7 +676,7 @@ func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreStore *keystore.Key
     }
 
     ms.privateKey = key.PrivateKey
-    log.Printf("[miner] ✓ Loaded private key from keystore for %s", ms.minerAddress.Hex())
+    log.Printf("[miner] ✓ Loaded private key from keystore for %s", ms.minerAddress.String())
     log.Printf("[miner]   Keystore file: %s", targetAccount.URL.Path)
 
     return nil
@@ -700,7 +704,7 @@ func (ms *PosMiningState) LoadPrivateKeyFromFile(filepath, password string) erro
     keyAddress := crypto.PubkeyToAddress(key.PrivateKey.PublicKey)
     if keyAddress != ms.minerAddress {
         return fmt.Errorf("key address mismatch: expected %s, got %s",
-            ms.minerAddress.Hex(), keyAddress.Hex())
+            ms.minerAddress.String(), keyAddress.String())
     }
 
     ms.privateKey = key.PrivateKey

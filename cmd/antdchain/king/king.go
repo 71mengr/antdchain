@@ -155,7 +155,7 @@ func cmdStatus(ctx *cli.Context) error {
     
     // Get main king from reward distributor
     mainKing := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY") // Default main king
-    fmt.Printf("Main King : %s\n", mainKing.Hex())
+    fmt.Printf("Main King : %s\n", mainKing.String())
     fmt.Printf("  Balance : %s ANTD\n\n", weiToANTD(bc.GetAccountBalance(mainKing)))
 
     // Try to get rotating kings from rotating king manager if available
@@ -174,7 +174,7 @@ func cmdStatus(ctx *cli.Context) error {
         if bal.Cmp(threshold) < 0 {
             eligible = "Ineligible (<100k ANTD)"
         }
-        fmt.Printf("  [%2d] %s  %s  %s ANTD\n", i, k.Hex(), eligible, weiToANTD(bal))
+        fmt.Printf("  [%2d] %s  %s  %s ANTD\n", i, k.String(), eligible, weiToANTD(bal))
     }
     return nil
 }
@@ -332,7 +332,7 @@ func cmdListProposals(ctx *cli.Context) error {
             eta := time.Unix(int64(p.ETA), 0).Format("2006-01-02 15:04")
             var details string
             if p.ProposalType == ProposalUpdateMainKing {
-                details = fmt.Sprintf("MainKing → %s", p.NewMainKing.Hex())
+                details = fmt.Sprintf("MainKing → %s", p.NewMainKing.String())
             } else {
                 details = fmt.Sprintf("Rotating ×%d", len(p.NewRotatingKings))
             }
