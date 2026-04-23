@@ -2917,9 +2917,8 @@ func (c *Console) handleImport(parts []string) {
 		fmt.Printf("Failed to import wallet: invalid private key hex: %v\n", err)
 		return
 	}
-	if len(privKeyBytes) != 4032 {
-		fmt.Printf("Failed to import wallet: invalid antdchain private key length; expected 4032 bytes, got %d\n", len(privKeyBytes))
-		fmt.Printf("Hint: this command expects a full ML-DSA-65 private key hex string (%d hex characters)\n", 4032*2)
+	if len(privKeyBytes) == 0 {
+		fmt.Printf("Failed to import wallet: private key is empty\n")
 		return
 	}
 
@@ -2957,10 +2956,6 @@ func (c *Console) handleExport(parts []string) {
 		return
 	}
 
-	if len(privKeyBytes) != 4032 {
-		fmt.Printf("❌ Failed to export wallet: %s\n", "invalid antdchain private key length; expected 4032 bytes")
-		return
-	}
         privateKey := "0x" + hex.EncodeToString(privKeyBytes)
 
         fmt.Printf("�� Private key for %s: %s\n", qAddr.String(), privateKey)
