@@ -51,6 +51,29 @@ func TestExtractHexPrivateKeyRejectsOddLength(t *testing.T) {
 	}
 }
 
+func TestExtractHexPrivateKeyFromExportTranscriptHas8064HexChars(t *testing.T) {
+	t.Parallel()
+
+	const exportedAddress = "0qAhsF8imqZ2JhXTL7Nj1fJHvrKS7ZeHhrc"
+	privateKeyHex := strings.Repeat("42", 4032)
+
+	transcript := "wallet> export " + exportedAddress + " > myt.txt\n" +
+		"Enter password to decrypt wallet:\n" +
+		"�� Private key for " + exportedAddress + ":\n" +
+		"0x" + privateKeyHex + "\n"
+
+	got, err := extractHexPrivateKey(transcript)
+	if err != nil {
+		t.Fatalf("extractHexPrivateKey returned error: %v", err)
+	}
+	if len(got) != 8064 {
+		t.Fatalf("unexpected private key hex length: got %d, want 8064", len(got))
+	}
+	if got != privateKeyHex {
+		t.Fatalf("unexpected private key value extracted")
+	}
+}
+
 func TestParseOneShotCommandArgs(t *testing.T) {
 	t.Parallel()
 
