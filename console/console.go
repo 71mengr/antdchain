@@ -3,6 +3,7 @@
 // for more information.
 
 package console
+
 import (
 	"bufio"
 	"bytes"
@@ -1155,8 +1156,6 @@ func (n *Node) GetKeystoreDir() string {
 	return filepath.Join(homeDir, ".antdchain", "keystore")
 }
 
-
-
 func (n *Node) GetMinerWallet() MinerWallet {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -2307,7 +2306,7 @@ func (c *Console) handleStartMining() {
 		accounts := c.node.Keystore().Accounts()
 		for i, acc := range accounts {
 			c.node.mu.RLock()
-			    balance := c.node.blockchain.State().GetBalance(common.BytesToQuantumAddress(acc.Address.Bytes()))
+			balance := c.node.blockchain.State().GetBalance(common.BytesToQuantumAddress(acc.Address.Bytes()))
 			c.node.mu.RUnlock()
 			fmt.Printf("   %d. %s → %s ANTD\n",
 				i+1, acc.Address.String(), formatBalance(balance))
@@ -2905,13 +2904,12 @@ func (c *Console) handleImport(parts []string) {
 		return
 	}
 
-	// Accept keys pasted with spaces/newlines or surrounding formatting.
-	privKeyHex := strings.Join(parts[1:], "")
-	privKeyHex = strings.TrimSpace(strings.TrimPrefix(privKeyHex, "0x"))
-	privKeyHex = strings.ReplaceAll(privKeyHex, "\n", "")
-	privKeyHex = strings.ReplaceAll(privKeyHex, "\r", "")
-	privKeyHex = strings.ReplaceAll(privKeyHex, "\t", "")
-	privKeyHex = strings.ReplaceAll(privKeyHex, " ", "")
+	// Accept either a raw hex key or a file path (for redirected exports).
+	privKeyHex, err := loadImportPrivateKeyInput(parts[1:])
+	if err != nil {
+		fmt.Printf("Failed to import wallet: %v\n", err)
+		return
+	}
 	privKeyBytes, err := hex.DecodeString(privKeyHex)
 	if err != nil {
 		fmt.Printf("Failed to import wallet: invalid private key hex: %v\n", err)
@@ -3001,6 +2999,10 @@ func (c *Console) handleExport(parts []string) {
 	}
 
 	privateKeyHex := hex.EncodeToString(privKeyBytes)
+	if !stdoutIsTerminal() {
+		fmt.Printf("0x%s\n", privateKeyHex)
+		return
+	}
 	fmt.Printf("�� Private key for %s:\n", qAddr.String())
 	fmt.Printf("0x%s\n", privateKeyHex)
 	if seed := quantum.ExtractSeedFromPrivateKey(privKeyBytes); len(seed) == 32 {
@@ -5543,7 +5545,9 @@ func (c *Console) handleRKRewards(parts []string) {
 
 	// Check if address is a rotating king
 	addresses := make([]common.QuantumAddress, 0)
-	if manager, ok := rkManager.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
+	if manager, ok := rkManager.(interface {
+		GetKingAddresses() []common.QuantumAddress
+	}); ok {
 		addresses = manager.GetKingAddresses()
 	}
 
@@ -5559,7 +5563,9 @@ func (c *Console) handleRKRewards(parts []string) {
 		fmt.Printf("  Status: ✅ Rotating King\n")
 
 		// Try to get reward info
-		if manager, ok := rkManager.(interface{ GetKingRewards(common.QuantumAddress) *big.Int }); ok {
+		if manager, ok := rkManager.(interface {
+			GetKingRewards(common.QuantumAddress) *big.Int
+		}); ok {
 			rewards := manager.GetKingRewards(addr)
 			if rewards != nil && rewards.Sign() > 0 {
 				fmt.Printf("  Total 5%% Rewards: %s ANTD\n", formatBalance(rewards))
