@@ -1,0 +1,269 @@
+diff --git a/console/console.go b/console/console.go
+index daf501f7115d099de461476353bfc8a6c6b3055c..e77984d840c5c03098e34cec679ac7abee4d0b7e 100644
+--- a/console/console.go
++++ b/console/console.go
+@@ -1213,52 +1213,86 @@ func (c *Console) confirmAction(message string) bool {
+ 	}
+ 	return false
+ }
+ 
+ // getWalletDataDir returns the path to wallet data directory
+ func (c *Console) getWalletDataDir() string {
+ 	return c.node.GetDataDir()
+ }
+ 
+ // getWalletFilePath returns the path to the encrypted wallet file
+ func (c *Console) getWalletFilePath() string {
+ 	return filepath.Join(c.getWalletDataDir(), "wallets.encrypted.json")
+ }
+ 
+ // getBackupFilePath returns the default backup file path
+ func (c *Console) getBackupFilePath() string {
+ 	return filepath.Join(c.getWalletDataDir(), "wallet_backup.json")
+ }
+ 
+ func (c *Console) handleDatadir(parts []string) {
+ 	fmt.Printf("ANTDChain data directory: %s\n", c.node.GetDataDir())
+ 	fmt.Printf("   • Wallets: %s\n", c.getWalletFilePath())
+ 	fmt.Printf("   • Default backup: %s\n", c.getBackupFilePath())
+ }
+ 
++// RunSingleCommand executes one console command without entering interactive mode.
++func (c *Console) RunSingleCommand(parts []string) {
++	if len(parts) == 0 {
++		return
++	}
++
++	switch parts[0] {
++	case "createaddress":
++		c.handleCreateAddress()
++	case "import":
++		c.handleImport(parts)
++	case "export":
++		c.handleExport(parts)
++	case "listwallets", "listaddresses":
++		c.handleListWallets()
++	case "lock":
++		c.handleLock(parts)
++	case "unlock":
++		c.handleUnlock(parts)
++	case "balance":
++		c.handleBalance(parts)
++	case "datadir":
++		c.handleDatadir(parts)
++	default:
++		fmt.Printf("Unknown command: %s\n", parts[0])
++		fmt.Println("Supported one-shot commands: createaddress, import, export, listwallets, listaddresses, lock, unlock, balance, datadir")
++	}
++}
++
+ // Start begins the interactive console
+ func (c *Console) Start() {
++	if cmdParts, ok := parseOneShotCommandArgs(os.Args[1:]); ok {
++		c.RunSingleCommand(cmdParts)
++		return
++	}
++
+ 	scanner := bufio.NewScanner(os.Stdin)
+ 
+ 	fmt.Println("=== ANTDChain Console ===")
+ 	fmt.Println("Available commands:")
+ 	fmt.Println("  setaddress <addr>        - Set mining address")
+ 	fmt.Println("  startmining              - Start mining")
+ 	fmt.Println("  stopmining               - Stop mining")
+ 	fmt.Println("  createaddress            - Create new wallet")
+ 	fmt.Println("  send <from> <to> <amount>- Send transaction")
+ 	fmt.Println("  import <privateKey>      - Import ML-DSA-65 wallet")
+ 	fmt.Println("  export <address>         - Export private key")
+ 	fmt.Println("  getblockinfo <number>    - Get block info")
+ 	fmt.Println("  gettx <hash>             - Get transaction")
+ 	fmt.Println("  lock <address>           - Lock wallet")
+ 	fmt.Println("  unlock <address>         - Unlock wallet")
+ 	fmt.Println("  listwallets              - List all quantum wallets")
+ 	fmt.Println("  listaddresses            - Alias for listwallets")
+ 	fmt.Println("  balance <address>        - Check balance")
+ 	fmt.Println("  status                   - Show node status")
+ 	fmt.Println("  debugchain               - Debug chain hashes")
+ 	fmt.Println("  savewallets              - Save wallets with encryption")
+ 	fmt.Println("  loadwallets              - Load wallets with decryption")
+ 	fmt.Println("  changepassword           - Change wallet encryption password")
+ 	fmt.Println("  backup <path>            - Backup wallets to file")
+ 	fmt.Println("  restore <path>           - Restore wallets from backup")
+@@ -1489,50 +1523,68 @@ func (c *Console) Start() {
+ 
+ 		case "restore":
+ 			c.handleRestore(parts)
+ 
+ 		case "cleartx":
+ 			c.handleClearTx(parts)
+ 
+ 		case "debugtx":
+ 			c.handleDebugTx(parts)
+ 
+ 		case "clearstucktxs":
+ 			c.handleClearStuckTxs()
+ 
+ 		case "debugtxflow":
+ 			c.handleDebugTransactionFlow(parts)
+ 
+ 		case "help":
+ 			c.handleHelp()
+ 
+ 		default:
+ 			fmt.Printf("Unknown command: %s. Type 'help' for available commands.\n", command)
+ 		}
+ 	}
+ }
+ 
++func parseOneShotCommandArgs(args []string) ([]string, bool) {
++	if len(args) == 0 {
++		return nil, false
++	}
++
++	command := strings.TrimSpace(args[0])
++	if command == "" || strings.HasPrefix(command, "-") {
++		return nil, false
++	}
++
++	switch command {
++	case "createaddress", "import", "export", "listwallets", "listaddresses", "lock", "unlock", "balance", "datadir":
++		return args, true
++	default:
++		return nil, false
++	}
++}
++
+ func (c *Console) handleMonitor(parts []string) {
+ 	if len(parts) < 2 {
+ 		fmt.Println("Usage: monitor <command>")
+ 		fmt.Println("Commands: status, start, stop, stats, alerts, holders")
+ 		return
+ 	}
+ 
+ 	switch parts[1] {
+ 	case "status":
+ 		fmt.Println("�� Supply Monitoring Status:")
+ 		fmt.Println("  Monitoring system is active")
+ 
+ 	case "stats":
+ 		c.handleSupplyStats()
+ 
+ 	case "alerts":
+ 		c.handleAlerts(parts)
+ 
+ 	case "holders":
+ 		fmt.Println("�� Top Holders:")
+ 		fmt.Println("  Holder data not available in this version")
+ 
+ 	case "start":
+ 		fmt.Println("✅ Monitoring is automatically started with the blockchain")
+ 
+@@ -2858,51 +2910,51 @@ func formatBalance(amount *big.Int) string {
+ 		return whole.String()
+ 	}
+ 
+ 	// Convert remainder to decimal with 6 places
+ 	fractional := new(big.Float).SetInt(remainder)
+ 	divisor := new(big.Float).SetInt(oneANTD)
+ 	fractional.Quo(fractional, divisor)
+ 
+ 	// Format to string with 6 decimal places and remove leading "0."
+ 	fractionalStr := fractional.Text('f', 6)
+ 	if len(fractionalStr) > 2 && fractionalStr[:2] == "0." {
+ 		fractionalStr = fractionalStr[2:]
+ 	}
+ 
+ 	// Remove trailing zeros
+ 	fractionalStr = strings.TrimRight(fractionalStr, "0")
+ 	if fractionalStr == "" {
+ 		return whole.String()
+ 	}
+ 
+ 	return whole.String() + "." + fractionalStr
+ }
+ 
+ func (c *Console) handleImport(parts []string) {
+ 	if len(parts) < 2 {
+-		fmt.Println("Usage: import <ml-dsa-65-private-key-hex>")
++		fmt.Println("Usage: import <ml-dsa-65-private-key-hex|path-to-key-file>")
+ 		return
+ 	}
+ 
+ 	password, err := c.readPassword("Set password for imported wallet: ")
+ 	if err != nil {
+ 		fmt.Printf("❌ Failed to read password: %v\n", err)
+ 		return
+ 	}
+ 
+ 	confirm, err := c.readPassword("Confirm password: ")
+ 	if err != nil {
+ 		fmt.Printf("❌ Failed to read password confirmation: %v\n", err)
+ 		return
+ 	}
+ 	if password != confirm {
+ 		fmt.Printf("❌ Passwords do not match\n")
+ 		return
+ 	}
+ 	if len(password) < 8 {
+ 		fmt.Printf("❌ Password must be at least 8 characters\n")
+ 		return
+ 	}
+ 
+ 	// Accept either a raw hex key or a file path (for redirected exports).
+ 	privKeyHex, err := loadImportPrivateKeyInput(parts[1:])
+@@ -2978,51 +3030,53 @@ func (c *Console) handleExport(parts []string) {
+ 	if len(parts) < 2 {
+ 		fmt.Println("Usage: export <address>")
+ 		return
+ 	}
+ 
+ 	qAddr := mustParseQuantumAddress(parts[1])
+ 
+ 	password, err := c.readPassword("Enter password to decrypt wallet: ")
+ 	if err != nil {
+ 		fmt.Printf("❌ Failed to read password: %v\n", err)
+ 		return
+ 	}
+ 
+ 	privKeyBytes, err := qkeystore.Unlock(qAddr, password, c.node.GetKeystoreDir())
+ 	if err != nil {
+ 		fmt.Printf("❌ Failed to export wallet: %v\n", err)
+ 		return
+ 	}
+ 	if len(privKeyBytes) != quantum.MLDSA65PrivateKeySize {
+ 		fmt.Printf("❌ Failed to export wallet: unexpected private key length %d bytes\n", len(privKeyBytes))
+ 		return
+ 	}
+ 
+ 	privateKeyHex := hex.EncodeToString(privKeyBytes)
+ 	if !stdoutIsTerminal() {
+-		fmt.Printf("0x%s\n", privateKeyHex)
++		// Emit raw hex only when stdout is redirected so the output can be piped
++		// directly into a file and re-imported later.
++		fmt.Printf("%s\n", privateKeyHex)
+ 		return
+ 	}
+ 	fmt.Printf("�� Private key for %s:\n", qAddr.String())
+ 	fmt.Printf("0x%s\n", privateKeyHex)
+ 	if seed := quantum.ExtractSeedFromPrivateKey(privKeyBytes); len(seed) == 32 {
+ 		fmt.Println("Seed (if available):")
+ 		fmt.Printf("0x%s\n", hex.EncodeToString(seed))
+ 	}
+ 	fmt.Printf("⚠️ Keep this private key secure and never share it!\n")
+ }
+ 
+ func (c *Console) handleGetBlockInfo(parts []string) {
+ 	if len(parts) < 2 {
+ 		fmt.Println("Usage: getblockinfo <number>")
+ 		return
+ 	}
+ 	var blockNumber uint64
+ 	if parts[1] == "latest" {
+ 		c.node.mu.RLock()
+ 		latest := c.node.blockchain.Latest()
+ 		c.node.mu.RUnlock()
+ 		if latest == nil {
+ 			fmt.Println("❌ No blocks available")
+ 			return
+ 		}
+

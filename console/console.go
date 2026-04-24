@@ -1235,8 +1235,41 @@ func (c *Console) handleDatadir(parts []string) {
 	fmt.Printf("   • Default backup: %s\n", c.getBackupFilePath())
 }
 
+// RunSingleCommand executes one console command without entering interactive mode.
+func (c *Console) RunSingleCommand(parts []string) {
+	if len(parts) == 0 {
+		return
+	}
+
+	switch parts[0] {
+	case "createaddress":
+		c.handleCreateAddress()
+	case "import":
+		c.handleImport(parts)
+	case "export":
+		c.handleExport(parts)
+	case "listwallets", "listaddresses":
+		c.handleListWallets()
+	case "lock":
+		c.handleLock(parts)
+	case "unlock":
+		c.handleUnlock(parts)
+	case "balance":
+		c.handleBalance(parts)
+	case "datadir":
+		c.handleDatadir(parts)
+	default:
+		fmt.Printf("Unknown command: %s\n", parts[0])
+		fmt.Println("Supported one-shot commands: createaddress, import, export, listwallets, listaddresses, lock, unlock, balance, datadir")
+	}
+}
+
 // Start begins the interactive console
 func (c *Console) Start() {
+	if cmdParts, ok := parseOneShotCommandArgs(os.Args[1:]); ok {
+		c.RunSingleCommand(cmdParts)
+		return
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("=== ANTDChain Console ===")
@@ -1508,6 +1541,24 @@ func (c *Console) Start() {
 		default:
 			fmt.Printf("Unknown command: %s. Type 'help' for available commands.\n", command)
 		}
+	}
+}
+
+func parseOneShotCommandArgs(args []string) ([]string, bool) {
+	if len(args) == 0 {
+		return nil, false
+	}
+
+	command := strings.TrimSpace(args[0])
+	if command == "" || strings.HasPrefix(command, "-") {
+		return nil, false
+	}
+
+	switch command {
+	case "createaddress", "import", "export", "listwallets", "listaddresses", "lock", "unlock", "balance", "datadir":
+		return args, true
+	default:
+		return nil, false
 	}
 }
 
@@ -2880,7 +2931,7 @@ func formatBalance(amount *big.Int) string {
 
 func (c *Console) handleImport(parts []string) {
 	if len(parts) < 2 {
-		fmt.Println("Usage: import <ml-dsa-65-private-key-hex>")
+		fmt.Println("Usage: import <ml-dsa-65-private-key-hex>|path-to-key-file")
 		return
 	}
 
@@ -3000,7 +3051,9 @@ func (c *Console) handleExport(parts []string) {
 
 	privateKeyHex := hex.EncodeToString(privKeyBytes)
 	if !stdoutIsTerminal() {
-		fmt.Printf("0x%s\n", privateKeyHex)
+		// Emit raw hex only when stdout is redirected so the output can be piped
+		// directly into a file and re-imported later.
+		fmt.Printf("%s\n", privateKeyHex)
 		return
 	}
 	fmt.Printf("�� Private key for %s:\n", qAddr.String())

@@ -50,3 +50,23 @@ func TestExtractHexPrivateKeyRejectsOddLength(t *testing.T) {
 		t.Fatalf("expected error for odd-length hex")
 	}
 }
+
+func TestParseOneShotCommandArgs(t *testing.T) {
+	t.Parallel()
+
+	got, ok := parseOneShotCommandArgs([]string{"export", "0q123"})
+	if !ok {
+		t.Fatalf("expected one-shot command to be detected")
+	}
+	if len(got) != 2 || got[0] != "export" || got[1] != "0q123" {
+		t.Fatalf("unexpected parsed args: %#v", got)
+	}
+}
+
+func TestParseOneShotCommandArgsRejectsFlags(t *testing.T) {
+	t.Parallel()
+
+	if _, ok := parseOneShotCommandArgs([]string{"--offline", "export", "0q123"}); ok {
+		t.Fatalf("did not expect flag-prefixed input to be treated as one-shot command")
+	}
+}
