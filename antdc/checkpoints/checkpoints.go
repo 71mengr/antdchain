@@ -253,22 +253,26 @@ func NewCheckpoints(dataDir string, configPath string, actualGenesisHash common.
         return nil, fmt.Errorf("failed to load or create config: %w", err)
     }
 
-    //ALWAYS use the actual genesis hash from blockchain
-    // This ensures consistency with the running chain
     logger.WithFields(logrus.Fields{
         "configGenesisHash": cp.config.GenesisHash.String(),
         "actualGenesisHash": actualGenesisHash.String(),
     }).Info("Setting genesis hash")
 
-    // Always set genesis hash from actual blockchain
-    cp.config.GenesisHash = actualGenesisHash
-    cp.genesisValid = true
-    
-    // Update config file with correct genesis hash
-    if err := cp.saveConfig(); err != nil {
-        logger.WithError(err).Warn("Failed to save config with genesis hash")
+    // If config genesis hash is already set and does not match the running chain,
+    // fail fast to prevent mixing checkpoints between different chains.
+    if cp.config.GenesisHash != (common.Hash{}) && cp.config.GenesisHash != actualGenesisHash {
+        return nil, fmt.Errorf("genesis hash mismatch in checkpoint config: expected %s, got %s", cp.config.GenesisHash.String(), actualGenesisHash.String())
     }
 
+    // Initialize config genesis hash when first run (or empty config).
+    if cp.config.GenesisHash == (common.Hash{}) {
+        cp.config.GenesisHash = actualGenesisHash
+        if err := cp.saveConfig(); err != nil {
+            logger.WithError(err).Warn("Failed to save config with genesis hash")
+        }
+    }
+
+    cp.genesisValid = cp.config.GenesisHash == actualGenesisHash
     logger.WithField("genesisHash", cp.config.GenesisHash.String()).Info("Genesis hash configured")
 
     //Initialize SSH key (will generate if not exists)
@@ -1393,4 +1397,3 @@ func CreateSampleConfig(outputPath string, actualGenesisHash common.Hash) error 
 
     return os.WriteFile(outputPath, data, 0600)
 }
-
