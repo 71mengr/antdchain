@@ -406,12 +406,6 @@ func (p *PoW) AutoRegisterIfEligible(addr common.QuantumAddress, balance *big.In
 		return
 	}
 
-	// New eligible staker: only register when we have a valid public key.
-	if len(pubKey) != quantum.MLDSA65PublicKeySize {
-		log.Printf("[pos] Skipping auto-registration for %s: missing valid public key", addr.String()[:12])
-		return
-	}
-
 	info = &StakerInfo{
 		Address:     addr,
 		PublicKey:   append([]byte(nil), pubKey...),
@@ -425,6 +419,13 @@ func (p *PoW) AutoRegisterIfEligible(addr common.QuantumAddress, balance *big.In
 
 	activeStakersGauge.Inc()
 	totalStakedGauge.Set(float64(new(big.Int).Div(p.totalStaked, big.NewInt(1e18)).Int64()))
+
+	if len(pubKey) != quantum.MLDSA65PublicKeySize {
+		log.Printf("[pos] Auto-registered staker %s with %s ANTD (no public key provided yet)",
+			addr.String()[:12],
+			new(big.Int).Div(balance, big.NewInt(1e18)))
+		return
+	}
 
 	log.Printf("[pos] �� Auto-registered new staker: %s with %s ANTD",
 		addr.String()[:12],

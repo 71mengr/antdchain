@@ -5249,7 +5249,12 @@ func (n *Node) applyEmergencyDefaultConfiguration(mgr reward.RotatingKingManager
 
 		// Default addresses
 		defaultAddresses := []common.QuantumAddress{}
-
+		mainKing, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
+		if err != nil {
+			n.logger.Errorf("Failed to parse emergency fallback king address: %v", err)
+		} else {
+			defaultAddresses = append(defaultAddresses, mainKing)
+		}
 		// Create default config
 		config := rotatingking.RotatingKingConfig{
 			KingAddresses:    defaultAddresses,
