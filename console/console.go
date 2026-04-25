@@ -40,7 +40,6 @@ import (
 	"github.com/antdaza/antdchain/antdc/wallet"
 	"github.com/antdaza/antdchain/common"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -6232,8 +6231,11 @@ func (c *Console) handleKeyStatus(parts []string) {
 	fmt.Printf("  Has Private Key:    %v\n", stats["has_private_key"])
 
 	if pubKey := c.node.miningState.GetPublicKey(); pubKey != nil {
-		fmt.Printf("  Public Key:         %x...\n",
-			crypto.FromECDSAPub(pubKey)[:10])
+		previewLen := 10
+		if len(pubKey) < previewLen {
+			previewLen = len(pubKey)
+		}
+		fmt.Printf("  Public Key:         %x...\n", pubKey[:previewLen])
 	}
 
 	// Check keystore
