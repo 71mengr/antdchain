@@ -24,7 +24,7 @@ GenesisTimestamp          = 1763731821 // Fixed genesis time (November 2025)
 GenesisDifficulty         = 1000000    // Fixed initial difficulty
 GenesisGasLimit           = 60_000_000 // High enough for initial blocks
 GenesisExtraData          = "ANTDChain Genesis — November 2025"
-GenesisMainKing           = "0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"
+GenesisMainKing           = "0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF"
 GenesisMainKingBalanceStr = "60000000000000000000000000"
 )
 

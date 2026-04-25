@@ -70,7 +70,7 @@ func main() {
 	genesis.Alloc = map[common.QuantumAddress]struct {
 		Balance string `json:"balance"`
 	}{
-		common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY"): {
+		common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF"): {
 			Balance: "1000000000000000000000000", // 1,000,000 ANTD
 		},
 	}

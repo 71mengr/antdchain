@@ -879,7 +879,7 @@ func runNode(c *cli.Context) error {
 	registeredCount := 0
 
 	// Check candidate addresses
-	mainKingAddr, _ := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	mainKingAddr, _ := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	candidateAddresses := []common.QuantumAddress{
 		mainKingAddr,                                         // Main King
 		common.BytesToQuantumAddress(minerWallet.Address().Bytes()), // Miner wallet

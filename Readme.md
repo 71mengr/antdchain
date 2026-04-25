@@ -244,11 +244,11 @@ curl -X POST http://localhost:8089/rpc \
 ```json
 {
   "genesis": {
-    "miner": "0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY",
+    "miner": "0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF",
     "timestamp": 1763731821,
     "difficulty": "1",
     "alloc": {
-      "0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY": "1000000000000000000000000"
+      "0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF": "1000000000000000000000000"
     }
   }
 }

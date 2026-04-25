@@ -2931,138 +2931,171 @@ func formatBalance(amount *big.Int) string {
 
 func (c *Console) handleImport(parts []string) {
 	if len(parts) < 2 {
-		fmt.Println("Usage: import <ml-dsa-65-private-key-hex>|path-to-key-file")
+		fmt.Fprintln(os.Stderr, "Usage: import [--file=<path>] <hex-key>")
 		return
 	}
 
 	password, err := c.readPassword("Set password for imported wallet: ")
 	if err != nil {
-		fmt.Printf("❌ Failed to read password: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to read password: %v\n", err)
 		return
 	}
-
 	confirm, err := c.readPassword("Confirm password: ")
 	if err != nil {
-		fmt.Printf("❌ Failed to read password confirmation: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to read password confirmation: %v\n", err)
 		return
 	}
 	if password != confirm {
-		fmt.Printf("❌ Passwords do not match\n")
+		fmt.Fprintf(os.Stderr, "❌ Passwords do not match\n")
 		return
 	}
 	if len(password) < 8 {
-		fmt.Printf("❌ Password must be at least 8 characters\n")
+		fmt.Fprintf(os.Stderr, "❌ Password must be at least 8 characters\n")
 		return
 	}
 
-	// Accept either a raw hex key or a file path (for redirected exports).
-	privKeyHex, err := loadImportPrivateKeyInput(parts[1:])
+	// --- Support reading key from a file (avoids terminal length limits) ---
+	var raw string
+	if len(parts) >= 2 && strings.HasPrefix(parts[1], "--file=") {
+		filePath := strings.TrimPrefix(parts[1], "--file=")
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to read file: %v\n", err)
+			return
+		}
+		raw = string(data)
+	} else if len(parts) >= 3 && parts[1] == "--file" {
+		filePath := parts[2]
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to read file: %v\n", err)
+			return
+		}
+		raw = string(data)
+	} else {
+		// Standard direct input (from command line)
+		raw = strings.Join(parts[1:], "")
+	}
+
+	// Clean the input: remove all whitespace and optional 0x/0X prefix
+	raw = strings.NewReplacer("\n", "", "\r", "", "\t", "", " ", "").Replace(raw)
+	raw = strings.TrimPrefix(raw, "0x")
+	raw = strings.TrimPrefix(raw, "0X")
+
+	if len(raw)%2 != 0 {
+		fmt.Fprintln(os.Stderr, "❌ Invalid hex: odd length")
+		return
+	}
+
+	privKeyBytes, err := hex.DecodeString(raw)
 	if err != nil {
-		fmt.Printf("Failed to import wallet: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Invalid hex: %v\n", err)
 		return
 	}
-	privKeyBytes, err := hex.DecodeString(privKeyHex)
-	if err != nil {
-		fmt.Printf("Failed to import wallet: invalid private key hex: %v\n", err)
-		return
-	}
-	if len(privKeyBytes) == 0 {
-		fmt.Printf("Failed to import wallet: private key is empty\n")
-		return
-	}
-	var (
-		importPrivKey []byte
-		expectedAddr  common.QuantumAddress
-	)
+
+		// Determine the final 4032‑byte private key and the derived address
+	var fullPriv []byte
+	var addr common.QuantumAddress
 
 	switch len(privKeyBytes) {
-	case 32:
-		fullPriv, fullPub, err := quantum.DeriveKeyFromSeed(privKeyBytes)
-		if err != nil {
-			fmt.Printf("Failed to import wallet: invalid seed: %v\n", err)
+	case 32: // seed – expand to full key
+		_, pubFromSeed, err2 := quantum.DeriveKeyFromSeed(privKeyBytes)
+		if err2 != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to derive key from seed: %v\n", err2)
 			return
 		}
-		importPrivKey = fullPriv
-		expectedAddr, err = common.ParseQuantumAddress(quantum.PubKeyToAddress(fullPub))
+		addr, err = common.ParseQuantumAddress(quantum.PubKeyToAddress(pubFromSeed))
 		if err != nil {
-			fmt.Printf("Failed to import wallet: failed to derive address from seed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "❌ Bad address from seed: %v\n", err)
 			return
 		}
 
-	case 4032:
-		pubKey, err := quantum.DerivePublicKey(privKeyBytes)
-		if err != nil {
-			fmt.Printf("Failed to import wallet: invalid ML-DSA-65 private key: %v\n", err)
+	case quantum.MLDSA65PrivateKeySize: // full packed key
+		pub, err2 := quantum.DerivePublicKey(privKeyBytes)
+		if err2 != nil {
+			fmt.Fprintf(os.Stderr, "❌ Invalid Antd private key: %v\n", err2)
 			return
 		}
-		importPrivKey = privKeyBytes
-		expectedAddr, err = common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+		fullPriv = privKeyBytes
+		addr, err = common.ParseQuantumAddress(quantum.PubKeyToAddress(pub))
 		if err != nil {
-			fmt.Printf("Failed to import wallet: failed to derive address from private key: %v\n", err)
+			fmt.Fprintf(os.Stderr, "❌ Bad address from private key: %v\n", err)
 			return
 		}
 
 	default:
-		fmt.Printf("Failed to import wallet: invalid private key length: got %d bytes; expected 32-byte seed (64 hex chars) or 4032-byte packed ML-DSA-65 private key (8064 hex chars)\n", len(privKeyBytes))
+		fmt.Fprintf(os.Stderr, "❌ Invalid key length: %d bytes (expected 32‑byte seed or %d‑byte private key)\n",
+			len(privKeyBytes), quantum.MLDSA65PrivateKeySize)
 		return
 	}
 
-	addr, err := qkeystore.ImportAccount(importPrivKey, password, c.node.GetKeystoreDir())
+	// Store the 4032‑byte key in the keystore (uses fullPriv)
+	importedAddr, err := qkeystore.ImportAccount(fullPriv, password, c.node.GetKeystoreDir())
 	if err != nil {
-		fmt.Printf("Failed to import wallet: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to store keystore: %v\n", err)
 		return
 	}
-	if expectedAddr != (common.QuantumAddress{}) && addr != expectedAddr {
-		fmt.Printf("Failed to import wallet: address mismatch after import\n")
+	if importedAddr != addr {
+		fmt.Fprintf(os.Stderr, "❌ Address mismatch after keystore import: expected %s, got %s\n",
+			addr.String(), importedAddr.String())
 		return
 	}
 
-	imported := wallet.NewWalletWithAddress(c.node.blockchain, addr, c.getWalletDataDir())
-	c.node.walletManager.AddWallet(addr.String(), imported)
+	// Register the wallet
+	w := wallet.NewWalletWithAddress(c.node.blockchain, addr, c.getWalletDataDir())
+	c.node.walletManager.AddWallet(addr.String(), w)
 
-	fmt.Printf("Wallet imported.\n")
-	fmt.Printf("Address: %s\n", addr.String())
-	fmt.Printf("Type: quantum address (0q Base58Check)\n")
+	fmt.Fprintf(os.Stderr, "✅ Wallet imported\n")
+	fmt.Fprintf(os.Stderr, "   Address: %s\n", addr.String())
+	fmt.Fprintf(os.Stderr, "   Type: Antd quantum (0q Base58Check)\n")
 }
 
 func (c *Console) handleExport(parts []string) {
 	if len(parts) < 2 {
-		fmt.Println("Usage: export <address>")
+		fmt.Fprintln(os.Stderr, "Usage: export <address>")
 		return
 	}
 
-	qAddr := mustParseQuantumAddress(parts[1])
+	qAddr, err := common.ParseQuantumAddress(parts[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Invalid Antd address: %v\n", err)
+		return
+	}
 
 	password, err := c.readPassword("Enter password to decrypt wallet: ")
 	if err != nil {
-		fmt.Printf("❌ Failed to read password: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to read password: %v\n", err)
 		return
 	}
 
 	privKeyBytes, err := qkeystore.Unlock(qAddr, password, c.node.GetKeystoreDir())
 	if err != nil {
-		fmt.Printf("❌ Failed to export wallet: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to decrypt keystore: %v\n", err)
 		return
 	}
 	if len(privKeyBytes) != quantum.MLDSA65PrivateKeySize {
-		fmt.Printf("❌ Failed to export wallet: unexpected private key length %d bytes\n", len(privKeyBytes))
+		fmt.Fprintf(os.Stderr, "❌ Unexpected private key length: %d bytes (expected %d)\n",
+			len(privKeyBytes), quantum.MLDSA65PrivateKeySize)
 		return
 	}
 
+	// Write the full private key to stdout (perfect for redirection)
 	privateKeyHex := hex.EncodeToString(privKeyBytes)
-	if !stdoutIsTerminal() {
-		// Emit raw hex only when stdout is redirected so the output can be piped
-		// directly into a file and re-imported later.
-		fmt.Printf("%s\n", privateKeyHex)
-		return
-	}
-	fmt.Printf("�� Private key for %s:\n", qAddr.String())
 	fmt.Printf("0x%s\n", privateKeyHex)
+
+	// If a seed is available, write it on a second line
 	if seed := quantum.ExtractSeedFromPrivateKey(privKeyBytes); len(seed) == 32 {
-		fmt.Println("Seed (if available):")
 		fmt.Printf("0x%s\n", hex.EncodeToString(seed))
 	}
-	fmt.Printf("⚠️ Keep this private key secure and never share it!\n")
+
+	// Informational messages go to stderr so they don't pollute the file
+	fmt.Fprintln(os.Stderr, "\n⚠️  Keep this private key secure and never share it!")
+	if seed := quantum.ExtractSeedFromPrivateKey(privKeyBytes); len(seed) == 32 {
+		fmt.Fprintln(os.Stderr, "�� A 32‑byte seed is included above – it can regenerate the full key.")
+		fmt.Fprintln(os.Stderr, "   Import it as a seed to restore your wallet.")
+	} else {
+		fmt.Fprintln(os.Stderr, "ℹ️  No seed available. This key was generated randomly.")
+	}
 }
 
 func (c *Console) handleGetBlockInfo(parts []string) {
@@ -3899,7 +3932,7 @@ func (c *Console) handleRKList(rkManager reward.RotatingKingManager) {
 	for i, addr := range addresses {
 		c.node.mu.RLock()
 		balance := c.node.blockchain.State().GetBalance(addr)
-		isMainKing := addr == mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+		isMainKing := addr == mustParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 		c.node.mu.RUnlock()
 
 		status := ""
@@ -3990,7 +4023,7 @@ func (c *Console) handleRKHistory(rkManager reward.RotatingKingManager, limit in
 func (c *Console) handleRKRotate(rkManager reward.RotatingKingManager, index int) {
 	c.node.mu.RLock()
 	minerAddr := c.node.MinerWalletAddress()
-	mainKing := mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	mainKing := mustParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	isMainKing := minerAddr == mainKing
 	currentHeight := c.node.blockchain.GetChainHeight()
 	blockHash := c.node.blockchain.GetBlock(currentHeight).Hash()
@@ -4261,7 +4294,7 @@ func (c *Console) handleRKInfo(rkManager reward.RotatingKingManager, addrStr str
 	c.node.mu.RLock()
 	balance := c.node.blockchain.State().GetBalance(addr)
 	// blocksMined := c.node.blockchain.GetBlocksMinedBy(addr)
-	isMainKing := addr == mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	isMainKing := addr == mustParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	c.node.mu.RUnlock()
 
 	isKing := rkManager.IsKing(addr)
@@ -4317,7 +4350,7 @@ func (c *Console) handleRKGovernance(rkManager reward.RotatingKingManager, parts
 	}
 
 	c.node.mu.RLock()
-	mainKing := mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	mainKing := mustParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	isMainKing := c.node.MinerWalletAddress() == mainKing
 	c.node.mu.RUnlock()
 
@@ -4387,7 +4420,7 @@ func (c *Console) handleRKGovernanceAdd(rkManager reward.RotatingKingManager, ad
 	}
 
 	// Check if address is the Main King address
-	mainKing := mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	mainKing := mustParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	if addr == mainKing {
 		fmt.Println("❌ Main King is already permanently in the reward distribution")
 		fmt.Println("   Main King receives 5% rewards automatically")
@@ -4639,7 +4672,7 @@ func (c *Console) showProposalDetails(proposalID uint64, govController interface
 	fmt.Printf("\n🎉 GOVERNANCE PROPOSAL CREATED!\n")
 	fmt.Printf("══════════════════════════════════════════════════════════\n")
 	fmt.Printf("   Proposal ID:      %d\n", proposalID)
-	fmt.Printf("   From (Main King): %s\n", mustParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY").Hex())
+	fmt.Printf("   From (Main King): %s\n", mustParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF").Hex())
 	fmt.Printf("   Action:           Add %s to rotation\n", addr.String())
 	fmt.Printf("   New Total Kings:  %d\n", len(newRotatingKings))
 	fmt.Printf("   Created:          %s\n", time.Unix(int64(currentTime), 0).Format(time.RFC3339))

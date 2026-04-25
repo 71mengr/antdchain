@@ -358,14 +358,14 @@ func (c *Checkpoints) ensureGenesisCheckpoint(actualGenesisHash common.Hash) {
 		return
 	}
 
-	minerAddr, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	minerAddr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	if err != nil {
 	    // Fallback to zero address or return error
 	    minerAddr = common.QuantumAddress{}
 	    c.logger.WithError(err).Error("Failed to parse genesis miner address")
 	}
 
-	kingAddr, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+	kingAddr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	if err != nil {
 	    kingAddr = common.QuantumAddress{}
 	    c.logger.WithError(err).Error("Failed to parse genesis rotating king address")
@@ -1339,7 +1339,7 @@ func CreateSampleConfig(outputPath string, actualGenesisHash common.Hash) error 
         Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
     }
 
-        minerAddr, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+        minerAddr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
         if err != nil {
             minerAddr = common.QuantumAddress{}
         }

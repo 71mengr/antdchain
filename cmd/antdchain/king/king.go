@@ -154,7 +154,7 @@ func cmdStatus(ctx *cli.Context) error {
     fmt.Println("=== ANTDChain King Status ===")
     
     // Get main king from reward distributor
-    mainKing, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY") // Default main king
+    mainKing, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF") // Default main king
     if err != nil {
         return fmt.Errorf("invalid default main king address: %w", err)
     }

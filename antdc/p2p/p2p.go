@@ -5136,7 +5136,7 @@ func (n *Node) BroadcastRotation(event *rotatingking.KingRotationBroadcast) erro
 
 func (n *Node) isImportantAddress(addr common.QuantumAddress) bool {
     // Pre-parse important addresses
-    mainKing, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+    mainKing, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
     if err != nil {
         // Fallback to zero address if parsing fails (should never happen with valid string)
         mainKing = common.QuantumAddress{}

@@ -130,7 +130,7 @@ func parseInstructions(data []byte) ([]Instruction, error) {
     // Currently returns a hardcoded example for testing.
 
     // Parse the example address safely
-    addr, err := common.ParseQuantumAddress("0q5E2PeUs72XQrN5FKWwMwPnM2Z5FjTD5jY")
+    addr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
     if err != nil {
         return nil, fmt.Errorf("invalid hardcoded quantum address: %w", err)
     }
