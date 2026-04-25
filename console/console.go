@@ -3154,76 +3154,46 @@ func (c *Console) handleLock(parts []string) {
 
 func (c *Console) handleUnlock(parts []string) {
 	if len(parts) < 2 {
-		fmt.Println("Usage: unlock <address>")
+		fmt.Fprintln(os.Stderr, "Usage: unlock <address>")
 		return
 	}
 
-	addr := mustParseQuantumAddress(parts[1])
+	addr, err := common.ParseQuantumAddress(parts[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Invalid quantum address: %v\n", err)
+		return
+	}
 
-	// Read password
 	password, err := c.readPassword(fmt.Sprintf("Password for %s: ", addr.String()))
 	if err != nil {
-		fmt.Printf("❌ Failed to read password: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to read password: %v\n", err)
 		return
 	}
 
-	// Set as miner address
+	// Unlock through the wallet manager (uses quantum keystore)
+	if err := c.node.walletManager.Unlock(addr.String(), password); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to unlock wallet: %v\n", err)
+		return
+	}
+
+	// Set the miner address for Proof‑of‑Stake (if mining is enabled)
 	c.node.SetMinerWalletAddress(addr)
 
-	// Update mining state address
+	// Load the private key into the mining state
 	if c.node.miningState != nil {
-		// Set address in mining state
-		if err := c.node.miningState.SetMinerAddress(addr); err != nil {
-			fmt.Printf("❌ Failed to set miner address: %v\n", err)
-			return
-		}
-
-		// Find the keystore file
-		var keyFile string
-		for _, acc := range c.node.Keystore().Accounts() {
-			if ethAddressMatchesQuantumAddress(acc.Address, addr) {
-				keyFile = acc.URL.Path
-				break
-			}
-		}
-
-		// Fallback: scan antdchain keystore directory directly (quantum keystore files)
-		if keyFile == "" {
-			ksDir := c.node.GetKeystoreDir()
-			entries, readErr := os.ReadDir(ksDir)
-			if readErr == nil {
-				for _, entry := range entries {
-					if entry.IsDir() {
-						continue
-					}
-					name := entry.Name()
-					if strings.HasPrefix(name, "UTC--") && strings.HasSuffix(name, addr.String()) {
-						keyFile = filepath.Join(ksDir, name)
-						break
-					}
+		w := c.node.walletManager.GetWallet(addr.String())
+		if w != nil {
+			privKey, err := w.PrivateKey()
+			if err == nil {
+				if err := c.node.miningState.SetPrivateKeyFromBytes(privKey); err != nil {
+					fmt.Fprintf(os.Stderr, "❌ Failed to load private key into miner: %v\n", err)
+					return
 				}
 			}
 		}
-
-		if keyFile == "" {
-			fmt.Printf("❌ Wallet %s not found in keystore\n", addr.String())
-			fmt.Printf("   Keystore directory: %s\n", c.node.GetKeystoreDir())
-			fmt.Println("   Available wallets:")
-			for _, acc := range c.node.Keystore().Accounts() {
-				fmt.Printf("   • %s\n", acc.Address.String())
-			}
-			return
-		}
-
-		// Try to load the key using the new method
-		if err := c.node.miningState.LoadPrivateKeyFromFile(keyFile, password); err != nil {
-			fmt.Printf("❌ Failed to unlock wallet: %v\n", err)
-			return
-		}
-
-		fmt.Printf("✅ Wallet %s unlocked successfully!\n", addr.String())
-		fmt.Printf("   Private key loaded from: %s\n", filepath.Base(keyFile))
 	}
+
+	fmt.Fprintf(os.Stderr, "✅ Wallet %s unlocked successfully!\n", addr.String())
 }
 
 func (c *Console) handleBalance(parts []string) {
