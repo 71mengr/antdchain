@@ -4,7 +4,7 @@
 
 package mining
 import (
-    "crypto/ecdsa"
+    "encoding/json"
     "errors"
     "fmt"
     "log"
@@ -12,13 +12,12 @@ import (
     "sync"
     "time"
     "os"
+    "path/filepath"
     "github.com/prometheus/client_golang/prometheus"
-    "github.com/ethereum/go-ethereum/accounts"
-    "github.com/ethereum/go-ethereum/accounts/keystore"
-
-    "github.com/ethereum/go-ethereum/crypto"
+    qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
     "github.com/antdaza/antdchain/antdc/block"
     "github.com/antdaza/antdchain/antdc/chain"
+    "github.com/antdaza/antdchain/antdc/crypto/quantum"
     "github.com/antdaza/antdchain/antdc/p2p"
     "github.com/antdaza/antdchain/antdc/pow"
     "github.com/antdaza/antdchain/common"
@@ -107,7 +106,8 @@ type PosMiningState struct {
     enabled      bool
     minerAddress common.QuantumAddress
     powEngine    *pow.PoW
-    privateKey   *ecdsa.PrivateKey
+    privateKey   []byte
+    hasPrivateKey bool
 
     blocksMined  uint64
     totalRewards *big.Int
@@ -174,19 +174,14 @@ func (ms *PosMiningState) SetMinerAddress(addr common.QuantumAddress) error {
     return nil
 }
 
-func (ms *PosMiningState) SetPrivateKey(privKey *ecdsa.PrivateKey) {
+func (ms *PosMiningState) SetPrivateKeyFromBytes(keyBytes []byte) error {
+    if len(keyBytes) == 0 {
+        return errors.New("private key bytes are empty")
+    }
     ms.mu.Lock()
     defer ms.mu.Unlock()
-    ms.privateKey = privKey
-    log.Printf("[miner] Private key set for address: %s", crypto.PubkeyToAddress(privKey.PublicKey).String())
-}
-
-func (ms *PosMiningState) SetPrivateKeyFromBytes(keyBytes []byte) error {
-    privKey, err := crypto.ToECDSA(keyBytes)
-    if err != nil {
-        return fmt.Errorf("failed to parse private key: %w", err)
-    }
-    ms.SetPrivateKey(privKey)
+    ms.privateKey = append([]byte(nil), keyBytes...)
+    ms.hasPrivateKey = true
     return nil
 }
 
@@ -204,13 +199,17 @@ func (ms *PosMiningState) GetMinerAddress() common.QuantumAddress {
     return ms.minerAddress
 }
 
-func (ms *PosMiningState) GetPublicKey() *ecdsa.PublicKey {
+func (ms *PosMiningState) GetPublicKey() []byte {
     ms.mu.RLock()
     defer ms.mu.RUnlock()
-    if ms.privateKey == nil {
+    if !ms.hasPrivateKey || len(ms.privateKey) == 0 {
         return nil
     }
-    return &ms.privateKey.PublicKey
+    pubKey, err := quantum.DerivePublicKey(ms.privateKey)
+    if err != nil {
+        return nil
+    }
+    return pubKey
 }
 
 // Starts the Proof-of-Stake mining process
@@ -330,22 +329,29 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         //   2) a direct match with the address derived from the loaded key.
         // This prevents false "waiting" states when minerAddress and key address drift.
         var (
-            eligiblePrivKey  *ecdsa.PrivateKey
+            eligiblePrivKey  []byte
             configuredMiner  common.QuantumAddress
             loadedKeyAddress common.QuantumAddress
         )
         ms.mu.RLock()
         configuredMiner = ms.minerAddress
         if ms.privateKey != nil {
-            loadedKeyAddress = common.BytesToQuantumAddress(crypto.PubkeyToAddress(ms.privateKey.PublicKey).Bytes())
+        if ms.hasPrivateKey && len(ms.privateKey) > 0 {
+            pubKey, err := quantum.DerivePublicKey(ms.privateKey)
+            if err == nil {
+                parsedAddr, addrErr := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+                if addrErr == nil {
+                    loadedKeyAddress = parsedAddr
+                }
+            }
             if expectedMiner == configuredMiner || expectedMiner == loadedKeyAddress {
-                eligiblePrivKey = ms.privateKey
+                eligiblePrivKey = append([]byte(nil), ms.privateKey...)
             }
         }
         ms.mu.RUnlock()
 
         eligibilityChecks++
-        if eligiblePrivKey == nil {
+        if len(eligiblePrivKey) == 0 {
             // Not our turn — or we don't have the key for the expected miner
             consecutiveMisses++
             if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
@@ -442,96 +448,85 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
     log.Println("[miner] Mining stopped")
 }
 
-// Creates a PoS signature for a block using ECDSA
+// Creates a PoS signature for a block using ML-DSA-65
 func generateBlockSignature(
     miner common.QuantumAddress,
     parentHash common.Hash,
     height uint64,
     timestamp uint64,
-    privateKey *ecdsa.PrivateKey,
+    privateKey []byte,
 ) ([]byte, error) {
-    if privateKey == nil {
+    if len(privateKey) == 0 {
         log.Println("[miner] Warning: No private key provided for block signing")
         return []byte{}, nil
     }
 
-    // Use the engine's GenerateBlockSignature method
-    if privateKey == nil {
+    if len(privateKey) == 0 {
         return nil, errors.New("private key required")
     }
     
-    // Create the message to sign
-    msg := crypto.Keccak256Hash(
-        []byte("ANTDChain-PoS-Block"),
-        parentHash.Bytes(),
-        common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
-        common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
-        miner.Bytes(),
+    msg := common.ComputeHash(
+        append(
+            []byte("ANTDChain-PoS-Block"),
+            append(
+                parentHash.Bytes(),
+                append(
+                    common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
+                    append(
+                        common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
+                        miner.Bytes()...,
+                    )...,
+                )...,
+            )...,
+        ),
     ).Bytes()
     
-    // Sign the message
-    signature, err := crypto.Sign(msg, privateKey)
+    signature, err := quantum.Sign(privateKey, msg)
     if err != nil {
         return nil, fmt.Errorf("failed to sign block: %w", err)
     }
 
-    log.Printf("[miner] Generated valid ECDSA signature for block %d", height)
+    log.Printf("[miner] Generated valid antd signature for block %d", height)
     return signature, nil
 }
 
-// verifyBlockSignature verifies a PoS block signature using ECDSA
+// verifyBlockSignature verifies a PoS block signature using ML-DSA-65
 func verifyBlockSignature(
     miner common.QuantumAddress,
     parentHash common.Hash,
     height uint64,
     timestamp uint64,
     signature []byte,
-    expectedPublicKey *ecdsa.PublicKey,
+    expectedPublicKey []byte,
 ) (bool, error) {
     if len(signature) == 0 {
         return true, nil // Empty signature allowed for unsigned blocks
     }
 
-    // Use the engine's VerifyBlockSignature method
-    if len(signature) != 65 {
-        return false, errors.New("invalid signature length (expected 65 bytes)")
+    if len(expectedPublicKey) == 0 {
+        return false, errors.New("expected public key required")
     }
 
-    // Create the message that was signed
-    msg := crypto.Keccak256(
-        []byte("ANTDChain-PoS-Block"),
-        parentHash.Bytes(),
-        common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
-        common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
-        miner.Bytes(),
-    )
+    msg := common.ComputeHash(
+        append(
+            []byte("ANTDChain-PoS-Block"),
+            append(
+                parentHash.Bytes(),
+                append(
+                    common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
+                    append(
+                        common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
+                        miner.Bytes()...,
+                    )...,
+                )...,
+            )...,
+        ),
+    ).Bytes()
 
-    // Recover the public key
-    pubKeyBytes, err := crypto.Ecrecover(msg, signature)
-    if err != nil {
-        return false, fmt.Errorf("failed to recover public key: %w", err)
-    }
-
-    // Verify the signature
-    if !crypto.VerifySignature(pubKeyBytes, msg, signature[:64]) {
+    if !quantum.Verify(expectedPublicKey, msg, signature) {
         return false, errors.New("signature verification failed")
     }
 
-    // If expected public key is provided, verify it matches
-    if expectedPublicKey != nil {
-        recoveredPubKey, err := crypto.UnmarshalPubkey(pubKeyBytes)
-        if err != nil {
-            return false, fmt.Errorf("invalid recovered public key: %w", err)
-        }
-        
-        recoveredAddr := crypto.PubkeyToAddress(*recoveredPubKey)
-        expectedAddr := crypto.PubkeyToAddress(*expectedPublicKey)
-        
-        if recoveredAddr != expectedAddr {
-            return false, fmt.Errorf("signature public key mismatch: recovered %s, expected %s",
-                recoveredAddr.String(), expectedAddr.String())
-        }
-    }
 
     return true, nil
 }
@@ -591,7 +586,7 @@ func extractSignatureFromBlock(blk *block.Block) []byte {
 }
 
 // Verifies the signature of a mined block
-func (ms *PosMiningState) VerifyBlockSignature(blk *block.Block, expectedPublicKey *ecdsa.PublicKey) (bool, error) {
+func (ms *PosMiningState) VerifyBlockSignature(blk *block.Block, expectedPublicKey []byte) (bool, error) {
     if blk == nil || blk.Header == nil {
         return false, errors.New("nil block or header")
     }
@@ -623,7 +618,7 @@ func (ms *PosMiningState) GetMiningStatistics() map[string]interface{} {
         "blocks_mined":            ms.blocksMined,
         "total_rewards_antd":       formatWei(ms.totalRewards),
         "total_rewards_wei":       ms.totalRewards.String(),
-        "has_private_key":         ms.privateKey != nil,
+        "has_private_key":         ms.hasPrivateKey,
         "mining_interval_seconds": ms.miningInterval.Seconds(),
         "broadcast_max_retries":   ms.broadcastMaxRetries,
     }
@@ -639,76 +634,68 @@ func (ms *PosMiningState) GetMiningStatistics() map[string]interface{} {
 }
 
 // Loads and decrypts the private key from keystore
-func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreStore *keystore.KeyStore, password string) error {
-    ms.mu.Lock()
-    defer ms.mu.Unlock()
+func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreDir, password string) error {
+    ms.mu.RLock()
+    minerAddress := ms.minerAddress
+    ms.mu.RUnlock()
 
-    if ms.minerAddress == (common.QuantumAddress{}) {
+    if minerAddress == (common.QuantumAddress{}) {
         return errors.New("miner address not set")
     }
 
-    if keystoreStore == nil {
-        return errors.New("keystore is nil")
-    }
 
-    var targetAccount accounts.Account
-    found := false
-    for _, acc := range keystoreStore.Accounts() {
-        if common.BytesToQuantumAddress(acc.Address.Bytes()) == ms.minerAddress {
-            targetAccount = acc
-            found = true
-            break
-        }
-    }
-
-    if !found {
-        return fmt.Errorf("address %s not found in keystore", ms.minerAddress.String())
-    }
-
-    keyjson, err := os.ReadFile(targetAccount.URL.Path)
+    privKey, err := qkeystore.Unlock(minerAddress, password, keystoreDir)
     if err != nil {
-        return fmt.Errorf("failed to read keystore file: %w", err)
+        return fmt.Errorf("failed to unlock antd keystore: %w", err)
     }
 
-    key, err := keystore.DecryptKey(keyjson, password)
-    if err != nil {
-        return fmt.Errorf("failed to decrypt key: %w", err)
+    if len(privKey) != quantum.MLDSA65PrivateKeySize {
+        return fmt.Errorf("invalid private key length: expected %d bytes, got %d", quantum.MLDSA65PrivateKeySize, len(privKey))
     }
 
-    ms.privateKey = key.PrivateKey
-    log.Printf("[miner] ✓ Loaded private key from keystore for %s", ms.minerAddress.String())
-    log.Printf("[miner]   Keystore file: %s", targetAccount.URL.Path)
+    if err := ms.SetPrivateKeyFromBytes(privKey); err != nil {
+        return err
+    }
 
     return nil
 }
 
 // Loads a private key from a keystore file
-func (ms *PosMiningState) LoadPrivateKeyFromFile(filepath, password string) error {
-    ms.mu.Lock()
-    defer ms.mu.Unlock()
-
-    if ms.minerAddress == (common.QuantumAddress{}) {
+func (ms *PosMiningState) LoadPrivateKeyFromFile(filePath, password string) error {
+    ms.mu.RLock()
+    minerAddress := ms.minerAddress
+    ms.mu.RUnlock()
+    if minerAddress == (common.QuantumAddress{}) {
         return errors.New("miner address not set")
     }
 
-    keyjson, err := os.ReadFile(filepath)
+    keyjson, err := os.ReadFile(filePath)
     if err != nil {
         return fmt.Errorf("failed to read keystore file: %w", err)
     }
 
-    key, err := keystore.DecryptKey(keyjson, password)
-    if err != nil {
-        return fmt.Errorf("failed to decrypt key: %w", err)
+    var ks qkeystore.KeyStore
+    if err := json.Unmarshal(keyjson, &ks); err != nil {
+        return fmt.Errorf("invalid antd keystore format: %w", err)
     }
 
-    keyAddress := common.BytesToQuantumAddress(crypto.PubkeyToAddress(key.PrivateKey.PublicKey).Bytes())
-    if keyAddress != ms.minerAddress {
+    if ks.Address != minerAddress.String() {
         return fmt.Errorf("key address mismatch: expected %s, got %s",
-            ms.minerAddress.String(), keyAddress.String())
+            minerAddress.String(), ks.Address)
     }
 
-    ms.privateKey = key.PrivateKey
-    log.Printf("[miner] ✓ Loaded private key from %s", filepath)
+    privKey, err := qkeystore.Unlock(minerAddress, password, filepath.Dir(filePath))
+    if err != nil {
+        return fmt.Errorf("failed to decrypt quantum keystore: %w", err)
+    }
+    if len(privKey) != quantum.MLDSA65PrivateKeySize {
+        return fmt.Errorf("invalid private key length: expected %d bytes, got %d", quantum.MLDSA65PrivateKeySize, len(privKey))
+    }
+    if err := ms.SetPrivateKeyFromBytes(privKey); err != nil {
+        return err
+    }
+
+    log.Printf("[miner] ✓ Loaded private key from %s", filePath)
 
     return nil
 }
