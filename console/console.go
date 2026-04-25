@@ -2993,7 +2993,7 @@ func (c *Console) handleImport(parts []string) {
 		return
 	}
 
-		// Determine the final 4032‑byte private key and the derived address
+	// Determine the final 4032‑byte private key and the derived address
 	var fullPriv []byte
 	var addr common.QuantumAddress
 
@@ -3187,8 +3187,27 @@ func (c *Console) handleUnlock(parts []string) {
 			}
 		}
 
+		// Fallback: scan antdchain keystore directory directly (quantum keystore files)
+		if keyFile == "" {
+			ksDir := c.node.GetKeystoreDir()
+			entries, readErr := os.ReadDir(ksDir)
+			if readErr == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					name := entry.Name()
+					if strings.HasPrefix(name, "UTC--") && strings.HasSuffix(name, addr.String()) {
+						keyFile = filepath.Join(ksDir, name)
+						break
+					}
+				}
+			}
+		}
+
 		if keyFile == "" {
 			fmt.Printf("❌ Wallet %s not found in keystore\n", addr.String())
+			fmt.Printf("   Keystore directory: %s\n", c.node.GetKeystoreDir())
 			fmt.Println("   Available wallets:")
 			for _, acc := range c.node.Keystore().Accounts() {
 				fmt.Printf("   • %s\n", acc.Address.String())
