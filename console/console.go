@@ -1655,10 +1655,6 @@ func (c *Console) handleSetAddress(parts []string) {
 
 	if !found {
 		fmt.Printf("Wallet %s not found in keystore\n", addr.String())
-		fmt.Printf("Available wallets:\n")
-		for _, acc := range c.node.Keystore().Accounts() {
-			fmt.Printf("  %s\n", acc.Address.String())
-		}
 		return
 	}
 
