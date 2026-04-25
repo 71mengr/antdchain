@@ -458,10 +458,6 @@ func generateBlockSignature(
 ) ([]byte, error) {
     if len(privateKey) == 0 {
         log.Println("[miner] Warning: No private key provided for block signing")
-        return []byte{}, nil
-    }
-
-    if len(privateKey) == 0 {
         return nil, errors.New("private key required")
     }
     
