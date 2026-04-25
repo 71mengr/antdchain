@@ -41,7 +41,8 @@ import (
 	"github.com/antdaza/antdchain/common"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/rpc"
-)
+
+        )
 
 func ethToQuantumAddress(addr common.QuantumAddress) common.QuantumAddress {
 	q, err := common.NewQuantumAddressFromBytes(addr.Bytes())
@@ -3200,19 +3201,42 @@ func (c *Console) handleUnlock(parts []string) {
 		return
 	}
 
-	// Set the miner address for Proof‑of‑Stake (if mining is enabled)
+	// Set the miner address for Proof‑of‑Stake
 	c.node.SetMinerWalletAddress(addr)
 
-	// Load the private key into the mining state
+	// Load the private key into the mining state and register the public key with the PoW engine
 	if c.node.miningState != nil {
 		w := c.node.walletManager.GetWallet(addr.String())
 		if w != nil {
 			privKey, err := w.PrivateKey()
 			if err == nil {
+				// Store the raw private key in the mining state
 				if err := c.node.miningState.SetPrivateKeyFromBytes(privKey); err != nil {
 					fmt.Fprintf(os.Stderr, "❌ Failed to load private key into miner: %v\n", err)
 					return
 				}
+
+				// Derive and register the public key so block validation can verify signatures
+				pubKey, err := quantum.DerivePublicKey(privKey)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "❌ Failed to derive public key: %v\n", err)
+					return
+				}
+
+				// Get the current balance to avoid overwriting the stake amount
+				c.node.mu.RLock()
+				balance := c.node.blockchain.State().GetBalance(addr)
+				c.node.mu.RUnlock()
+
+				// Register the public key without affecting stake
+				powEngine := c.node.blockchain.Pow()
+				if powEngine != nil {
+					    powEngine.AutoRegisterIfEligible(addr, balance, pubKey)
+					        fmt.Fprintf(os.Stderr, "�� Public key registered for miner %s\n", addr.String())
+					} else {
+						    fmt.Fprintf(os.Stderr, "⚠️ PoW engine not available – public key not registered\n")
+					    }
+				fmt.Fprintf(os.Stderr, "�� Public key registered for miner %s\n", addr.String())
 			}
 		}
 	}
