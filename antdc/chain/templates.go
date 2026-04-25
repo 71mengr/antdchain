@@ -258,6 +258,9 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 		),
 		Extra: extraData,
 	}
+	if err := applyProtocolHeaderFields(header); err != nil {
+		return nil, nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
+	}
 
 	// Create the block
 	newBlock, err := block.NewBlock(header, includedTxs, nil)

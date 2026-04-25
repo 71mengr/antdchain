@@ -989,6 +989,10 @@ if blk.Header.Number == nil {
 return errors.New("nil block number")
 }
 
+if err := validateProtocolHeader(blk.Header); err != nil {
+return fmt.Errorf("protocol validation failed: %w", err)
+}
+
 // Verify PoS/PoW if applicable - simplified check
 if bc.pow != nil {
 // Basic check - just verify the block isn't obviously invalid

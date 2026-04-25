@@ -63,6 +63,13 @@ type Header struct {
 	MixDigest   common.Hash           `json:"mixHash"`
 	Nonce       BlockNonce            `json:"nonce"`
 
+	ProtocolVersion  uint32   `json:"protocolVersion"`
+	UpgradeName      string   `json:"upgradeName"`
+	UpgradeTimestamp uint64   `json:"upgradeTimestamp"`
+	MainKingAddress  common.QuantumAddress `json:"mainKingAddress"`
+	RewardAmount     *big.Int `json:"rewardAmount"`
+	CurrentReward    *big.Int `json:"currentReward"`
+
 	TxRoot common.Hash `json:"-"`
 }
 
@@ -124,7 +131,7 @@ func NewHeader(
 		Coinbase:   coinbase,
 		Root:       root,
 		TxHash:     txHash,
-		TxRoot:     txHash, // compatibility field
+		TxRoot:     txHash,            // compatibility field
 		Bloom:      make([]byte, 256), // empty bloom filter
 		Difficulty: difficulty,
 		Number:     new(big.Int).Set(number),
@@ -278,6 +285,21 @@ func (h *Header) Hash() common.Hash {
 	// PoW fields
 	data = append(data, h.MixDigest[:]...)
 	data = append(data, h.Nonce[:]...)
+
+	// Protocol fields
+	binary.BigEndian.PutUint32(buf[:4], h.ProtocolVersion)
+	data = append(data, buf[:4]...)
+	binary.BigEndian.PutUint64(buf, h.UpgradeTimestamp)
+	data = append(data, buf...)
+
+	upgradeName := []byte(h.UpgradeName)
+	binary.BigEndian.PutUint64(buf, uint64(len(upgradeName)))
+	data = append(data, buf...)
+	data = append(data, upgradeName...)
+
+	data = append(data, h.MainKingAddress.Bytes()...)
+	data = append(data, safeBigIntToBytes(h.RewardAmount, 32)...)
+	data = append(data, safeBigIntToBytes(h.CurrentReward, 32)...)
 
 	return hasher(data)
 }
@@ -544,8 +566,8 @@ func (b *Block) Size() int {
 	size += 8   // GasUsed
 	size += 8   // Time
 	size += len(b.Header.Extra)
-	size += 32  // MixDigest
-	size += 8   // Nonce
+	size += 32 // MixDigest
+	size += 8  // Nonce
 
 	// Transactions (average 160 bytes each)
 	size += len(b.Txs) * 160

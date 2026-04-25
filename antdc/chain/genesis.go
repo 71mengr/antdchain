@@ -81,6 +81,9 @@ header.ReceiptHash = common.Hash{}
 header.MixDigest = common.Hash{}
 header.Nonce = block.BlockNonce{}
 header.Bloom = make([]byte, 256) // Empty bloom filter
+if err := applyProtocolHeaderFields(header); err != nil {
+return nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
+}
 
 // Create genesis block (no txs, no uncles)
 genesis, err = block.NewBlock(header, nil, nil)
