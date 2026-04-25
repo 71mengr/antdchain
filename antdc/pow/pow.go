@@ -383,7 +383,14 @@ func (p *PoW) AutoRegisterIfEligible(addr common.QuantumAddress, balance *big.In
 		}
 		p.totalStaked.Sub(p.totalStaked, info.StakeAmount)
 		info.StakeAmount = new(big.Int).Set(balance)
-		info.PublicKey = pubKey
+		// Do not overwrite a previously valid key with an empty/invalid update.
+		// Many call sites auto-refresh stake without a key payload.
+		if len(pubKey) == quantum.MLDSA65PublicKeySize {
+			info.PublicKey = append([]byte(nil), pubKey...)
+		} else if len(info.PublicKey) != quantum.MLDSA65PublicKeySize {
+			// Keep the latest value if we still don't have a valid key.
+			info.PublicKey = append([]byte(nil), pubKey...)
+		}
 		info.IsActive = true
 		info.UnbondingEnd = nil
 		p.totalStaked.Add(p.totalStaked, balance)
@@ -399,7 +406,7 @@ func (p *PoW) AutoRegisterIfEligible(addr common.QuantumAddress, balance *big.In
 	// New eligible staker
 	info = &StakerInfo{
 		Address:     addr,
-		PublicKey:   pubKey,
+		PublicKey:   append([]byte(nil), pubKey...),
 		StakeAmount: new(big.Int).Set(balance),
 		IsActive:    true,
 		JoinTime:    time.Now(),

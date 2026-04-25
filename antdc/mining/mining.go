@@ -241,7 +241,7 @@ func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
 
     // Automatic staking check — no manual registration needed
     currentBalance := bc.State().GetBalance(rewardAddr)
-    bc.Pow().AutoRegisterIfEligible(rewardAddr, currentBalance, nil)
+    bc.Pow().AutoRegisterIfEligible(rewardAddr, currentBalance, state.GetPublicKey())
 
     log.Printf("[miner] Auto-checked staking eligibility for %s (balance: %s ANTD)",
         rewardAddr.String()[:12],
