@@ -1655,27 +1655,37 @@ func (c *Console) handleSetAddress(parts []string) {
 		return
 	}
 
-	// Try to resolve matching wallet file from local keystore.
+	// Look for the wallet file in the quantum keystore directory
+	keystoreDir := c.node.GetKeystoreDir()
+	entries, readErr := os.ReadDir(keystoreDir)
 	found := false
-	var file string
-	for _, acc := range c.node.Keystore().Accounts() {
-		if ethAddressMatchesQuantumAddress(acc.Address, addr) {
-			found = true
-			file = acc.URL.Path
-			break
+	var keyFile string
+
+	if readErr == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.HasPrefix(name, "UTC--") && strings.HasSuffix(name, addr.String()) {
+				keyFile = filepath.Join(keystoreDir, name)
+				found = true
+				break
+			}
 		}
 	}
 
-
+	// Set the miner wallet address
 	c.node.SetMinerWalletAddress(addr)
 
 	fmt.Printf("Mining address set to: %s\n", addr.String())
 	if found {
-		fmt.Printf("Keystore file: %s\n", file)
+		fmt.Printf("Keystore file: %s\n", keyFile)
 	} else {
 		fmt.Printf("⚠️ Wallet %s not found in keystore (address still set)\n", addr.String())
 	}
 
+	// Show balance
 	c.node.mu.RLock()
 	balance := c.node.blockchain.State().GetBalance(addr)
 	c.node.mu.RUnlock()
