@@ -18,7 +18,7 @@ const (
     EncodedPayloadLength  = PayloadLength + ChecksumLength
     MLDSA65PrivateKeySize = 4032
     MLDSA65PublicKeySize  = 1952
-    MLDSA65SignatureSize  = 3293
+    MLDSA65SignatureSize  = mldsa65.SignatureSize
 )
 
 // GenerateKeyPair creates a new random ML‑DSA‑65 keypair.
@@ -89,7 +89,7 @@ func Verify(pubKeyBytes, message, signature []byte) bool {
     if err := pubKey.UnmarshalBinary(pubKeyBytes); err != nil {
         return false
     }
-    return mldsa65.Verify(pubKey, message, signature, nil)
+    return mldsa65.Verify(pubKey, message, nil, signature)
 }
 
 // DerivePublicKey extracts the public key from a private key.
