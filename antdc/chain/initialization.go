@@ -195,11 +195,11 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	log.Printf("[blockchain] Creating blockchain instance...")
 
 	bc := &Blockchain{
-		db:     chainDb,
-		state:  stateDb,
-		stakingManager:      nil,
-		txPool: nil,
-		pow:    nil,
+		db:             chainDb,
+		state:          stateDb,
+		stakingManager: nil,
+		txPool:         nil,
+		pow:            nil,
 		//		checkpoints:         checkpointMgr,
 		statePath:           statePath,
 		rewardDistributor:   nil,
@@ -224,6 +224,9 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	}
 
 	bc.stakingManager = staking.NewStakingManager(stateDb, pow.MinStakeAmount)
+	bc.stakingManager.SetBlockHeightProvider(func() uint64 {
+		return bc.GetChainHeight()
+	})
 
 	// Set atomic fields
 	if latest != nil {
@@ -341,11 +344,9 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		return nil, fmt.Errorf("invalid quantum-resistant main king address: %w", err)
 	}
 	mainKing := common.QuantumAddress(mainKingQuantum)
-	bc.Pow().AutoRegisterIfEligible(mainKing, bc.state.GetBalance(mainKing), nil)
-	log.Printf("[blockchain] Main King auto-registered: %s", mainKingQuantum.String())
+	log.Printf("[blockchain] Main King loaded: %s", mainKingQuantum.String())
 	if miner != (common.QuantumAddress{}) && miner != mainKing {
-		bc.Pow().AutoRegisterIfEligible(miner, bc.state.GetBalance(miner), nil)
-		log.Printf("[blockchain] Local miner auto-checked for registration: %s", minerQuantum.String())
+		log.Printf("[blockchain] Local miner loaded: %s", minerQuantum.String())
 	}
 	// ====================
 	// INITIALIZE REWARD SYSTEM

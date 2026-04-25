@@ -4,24 +4,25 @@
 
 package mining
 import (
-    "encoding/json"
-    "errors"
-    "fmt"
-    "log"
-    "math/big"
-    "sync"
-    "time"
-    "os"
-    "path/filepath"
-    "github.com/prometheus/client_golang/prometheus"
-    qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
-    "github.com/antdaza/antdchain/antdc/block"
-    "github.com/antdaza/antdchain/antdc/chain"
-    "github.com/antdaza/antdchain/antdc/crypto/quantum"
-    "github.com/antdaza/antdchain/antdc/p2p"
-    "github.com/antdaza/antdchain/antdc/pow"
-    "github.com/antdaza/antdchain/common"
-    "github.com/antdaza/antdchain/common/hexutil"
+
+	"encoding/json"
+	"errors"
+	"fmt"
+	qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
+	"github.com/antdaza/antdchain/antdc/block"
+	"github.com/antdaza/antdchain/antdc/chain"
+	"github.com/antdaza/antdchain/antdc/crypto/quantum"
+	"github.com/antdaza/antdchain/antdc/p2p"
+	"github.com/antdaza/antdchain/antdc/pow"
+	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/common/hexutil"
+	"github.com/prometheus/client_golang/prometheus"
+	"log"
+	"math/big"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
 )
 
 // Configuration constants (can be made configurable via environment variables)
@@ -240,8 +241,8 @@ func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
     }
 
     // Prefer explicit staking records from staking manager; fallback to account balance
-    effectiveStake := bc.State().GetBalance(rewardAddr)
-    stakeSource := "balance"
+	effectiveStake := big.NewInt(0)
+	stakeSource := "unregistered"
     if stakingManager := bc.StakingManager(); stakingManager != nil {
         if stakedAmount, err := stakingManager.GetStake(rewardAddr); err != nil {
             log.Printf("[miner] Failed to read stake for %s: %v", rewardAddr.String()[:12], err)
@@ -505,36 +506,35 @@ func verifyBlockSignature(
     signature []byte,
     expectedPublicKey []byte,
 ) (bool, error) {
-    if len(signature) == 0 {
-        return true, nil // Empty signature allowed for unsigned blocks
-    }
+	if len(signature) == 0 {
+		return true, nil // Empty signature allowed for unsigned blocks
+	}
 
-    if len(expectedPublicKey) == 0 {
-        return false, errors.New("expected public key required")
-    }
+	if len(expectedPublicKey) == 0 {
+		return false, errors.New("expected public key required")
+	}
 
-    msg := common.ComputeHash(
-        append(
-            []byte("ANTDChain-PoS-Block"),
-            append(
-                parentHash.Bytes(),
-                append(
-                    common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
-                    append(
-                        common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
-                        miner.Bytes()...,
-                    )...,
-                )...,
-            )...,
-        ),
-    ).Bytes()
+	msg := common.ComputeHash(
+		append(
+			[]byte("ANTDChain-PoS-Block"),
+			append(
+				parentHash.Bytes(),
+				append(
+					common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
+					append(
+						common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
+						miner.Bytes()...,
+					)...,
+				)...,
+			)...,
+		),
+	).Bytes()
 
-    if !quantum.Verify(expectedPublicKey, msg, signature) {
-        return false, errors.New("signature verification failed")
-    }
+	if !quantum.Verify(expectedPublicKey, msg, signature) {
+		return false, errors.New("signature verification failed")
+	}
 
-
-    return true, nil
+	return true, nil
 }
 
 // broadcastMinedBlock with exponential backoff
@@ -641,13 +641,13 @@ func (ms *PosMiningState) GetMiningStatistics() map[string]interface{} {
 
 // Loads and decrypts the private key from keystore
 func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreDir, password string) error {
-    ms.mu.RLock()
-    minerAddress := ms.minerAddress
-    ms.mu.RUnlock()
+	ms.mu.RLock()
+	minerAddress := ms.minerAddress
+	ms.mu.RUnlock()
 
-    if minerAddress == (common.QuantumAddress{}) {
-        return errors.New("miner address not set")
-    }
+	if minerAddress == (common.QuantumAddress{}) {
+		return errors.New("miner address not set")
+	}
 
 
     privKey, err := qkeystore.Unlock(minerAddress, password, keystoreDir)
@@ -817,7 +817,7 @@ func (ms *PosMiningState) GetNextMiningSlot(bc *chain.Blockchain) (uint64, time.
     estimatedBlocks := blocksUntilTurn // rough estimate
     
     // Convert to time (using target block time)
-    estimatedTime := time.Duration(estimatedBlocks * pow.TargetBlockTimeSeconds) * time.Second
+    estimatedTime := time.Duration(estimatedBlocks*pow.TargetBlockTimeSeconds) * time.Second
     
     return currentHeight + estimatedBlocks, estimatedTime, nil
 }

@@ -156,8 +156,10 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 
 	// Check miner eligibility
 	if bc.pow != nil {
-		if bc.state != nil {
-			bc.pow.AutoRegisterIfEligible(miner, bc.state.GetBalance(miner), nil)
+		if bc.stakingManager != nil {
+			if stakeAmt, err := bc.stakingManager.GetStake(miner); err == nil && stakeAmt != nil {
+				bc.pow.AutoRegisterIfEligible(miner, stakeAmt, nil)
+			}
 		}
 
 		eligible, err := bc.pow.VerifyMinerEligibility(

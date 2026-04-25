@@ -227,10 +227,11 @@ func (bc *Blockchain) validatePoSEligibility(b *block.Block, parent *block.Block
 		return errors.New("PoS engine not initialized")
 	}
 
-	// Keep the validator set synchronized with on-chain balances.
-	// This allows any address with >= 1,000,000 ANTD to be considered for mining.
-	if bc.state != nil {
-		bc.pow.AutoRegisterIfEligible(b.Header.Coinbase, bc.state.GetBalance(b.Header.Coinbase), nil)
+	// Keep the validator set synchronized with explicit stake registrations only.
+	if bc.stakingManager != nil {
+		if stakeAmt, err := bc.stakingManager.GetStake(b.Header.Coinbase); err == nil && stakeAmt != nil {
+			bc.pow.AutoRegisterIfEligible(b.Header.Coinbase, stakeAmt, nil)
+		}
 	}
 
 	eligible, err := bc.pow.VerifyMinerEligibility(

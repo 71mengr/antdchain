@@ -22,7 +22,10 @@ var (
 	ErrNotStaked         = errors.New("not staked")
 	ErrStakeLocked       = errors.New("stake is locked")
 	ErrWithdrawalTooSoon = errors.New("withdrawal requested too soon")
+	ErrInvalidStakeValue = errors.New("invalid stake amount")
 )
+
+const unstakeUnlockDelayBlocks uint64 = 20
 
 type StakingManager struct {
 	mu sync.RWMutex
@@ -37,8 +40,8 @@ type StakingManager struct {
 	// Configuration
 	minStakeAmount  *big.Int
 	lockDuration    time.Duration
-	withdrawalDelay time.Duration
 	slashPercentage *big.Int // 0-100%
+	blockHeightFn   func() uint64
 
 	// State reference
 	statedb *state.State
@@ -60,11 +63,12 @@ type StakeInfo struct {
 }
 
 type WithdrawalRequest struct {
-	Address     common.QuantumAddress
-	Amount      *big.Int
-	RequestTime time.Time
-	ProcessTime time.Time
-	Status      WithdrawalStatus
+	Address      common.QuantumAddress
+	Amount       *big.Int
+	RequestTime  time.Time
+	RequestBlock uint64
+	UnlockBlock  uint64
+	Status       WithdrawalStatus
 }
 
 type WithdrawalStatus int
@@ -102,11 +106,16 @@ func NewStakingManager(statedb *state.State, minStake *big.Int) *StakingManager 
 		totalStaked:     big.NewInt(0),
 		minStakeAmount:  minStake,
 		lockDuration:    7 * 24 * time.Hour, // 7 days
-		withdrawalDelay: 2 * 24 * time.Hour, // 2 days
 		slashPercentage: big.NewInt(5),      // 5% slash for misbehavior
 		statedb:         statedb,
 		stakeEvents:     make(chan StakeEvent, 100),
 	}
+}
+
+func (sm *StakingManager) SetBlockHeightProvider(fn func() uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.blockHeightFn = fn
 }
 
 // Stake allows an address to stake tokens for mining eligibility
@@ -118,6 +127,9 @@ func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, 
 	if amount.Cmp(sm.minStakeAmount) < 0 {
 		return fmt.Errorf("%w: %s < %s", ErrInsufficientStake,
 			amount.String(), sm.minStakeAmount.String())
+	}
+	if amount.Cmp(sm.minStakeAmount) != 0 {
+		return fmt.Errorf("%w: required exact amount %s", ErrInvalidStakeValue, sm.minStakeAmount.String())
 	}
 
 	// Check if already staked
@@ -236,13 +248,15 @@ func (sm *StakingManager) Unstake(address common.QuantumAddress, privKey []byte)
 	stake.IsActive = false
 	sm.totalStaked.Sub(sm.totalStaked, stake.Amount)
 
+	currentHeight := sm.currentBlockHeight()
 	// Create withdrawal request
 	sm.withdrawals[address] = &WithdrawalRequest{
-		Address:     address,
-		Amount:      new(big.Int).Set(stake.Amount),
-		RequestTime: time.Now(),
-		ProcessTime: time.Now().Add(sm.withdrawalDelay),
-		Status:      Pending,
+		Address:      address,
+		Amount:       new(big.Int).Set(stake.Amount),
+		RequestTime:  time.Now(),
+		RequestBlock: currentHeight,
+		UnlockBlock:  currentHeight + unstakeUnlockDelayBlocks,
+		Status:       Pending,
 	}
 
 	sm.emitEvent(StakeEvent{
@@ -259,16 +273,20 @@ func (sm *StakingManager) Unstake(address common.QuantumAddress, privKey []byte)
 	return nil
 }
 
-// ProcessWithdrawals processes pending withdrawals after delay
+// ProcessWithdrawals processes pending withdrawals after unlock block delay
 func (sm *StakingManager) ProcessWithdrawals() error {
+	return sm.ProcessWithdrawalsAtHeight(sm.currentBlockHeight())
+}
+
+// ProcessWithdrawalsAtHeight processes pending withdrawals using an explicit block height.
+func (sm *StakingManager) ProcessWithdrawalsAtHeight(currentHeight uint64) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	now := time.Now()
 	processed := 0
 
 	for addr, withdrawal := range sm.withdrawals {
-		if withdrawal.Status == Pending && now.After(withdrawal.ProcessTime) {
+		if withdrawal.Status == Pending && currentHeight >= withdrawal.UnlockBlock {
 			// Return staked tokens
 			if err := sm.statedb.AddBalance(addr, withdrawal.Amount); err != nil {
 				return fmt.Errorf("failed to process withdrawal: %w", err)
@@ -282,8 +300,8 @@ func (sm *StakingManager) ProcessWithdrawals() error {
 				Type:      "Withdrawal",
 				Address:   addr,
 				Amount:    withdrawal.Amount,
-				Timestamp: now,
-				Block:     sm.currentBlockHeight(),
+				Timestamp: time.Now(),
+				Block:     currentHeight,
 			})
 
 			log.Printf("[staking] Processed withdrawal for %s: %s ANTD",
@@ -374,6 +392,9 @@ func (sm *StakingManager) emitEvent(event StakeEvent) {
 }
 
 func (sm *StakingManager) currentBlockHeight() uint64 {
+	if sm.blockHeightFn != nil {
+		return sm.blockHeightFn()
+	}
 	return 0
 }
 

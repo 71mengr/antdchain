@@ -1320,6 +1320,8 @@ func (c *Console) Start() {
 	fmt.Println("  rk                       - Rotating King commands")
 	fmt.Println("  rotatingking             - Rotating King commands (alias)")
 	fmt.Println("  rk add <address>         - Manually add address to rotation (100k ANTD required)")
+	fmt.Println("  register_stake <address> - Register 1,000,000 ANTD stake (locks funds)")
+	fmt.Println("  unlock_stake <address>   - Request stake unlock (20 block release delay)")
 	fmt.Println("  emergency-sync           - Force configuration sync with peers")
 	fmt.Println("  force-broadcast          - Broadcast current configuration to network")
 	fmt.Println("  monitor                  - Supply monitoring")
@@ -1438,6 +1440,11 @@ func (c *Console) Start() {
 				fmt.Println("Minimum: 1,000,000 ANTD")
 			}
 
+		case "register_stake":
+			c.handleRegisterStake(parts)
+		case "unlock_stake":
+			c.handleUnlockStake(parts)
+
 		case "unregister-worker":
 			if len(parts) != 2 {
 				fmt.Println("Usage: unregister-worker <address>")
@@ -1504,7 +1511,7 @@ func (c *Console) Start() {
 				fmt.Printf("   Required: %s ANTD (1,000,000 ANTD)\n", formatBalance(minStake))
 
 				if balance.Cmp(minStake) >= 0 {
-					fmt.Printf("💡 Use: register-worker %s 1000000\n", addr.String())
+					fmt.Printf("�� Use: register_stake %s\n", addr.String())
 				} else {
 					fmt.Printf("💡 Need more ANTD to register\n")
 				}
@@ -2366,6 +2373,92 @@ func (c *Console) handleMiningStats() {
 	fmt.Printf("Has Private Key: %v\n", stats["has_private_key"])
 }
 
+func (c *Console) handleRegisterStake(parts []string) {
+	if len(parts) != 2 {
+		fmt.Println("Usage: register_stake <address>")
+		return
+	}
+
+	addr := mustParseQuantumAddress(parts[1])
+	if addr == (common.QuantumAddress{}) {
+		fmt.Println("❌ Invalid address")
+		return
+	}
+
+	c.node.mu.RLock()
+	stakingManager := c.node.blockchain.StakingManager()
+	c.node.mu.RUnlock()
+	if stakingManager == nil {
+		fmt.Println("❌ Staking manager not available")
+		return
+	}
+
+	w := c.node.walletManager.GetWallet(addr.String())
+	if w == nil {
+		fmt.Println("❌ Wallet not found or not unlocked in this console")
+		fmt.Println("   Use: unlock <address>")
+		return
+	}
+
+	privKey, err := w.PrivateKey()
+	if err != nil || len(privKey) == 0 {
+		fmt.Println("❌ Could not access private key. Unlock wallet first.")
+		return
+	}
+
+	stakeAmount := new(big.Int).Mul(big.NewInt(1_000_000), big.NewInt(1e18))
+	if err := stakingManager.Stake(addr, stakeAmount, privKey); err != nil {
+		fmt.Printf("❌ Failed to register stake: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✅ Stake registered for %s with 1,000,000 ANTD\n", addr.String())
+	fmt.Println("   Funds are locked during staking lock time and cannot be spent.")
+}
+
+func (c *Console) handleUnlockStake(parts []string) {
+	if len(parts) != 2 {
+		fmt.Println("Usage: unlock_stake <address>")
+		return
+	}
+
+	addr := mustParseQuantumAddress(parts[1])
+	if addr == (common.QuantumAddress{}) {
+		fmt.Println("❌ Invalid address")
+		return
+	}
+
+	c.node.mu.RLock()
+	stakingManager := c.node.blockchain.StakingManager()
+	height := c.node.blockchain.GetChainHeight()
+	c.node.mu.RUnlock()
+	if stakingManager == nil {
+		fmt.Println("❌ Staking manager not available")
+		return
+	}
+
+	w := c.node.walletManager.GetWallet(addr.String())
+	if w == nil {
+		fmt.Println("❌ Wallet not found or not unlocked in this console")
+		fmt.Println("   Use: unlock <address>")
+		return
+	}
+
+	privKey, err := w.PrivateKey()
+	if err != nil || len(privKey) == 0 {
+		fmt.Println("❌ Could not access private key. Unlock wallet first.")
+		return
+	}
+
+	if err := stakingManager.Unstake(addr, privKey); err != nil {
+		fmt.Printf("❌ Failed to request stake unlock: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✅ Stake unlock requested for %s\n", addr.String())
+	fmt.Printf("   Funds become spendable at block %d (current: %d)\n", height+20, height)
+}
+
 func (c *Console) handleStartMining() {
 	if c.node.miningState == nil {
 		fmt.Println("Error: Mining state not initialized")
@@ -2410,59 +2503,36 @@ func (c *Console) handleStartMining() {
 	}
 
 	// Check if registered as staker
-	registered := false
-	// Check balance for auto-registration
-	c.node.mu.RLock()
-	balance := c.node.blockchain.State().GetBalance(minerAddress)
-	c.node.mu.RUnlock()
+	if !c.checkStakerRegistration(minerAddress) {
+		c.node.mu.RLock()
+		balance := c.node.blockchain.State().GetBalance(minerAddress)
+		c.node.mu.RUnlock()
 
-	minStake := new(big.Int).Mul(big.NewInt(1000000), big.NewInt(1e18))
-	if balance.Cmp(minStake) >= 0 {
-		fmt.Printf("📝 Address not registered. Auto-registering with 1,000,000 ANTD stake...\n")
-		registered = true
-	} else {
-		fmt.Printf("❌ Address not registered and insufficient balance\n")
-		fmt.Printf("   Need 1,000,000 ANTD, have %s ANTD\n", formatBalance(balance))
-		fmt.Printf("💡 Use: register-worker %s 1000000\n", minerAddress.String())
+		fmt.Printf("❌ Address is not registered for staking\n")
+		fmt.Printf("   Wallet balance: %s ANTD\n", formatBalance(balance))
+		fmt.Printf("�� Register first: register_stake %s\n", minerAddress.String())
 		return
 	}
 
-	if registered {
-		fmt.Printf("✅ Starting PoS mining with address: %s\n", minerAddress.String())
-		mining.StartPosMining(c.node.blockchain, c.node.miningState, minerAddress, c.node.p2pNode)
-		fmt.Println("✓ PoS mining started. Waiting for your turn to mine blocks...")
-	}
+	fmt.Printf("✅ Starting PoS mining with address: %s\n", minerAddress.String())
+	mining.StartPosMining(c.node.blockchain, c.node.miningState, minerAddress, c.node.p2pNode)
+	fmt.Println("✓ PoS mining started. Waiting for your turn to mine blocks...")
 }
 
 func (c *Console) checkStakerRegistration(addr common.QuantumAddress) bool {
 	c.node.mu.RLock()
-	defer c.node.mu.RUnlock()
-
-	powEngine := c.node.blockchain.Pow()
-	if powEngine == nil {
+	stakingManager := c.node.blockchain.StakingManager()
+	c.node.mu.RUnlock()
+	if stakingManager == nil {
 		return false
 	}
 
-	// Use reflection to check
-	v := reflect.ValueOf(powEngine)
-	method := v.MethodByName("GetKingAddresses")
-	if !method.IsValid() {
+	stake, err := stakingManager.GetStake(addr)
+	if err != nil || stake == nil {
 		return false
 	}
 
-	results := method.Call(nil)
-	if len(results) == 0 {
-		return false
-	}
-
-	addresses := results[0].Interface().([]common.QuantumAddress)
-	for _, a := range addresses {
-		if a == addr {
-			return true
-		}
-	}
-
-	return false
+	return stake.Sign() > 0
 }
 
 func (c *Console) handleDebugTransactionFlow(parts []string) {
@@ -3223,19 +3293,25 @@ func (c *Console) handleUnlock(parts []string) {
 					return
 				}
 
-				// Get the current balance to avoid overwriting the stake amount
+				// Register/update the public key for already-registered stakers.
+				stakeAmount := big.NewInt(0)
+
 				c.node.mu.RLock()
-				balance := c.node.blockchain.State().GetBalance(addr)
+				if stakingManager := c.node.blockchain.StakingManager(); stakingManager != nil {
+					if staked, stakeErr := stakingManager.GetStake(addr); stakeErr == nil && staked != nil {
+						stakeAmount = staked
+					}
+				}
 				c.node.mu.RUnlock()
 
-				// Register the public key without affecting stake
+
 				powEngine := c.node.blockchain.Pow()
 				if powEngine != nil {
-					    powEngine.AutoRegisterIfEligible(addr, balance, pubKey)
-					        fmt.Fprintf(os.Stderr, "�� Public key registered for miner %s\n", addr.String())
-					} else {
-						    fmt.Fprintf(os.Stderr, "⚠️ PoW engine not available – public key not registered\n")
-					    }
+					powEngine.AutoRegisterIfEligible(addr, stakeAmount, pubKey)
+					fmt.Fprintf(os.Stderr, "Public key registered for miner %s\n", addr.String())
+				} else {
+					fmt.Fprintf(os.Stderr, "⚠️ PoW engine not available – public key not registered\n")
+				}
 				fmt.Fprintf(os.Stderr, "�� Public key registered for miner %s\n", addr.String())
 			}
 		}
