@@ -25,6 +25,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
+	"github.com/antdaza/antdchain/antdc/staking"
 	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/vm"
@@ -196,6 +197,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	bc := &Blockchain{
 		db:     chainDb,
 		state:  stateDb,
+		stakingManager:      nil,
 		txPool: nil,
 		pow:    nil,
 		//		checkpoints:         checkpointMgr,
@@ -220,6 +222,8 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		finalizedHeight:     atomic.Uint64{},
 		orphanBlocks:        make(map[common.Hash]*orphanBlock),
 	}
+
+	bc.stakingManager = staking.NewStakingManager(stateDb, pow.MinStakeAmount)
 
 	// Set atomic fields
 	if latest != nil {

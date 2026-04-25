@@ -26,6 +26,7 @@ import (
 "github.com/antdaza/antdchain/antdc/pow"
 "github.com/antdaza/antdchain/antdc/reward"
 "github.com/antdaza/antdchain/antdc/rotatingking"
+"github.com/antdaza/antdchain/antdc/staking"
 "github.com/antdaza/antdchain/antdc/state"
 "github.com/antdaza/antdchain/antdc/tx"
 "github.com/antdaza/antdchain/antdc/vm"
@@ -86,6 +87,7 @@ mu                  sync.RWMutex
 db                  *db.ChainDB
 latest              atomic.Pointer[block.Block] // Atomic pointer for latest block
 state               *state.State
+stakingManager      *staking.StakingManager
 txPool              *TxPool
 pow                 *pow.PoW
 checkpoints         *checkpoints.Checkpoints
@@ -293,6 +295,10 @@ return bc.GetChainHeight()
 // State returns the current state
 func (bc *Blockchain) State() *state.State {
 return bc.GetState()
+}
+
+func (bc *Blockchain) StakingManager() *staking.StakingManager {
+	return bc.stakingManager
 }
 
 // GetState returns the state (initializing if necessary)

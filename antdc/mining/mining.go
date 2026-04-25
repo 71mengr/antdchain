@@ -239,13 +239,24 @@ func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
         return
     }
 
-    // Automatic staking check — no manual registration needed
-    currentBalance := bc.State().GetBalance(rewardAddr)
-    bc.Pow().AutoRegisterIfEligible(rewardAddr, currentBalance, state.GetPublicKey())
+    // Prefer explicit staking records from staking manager; fallback to account balance
+    effectiveStake := bc.State().GetBalance(rewardAddr)
+    stakeSource := "balance"
+    if stakingManager := bc.StakingManager(); stakingManager != nil {
+        if stakedAmount, err := stakingManager.GetStake(rewardAddr); err != nil {
+            log.Printf("[miner] Failed to read stake for %s: %v", rewardAddr.String()[:12], err)
+        } else if stakedAmount != nil && stakedAmount.Sign() > 0 {
+            effectiveStake = stakedAmount
+            stakeSource = "staking_manager"
+        }
+    }
 
-    log.Printf("[miner] Auto-checked staking eligibility for %s (balance: %s ANTD)",
+    bc.Pow().AutoRegisterIfEligible(rewardAddr, effectiveStake, state.GetPublicKey())
+
+    log.Printf("[miner] Auto-checked staking eligibility for %s (%s: %s ANTD)",
         rewardAddr.String()[:12],
-        new(big.Int).Div(currentBalance, big.NewInt(1e18)).String())
+        stakeSource,
+        new(big.Int).Div(effectiveStake, big.NewInt(1e18)).String())
 
     state.mining = true
     log.Printf("[miner] PoS Mining STARTED → %s", rewardAddr.String())
