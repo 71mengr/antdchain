@@ -125,7 +125,7 @@ type PoW struct {
 	currentMinerBlocks uint64
 
 	blockHistory []common.QuantumAddress // recent miners
-	blockTimes   []uint64               // recent block times for difficulty calculation
+	blockTimes   []uint64                // recent block times for difficulty calculation
 
 	totalBlocks  atomic.Uint64
 	rotations    atomic.Uint64
@@ -201,7 +201,7 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
 	}
 
 	// Adjust based on block time (aim for TargetBlockTimeSeconds)
-	timeAdjustment := big.NewInt(int64(TargetBlockTimeSeconds*100/int(timeDiff)))
+	timeAdjustment := big.NewInt(int64(TargetBlockTimeSeconds * 100 / int(timeDiff)))
 
 	// Adjust based on stake concentration (Gini coefficient-like measure)
 	stakeConcentration := p.calculateStakeConcentration()
@@ -378,6 +378,12 @@ func (p *PoW) AutoRegisterIfEligible(addr common.QuantumAddress, balance *big.In
 
 	info, exists := p.stakers[addr]
 	if exists {
+		// Allow a valid key to repair legacy/incomplete registrations even when stake is unchanged.
+		if len(pubKey) == quantum.MLDSA65PublicKeySize && len(info.PublicKey) != quantum.MLDSA65PublicKeySize {
+			info.PublicKey = append([]byte(nil), pubKey...)
+			log.Printf("[pos] Auto-updated staker %s public key", addr.String()[:12])
+		}
+
 		if info.IsActive && info.StakeAmount.Cmp(balance) == 0 {
 			return // already correctly registered
 		}
@@ -386,9 +392,6 @@ func (p *PoW) AutoRegisterIfEligible(addr common.QuantumAddress, balance *big.In
 		// Do not overwrite a previously valid key with an empty/invalid update.
 		// Many call sites auto-refresh stake without a key payload.
 		if len(pubKey) == quantum.MLDSA65PublicKeySize {
-			info.PublicKey = append([]byte(nil), pubKey...)
-		} else if len(info.PublicKey) != quantum.MLDSA65PublicKeySize {
-			// Keep the latest value if we still don't have a valid key.
 			info.PublicKey = append([]byte(nil), pubKey...)
 		}
 		info.IsActive = true
@@ -403,7 +406,12 @@ func (p *PoW) AutoRegisterIfEligible(addr common.QuantumAddress, balance *big.In
 		return
 	}
 
-	// New eligible staker
+	// New eligible staker: only register when we have a valid public key.
+	if len(pubKey) != quantum.MLDSA65PublicKeySize {
+		log.Printf("[pos] Skipping auto-registration for %s: missing valid public key", addr.String()[:12])
+		return
+	}
+
 	info = &StakerInfo{
 		Address:     addr,
 		PublicKey:   append([]byte(nil), pubKey...),
@@ -453,10 +461,13 @@ func (p *PoW) GetNextMiner(parentHash common.Hash, height uint64) (common.Quantu
 		return common.QuantumAddress{}, errors.New("no active stakers")
 	}
 
+	current := p.stakers[p.currentMiner]
 	shouldRotate := p.currentMinerBlocks >= BlocksPerMiner ||
 		p.currentMiner == (common.QuantumAddress{}) ||
-		p.stakers[p.currentMiner] == nil ||
-		!p.stakers[p.currentMiner].IsActive
+		current == nil ||
+		!current.IsActive ||
+		current.UnbondingEnd != nil ||
+		current.StakeAmount.Cmp(MinStakeAmount) < 0
 
 	if shouldRotate {
 		next := p.selectNextMinerLocked(parentHash, height)
@@ -477,9 +488,6 @@ func (p *PoW) selectNextMinerLocked(parentHash common.Hash, height uint64) commo
 	if n == 0 {
 		return common.QuantumAddress{}
 	}
-	if n == 1 {
-		return p.stakerList[0]
-	}
 
 	type candidate struct {
 		addr   common.QuantumAddress
@@ -490,7 +498,7 @@ func (p *PoW) selectNextMinerLocked(parentHash common.Hash, height uint64) commo
 
 	for _, addr := range p.stakerList {
 		s := p.stakers[addr]
-		if !s.IsActive || s.UnbondingEnd != nil {
+		if !s.IsActive || s.UnbondingEnd != nil || s.StakeAmount.Cmp(MinStakeAmount) < 0 {
 			continue
 		}
 		base := new(big.Int).Div(s.StakeAmount, big.NewInt(1e18)).Uint64()
@@ -509,7 +517,7 @@ func (p *PoW) selectNextMinerLocked(parentHash common.Hash, height uint64) commo
 	}
 
 	if len(candidates) == 0 {
-		return p.stakerList[0]
+		return common.QuantumAddress{}
 	}
 
 	// Quantum‑safe VRF‑like selection using SHA3‑256 instead of Keccak256
