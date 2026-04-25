@@ -148,6 +148,16 @@ func runWalletCLI(c *cli.Context) error {
     useSSL := c.Bool("daemon-ssl")
     offline := c.Bool("offline")
 
+    if testnet && stagenet {
+        return fmt.Errorf("cannot enable both --testnet and --stagenet at the same time")
+    }
+
+    // If no auth is configured, default to disabled auth mode on the client.
+    // This matches local/dev daemon setups that run with --rpcauthdisabled.
+    if !authDisabled && apiKey == "" && rpcUser == "" && rpcPassword == "" {
+        authDisabled = true
+    }
+
     // Determine protocol
     protocol := "http"
     if useSSL {
@@ -155,7 +165,7 @@ func runWalletCLI(c *cli.Context) error {
     }
 
     // Build daemon URL
-    daemonURL := fmt.Sprintf("%s://%s:%d", protocol, daemonHost, daemonRPCPort)
+    daemonURL := fmt.Sprintf("%s://%s:%d/rpc", protocol, daemonHost, daemonRPCPort)
 
     // Create wallet directory if it doesn't exist
     if err := os.MkdirAll(walletDir, os.ModePerm); err != nil {
