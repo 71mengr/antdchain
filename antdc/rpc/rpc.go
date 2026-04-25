@@ -3,598 +3,612 @@
 // for more information.
 
 package rpc
+
 import (
-"encoding/hex"
-"encoding/json"
-"fmt"
-"math/big"
-"net/http"
-"strconv"
-"strings"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"net/http"
+	"strconv"
+	"strings"
 
-"github.com/antdaza/antdchain/antdc/block"
-"github.com/antdaza/antdchain/antdc/chain"
-"github.com/antdaza/antdchain/antdc/tx"
-"github.com/antdaza/antdchain/antdc/wallet"
+	"github.com/antdaza/antdchain/antdc/block"
+	"github.com/antdaza/antdchain/antdc/chain"
+	"github.com/antdaza/antdchain/antdc/tx"
+	"github.com/antdaza/antdchain/antdc/wallet"
+	"github.com/antdaza/antdchain/common"
 
-"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // Server represents the JSON-RPC server.
 type Server struct {
-bc *chain.Blockchain
+	bc *chain.Blockchain
 
-wallets map[string]*wallet.Wallet // In-memory wallets by address
+	wallets map[string]*wallet.Wallet // In-memory wallets by address
 
-mining bool
+	mining bool
 }
 
 // NewServer creates a new JSON-RPC server.
 func NewServer(bc *chain.Blockchain) *Server {
-return &Server{
-bc:      bc,
-wallets: make(map[string]*wallet.Wallet),
-mining:  false,
-}
+	return &Server{
+		bc:      bc,
+		wallets: make(map[string]*wallet.Wallet),
+		mining:  false,
+	}
 }
 
 func (s *Server) IsMining() bool {
-return s.mining
+	return s.mining
 }
 
 // Start starts the JSON-RPC server.
 func (s *Server) Start(addr string) error {
 
-http.HandleFunc("/", s.handle)
+	http.HandleFunc("/", s.handle)
 
-return http.ListenAndServe(addr, nil)
+	return http.ListenAndServe(addr, nil)
 
 }
 
 // handle processes JSON-RPC requests.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
-var req struct {
-JSONRPC string          `json:"jsonrpc"`
-Method  string          `json:"method"`
-Params  json.RawMessage `json:"params"`
-ID      interface{}     `json:"id"`
-}
+	var req struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params"`
+		ID      interface{}     `json:"id"`
+	}
 
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-s.writeError(w, req.ID, -32600, "Invalid Request")
-return
-}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, req.ID, -32600, "Invalid Request")
+		return
+	}
 
-if req.JSONRPC != "2.0" {
+	if req.JSONRPC != "2.0" {
 
-s.writeError(w, req.ID, -32600, "Invalid JSON-RPC version")
+		s.writeError(w, req.ID, -32600, "Invalid JSON-RPC version")
 
-return
+		return
 
-}
+	}
 
-var result interface{}
+	var result interface{}
 
-var errCode int
+	var errCode int
 
-var errMsg string
+	var errMsg string
 
-switch req.Method {
+	switch req.Method {
 
-case "web3_clientVersion":
+	case "web3_clientVersion":
 
-result = "ANTDChain/v1.0.0"
+		result = "ANTDChain/v1.0.0"
 
-case "web3_sha3":
+	case "web3_sha3":
 
-var input string
+		var input string
 
-if err := json.Unmarshal(req.Params, &input); err != nil {
+		if err := json.Unmarshal(req.Params, &input); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-data, err := hex.DecodeString(input[2:])
+		data, err := hex.DecodeString(input[2:])
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32602, "Invalid hex string"
+			errCode, errMsg = -32602, "Invalid hex string"
 
-break
+			break
 
-}
+		}
 
-result = common.BytesToHash(crypto.Keccak256(data)).Hex()
+		result = common.BytesToHash(crypto.Keccak256(data)).Hex()
 
-case "showbalance":
+	case "showbalance":
 
-var addr string
+		var addr string
 
-if err := json.Unmarshal(req.Params, &addr); err != nil {
+		if err := json.Unmarshal(req.Params, &addr); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-address := common.ParseQuantumAddress(addr)
+		address, err := common.ParseQuantumAddress(addr)
+		if err != nil {
+			errCode, errMsg = -32602, "Invalid address"
+			break
+		}
 
-balance := s.bc.State().GetBalance(address)
+		balance := s.bc.State().GetBalance(address)
 
-result = balance.String()
+		result = balance.String()
 
-case "getblockinfo":
+	case "getblockinfo":
 
-var number string
+		var number string
 
-if err := json.Unmarshal(req.Params, &number); err != nil {
+		if err := json.Unmarshal(req.Params, &number); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-var block *block.Block
+		var block *block.Block
 
-if number == "latest" {
+		if number == "latest" {
 
-block = s.bc.Latest()
+			block = s.bc.Latest()
 
-} else {
+		} else {
 
-n, err := strconv.ParseUint(number, 10, 64)
+			n, err := strconv.ParseUint(number, 10, 64)
 
-if err != nil {
+			if err != nil {
 
-errCode, errMsg = -32602, "Invalid block number"
+				errCode, errMsg = -32602, "Invalid block number"
 
-break
+				break
 
-}
+			}
 
-block = s.bc.GetBlock(n)
+			block = s.bc.GetBlock(n)
 
-}
+		}
 
-if block == nil {
+		if block == nil {
 
-errCode, errMsg = -32603, "Block not found"
+			errCode, errMsg = -32603, "Block not found"
 
-break
+			break
 
-}
+		}
 
-result = map[string]interface{}{
+		result = map[string]interface{}{
 
-"number": block.Header.Number.String(),
+			"number": block.Header.Number.String(),
 
-"hash": block.Hash().Hex(),
+			"hash": block.Hash().Hex(),
 
-"timestamp": block.Header.Time,
+			"timestamp": block.Header.Time,
 
-"difficulty": block.Header.Difficulty.String(),
+			"difficulty": block.Header.Difficulty.String(),
 
-"gasLimit": block.Header.GasLimit,
+			"gasLimit": block.Header.GasLimit,
 
-"gasUsed": block.Header.GasUsed,
+			"gasUsed": block.Header.GasUsed,
 
-"txs": len(block.Txs),
-}
+			"txs": len(block.Txs),
+		}
 
-case "gettx":
+	case "gettx":
 
-var hash string
+		var hash string
 
-if err := json.Unmarshal(req.Params, &hash); err != nil {
+		if err := json.Unmarshal(req.Params, &hash); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-txHash := common.HexToHash(hash)
+		txHash := common.HexToHash(hash)
 
-// Search in blocks for tx
+		// Search in blocks for tx
 
-var found *tx.Tx
+		var found *tx.Tx
 
-for i := uint64(0); ; i++ {
+		for i := uint64(0); ; i++ {
 
-b := s.bc.GetBlock(i)
+			b := s.bc.GetBlock(i)
 
-if b == nil {
+			if b == nil {
 
-break
+				break
 
-}
+			}
 
-for _, t := range b.Txs {
+			for _, t := range b.Txs {
 
-if t.Hash() == txHash {
+				if t.Hash() == txHash {
 
-found = t
+					found = t
 
-break
+					break
 
-}
+				}
 
-}
+			}
 
-if found != nil {
+			if found != nil {
 
-break
+				break
 
-}
+			}
 
-}
+		}
 
-if found == nil {
+		if found == nil {
 
-errCode, errMsg = -32603, "Transaction not found"
+			errCode, errMsg = -32603, "Transaction not found"
 
-break
+			break
 
-}
+		}
 
-result = map[string]interface{}{
+		result = map[string]interface{}{
 
-"hash": found.Hash().Hex(),
+			"hash": found.Hash().Hex(),
 
-"from": found.From.Hex(),
+			"from": found.From.Hex(),
 
-"to": found.To.Hex(),
+			"to": found.To.Hex(),
 
-"value": found.Value.String(),
+			"value": found.Value.String(),
 
-"nonce": found.Nonce,
+			"nonce": found.Nonce,
 
-"gas": found.Gas,
+			"gas": found.Gas,
 
-"gasPrice": found.GasPrice.String(),
+			"gasPrice": found.GasPrice.String(),
 
-"data": hex.EncodeToString(found.Data),
-}
+			"data": hex.EncodeToString(found.Data),
+		}
 
-case "send":
+	case "send":
 
-var params struct {
-From string `json:"from"`
+		var params struct {
+			From string `json:"from"`
 
-To string `json:"to"`
+			To string `json:"to"`
 
-Amount string `json:"amount"`
+			Amount string `json:"amount"`
 
-Fees string `json:"fees"`
+			Fees string `json:"fees"`
 
-Private string `json:"private"`
-}
+			Private string `json:"private"`
+		}
 
-if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-from := common.ParseQuantumAddress(params.From)
+		from, err := common.ParseQuantumAddress(params.From)
+		if err != nil {
+			errCode, errMsg = -32602, "Invalid from address"
+			break
+		}
 
-to := common.ParseQuantumAddress(params.To)
+		to, err := common.ParseQuantumAddress(params.To)
+		if err != nil {
+			errCode, errMsg = -32602, "Invalid to address"
+			break
+		}
 
-amount, ok1 := new(big.Int).SetString(params.Amount, 10)
+		amount, ok1 := new(big.Int).SetString(params.Amount, 10)
 
-fees, ok2 := new(big.Int).SetString(params.Fees, 10)
+		fees, ok2 := new(big.Int).SetString(params.Fees, 10)
 
-if !ok1 || !ok2 {
+		if !ok1 || !ok2 {
 
-errCode, errMsg = -32602, "Invalid amount or fees"
+			errCode, errMsg = -32602, "Invalid amount or fees"
 
-break
+			break
 
-}
+		}
 
-if _, ok := s.wallets[params.From]; !ok {
+		if _, ok := s.wallets[params.From]; !ok {
 
-errCode, errMsg = -32603, "Wallet not found for from address"
+			errCode, errMsg = -32603, "Wallet not found for from address"
 
-break
+			break
 
-}
+		}
 
-w := s.wallets[params.From]
+		w := s.wallets[params.From]
 
-if w.Address() != from {
+		if w.Address() != from {
 
-errCode, errMsg = -32603, "Private key mismatch with from address"
+			errCode, errMsg = -32603, "Private key mismatch with from address"
 
-break
+			break
 
-}
+		}
 
-gas := uint64(21000) // Basic transfer gas
+		gas := uint64(21000) // Basic transfer gas
 
-gasPrice := new(big.Int).Div(fees, big.NewInt(int64(gas)))
+		gasPrice := new(big.Int).Div(fees, big.NewInt(int64(gas)))
 
-t, err := w.CreateTx(to, amount, nil, gas, gasPrice)
+		t, err := w.CreateTx(to, amount, nil, gas, gasPrice)
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32603, err.Error()
+			errCode, errMsg = -32603, err.Error()
 
-break
+			break
 
-}
+		}
 
-if err := s.bc.TxPool().AddTx(t); err != nil {
+		if err := s.bc.TxPool().AddTx(t, s.bc); err != nil {
 
-errCode, errMsg = -32603, err.Error()
+			errCode, errMsg = -32603, err.Error()
 
-break
+			break
 
-}
+		}
 
-result = t.Hash().Hex()
+		result = t.Hash().Hex()
 
-case "createaddress":
+	case "createaddress":
 
-w, err := wallet.NewWallet(s.bc, "")
+		w, err := wallet.NewWallet(s.bc, "")
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32603, "Failed to create wallet"
+			errCode, errMsg = -32603, "Failed to create wallet"
 
-break
+			break
 
-}
+		}
 
-addr := w.Address().String()
+		addr := w.Address().String()
 
-s.wallets[addr] = w
+		s.wallets[addr] = w
 
-privateKey, err := w.PrivateKey()
+		privateKey, err := w.PrivateKey()
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32603, "Failed to access private key"
+			errCode, errMsg = -32603, "Failed to access private key"
 
-break
+			break
 
-}
+		}
 
-result = map[string]string{
+		result = map[string]string{
 
-"address": addr,
+			"address": addr,
 
-"private": hex.EncodeToString(privateKey),
-}
+			"private": hex.EncodeToString(privateKey),
+		}
 
-case "import":
+	case "import":
 
-var params struct {
-Private string `json:"private"`
-}
+		var params struct {
+			Private string `json:"private"`
+		}
 
-if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-privKey, err := hex.DecodeString(strings.TrimPrefix(params.Private, "0x"))
+		privKey, err := hex.DecodeString(strings.TrimPrefix(params.Private, "0x"))
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32603, "Invalid ML-DSA-65 private key"
+			errCode, errMsg = -32603, "Invalid ML-DSA-65 private key"
 
-break
+			break
 
-}
+		}
 
-w, err := wallet.NewWalletWithKey(s.bc, privKey, "")
+		w, err := wallet.NewWalletWithKey(s.bc, privKey, "")
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32603, "Failed to create wallet"
+			errCode, errMsg = -32603, "Failed to create wallet"
 
-break
+			break
 
-}
+		}
 
-addr := w.Address().String()
+		addr := w.Address().String()
 
-s.wallets[addr] = w
+		s.wallets[addr] = w
 
-result = map[string]string{"address": addr}
+		result = map[string]string{"address": addr}
 
-case "export":
+	case "export":
 
-var addr string
+		var addr string
 
-if err := json.Unmarshal(req.Params, &addr); err != nil {
+		if err := json.Unmarshal(req.Params, &addr); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-w, ok := s.wallets[addr]
+		w, ok := s.wallets[addr]
 
-if !ok {
+		if !ok {
 
-errCode, errMsg = -32603, "Wallet not found"
+			errCode, errMsg = -32603, "Wallet not found"
 
-break
+			break
 
-}
+		}
 
-result = map[string]string{
+		result = map[string]string{
 
-"address": addr,
+			"address": addr,
 
-"private": hex.EncodeToString(mustPrivateKeyBytes(w)),
-}
+			"private": hex.EncodeToString(mustPrivateKeyBytes(w)),
+		}
 
-case "startmining":
+	case "startmining":
 
-var enable bool
+		var enable bool
 
-if err := json.Unmarshal(req.Params, &enable); err != nil {
+		if err := json.Unmarshal(req.Params, &enable); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-s.mining = enable
+		s.mining = enable
 
-result = map[string]string{"status": fmt.Sprintf("Mining %s", enable)}
+		result = map[string]string{"status": fmt.Sprintf("Mining %t", enable)}
 
-case "deploy":
+	case "deploy":
 
-var params struct {
-From string `json:"from"`
+		var params struct {
+			From string `json:"from"`
 
-Data string `json:"data"`
+			Data string `json:"data"`
 
-Value string `json:"value"`
+			Value string `json:"value"`
 
-Private string `json:"private"`
-}
+			Private string `json:"private"`
+		}
 
-if err := json.Unmarshal(req.Params, &params); err != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
 
-errCode, errMsg = -32602, "Invalid params"
+			errCode, errMsg = -32602, "Invalid params"
 
-break
+			break
 
-}
+		}
 
-if _, ok := s.wallets[params.From]; !ok {
+		if _, ok := s.wallets[params.From]; !ok {
 
-errCode, errMsg = -32603, "Wallet not found"
+			errCode, errMsg = -32603, "Wallet not found"
 
-break
+			break
 
-}
+		}
 
-w := s.wallets[params.From]
+		w := s.wallets[params.From]
 
-dataBytes, err := hex.DecodeString(params.Data[2:])
+		dataBytes, err := hex.DecodeString(params.Data[2:])
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32602, "Invalid bytecode"
+			errCode, errMsg = -32602, "Invalid bytecode"
 
-break
+			break
 
-}
+		}
 
-value, ok := new(big.Int).SetString(params.Value, 10)
+		value, ok := new(big.Int).SetString(params.Value, 10)
 
-if !ok {
+		if !ok {
 
-errCode, errMsg = -32602, "Invalid value"
+			errCode, errMsg = -32602, "Invalid value"
 
-break
+			break
 
-}
+		}
 
-gas := uint64(3000000) // Contract deployment gas
+		gas := uint64(3000000) // Contract deployment gas
 
-gasPrice := big.NewInt(1000000000) // 1 Gwei
+		gasPrice := big.NewInt(1000000000) // 1 Gwei
 
-t, err := w.CreateTx(common.QuantumAddress{}, value, dataBytes, gas, gasPrice)
+		t, err := w.CreateTx(common.QuantumAddress{}, value, dataBytes, gas, gasPrice)
 
-if err != nil {
+		if err != nil {
 
-errCode, errMsg = -32603, err.Error()
+			errCode, errMsg = -32603, err.Error()
 
-break
+			break
 
-}
+		}
 
-if err := s.bc.TxPool().AddTx(t); err != nil {
+		if err := s.bc.TxPool().AddTx(t, s.bc); err != nil {
 
-errCode, errMsg = -32603, err.Error()
+			errCode, errMsg = -32603, err.Error()
 
-break
+			break
 
-}
+		}
 
-result = t.Hash().Hex()
+		result = t.Hash().Hex()
 
-default:
+	default:
 
-errCode, errMsg = -32601, "Method not found"
+		errCode, errMsg = -32601, "Method not found"
 
-}
+	}
 
-s.writeResponse(w, req.ID, result, errCode, errMsg)
+	s.writeResponse(w, req.ID, result, errCode, errMsg)
 
 }
 
 // writeResponse writes a JSON-RPC response.
 func (s *Server) writeResponse(w http.ResponseWriter, id interface{}, result interface{}, errCode int, errMsg string) {
 
-resp := struct {
-JSONRPC string `json:"jsonrpc"`
+	resp := struct {
+		JSONRPC string `json:"jsonrpc"`
 
-Result interface{} `json:"result,omitempty"`
+		Result interface{} `json:"result,omitempty"`
 
-Error *struct {
-Code int `json:"code"`
+		Error *struct {
+			Code int `json:"code"`
 
-Message string `json:"message"`
-} `json:"error,omitempty"`
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
 
-ID interface{} `json:"id"`
-}{
+		ID interface{} `json:"id"`
+	}{
 
-JSONRPC: "2.0",
+		JSONRPC: "2.0",
 
-ID: id,
-}
+		ID: id,
+	}
 
-if errCode != 0 {
+	if errCode != 0 {
 
-resp.Error = &struct {
-Code int `json:"code"`
+		resp.Error = &struct {
+			Code int `json:"code"`
 
-Message string `json:"message"`
-}{Code: errCode, Message: errMsg}
+			Message string `json:"message"`
+		}{Code: errCode, Message: errMsg}
 
-} else {
+	} else {
 
-resp.Result = result
+		resp.Result = result
 
-}
+	}
 
-w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 
-json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp)
 
 }
 
 // writeError writes a JSON-RPC error.
 func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, message string) {
-s.writeResponse(w, id, nil, code, message)
+	s.writeResponse(w, id, nil, code, message)
 }
 
 func mustPrivateKeyBytes(w *wallet.Wallet) []byte {
-key, err := w.PrivateKey()
-if err != nil {
-return nil
-}
-return key
+	key, err := w.PrivateKey()
+	if err != nil {
+		return nil
+	}
+	return key
 }
