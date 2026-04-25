@@ -898,6 +898,9 @@ func (n *Node) RequestBlockSync(peerID peer.ID, blockNumber uint64) (*block.Bloc
 		return nil, fmt.Errorf("failed to unmarshal block: %w", err)
 	}
 	if err := n.chain.Checkpoints().ValidateBlock(blockNumber, blk.Hash()); err != nil {
+		if n.banManager != nil {
+			n.banManager.BanPeer(peerID, "CHECKPOINT_SYNC_MISMATCH", err.Error())
+		}
 		return nil, fmt.Errorf("checkpoint validation failed for block %d: %w", blockNumber, err)
 	}
 	return &blk, nil

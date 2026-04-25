@@ -981,6 +981,8 @@ func (n *Node) CheckPeerBeforeProcessingWithCheckpoints(peerID peer.ID, msgType 
 				if cp.Hash != blockHash {
 					n.logger.Errorf("🚨 Quick checkpoint violation from %s at height %d",
 						peerID.String()[:8], height)
+					n.banManager.BanPeer(peerID, "CHECKPOINT_HASH_MISMATCH",
+						fmt.Sprintf("height=%d expected=%s got=%s", height, cp.Hash.String(), blockHash.String()))
 					return false
 				}
 			}
