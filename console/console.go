@@ -1873,10 +1873,16 @@ func (c *Console) handleSend(parts []string) {
 		return
 	}
 
-	// FIND KEYSTORE ACCOUNT
+	// FIND ACCOUNT IN ANTDCHAIN KEYSTORE
+	availableAccounts, err := qkeystore.ListAccounts(c.node.GetKeystoreDir())
+	if err != nil {
+		fmt.Printf("❌ Failed to read keystore directory: %v\n", err)
+		return
+	}
+
 	found := false
-	for _, acc := range c.node.Keystore().Accounts() {
-		if ethAddressMatchesQuantumAddress(acc.Address, fromAddr) {
+	for _, acc := range availableAccounts {
+		if acc == fromAddr {
 			found = true
 			break
 		}
@@ -1886,8 +1892,8 @@ func (c *Console) handleSend(parts []string) {
 		fmt.Printf("❌ Wallet %s not found in keystore\n", fromAddr.String())
 		fmt.Printf("   Keystore directory: %s\n", c.node.GetKeystoreDir())
 		fmt.Printf("   Available wallets:\n")
-		for _, acc := range c.node.Keystore().Accounts() {
-			fmt.Printf("   - %s\n", acc.Address.String())
+		for _, acc := range availableAccounts {
+			fmt.Printf("   - %s\n", acc.String())
 		}
 		return
 	}
