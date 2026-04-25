@@ -1,7 +1,8 @@
 package staking
 
 import (
-	"crypto/ecdsa"
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
@@ -9,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/antdaza/antdchain/antdc/crypto/quantum"
 	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	// "github.com/antdaza/antdchain/antdc/types"
 )
 
@@ -109,7 +110,7 @@ func NewStakingManager(statedb *state.State, minStake *big.Int) *StakingManager 
 }
 
 // Stake allows an address to stake tokens for mining eligibility
-func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, privKey *ecdsa.PrivateKey) error {
+func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, privKey []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -131,14 +132,9 @@ func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, 
 	}
 
 	// Sign stake commitment
-	commitment := crypto.Keccak256Hash(
-		[]byte("STAKE"),
-		address.Bytes(),
-		amount.Bytes(),
-		[]byte(fmt.Sprintf("%d", time.Now().Unix())),
-	)
+	commitment := stakeCommitmentHash("STAKE", address, amount, uint64(time.Now().Unix()))
 
-	signature, err := crypto.Sign(commitment.Bytes(), privKey)
+	signature, err := quantum.Sign(privKey, commitment.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to sign stake: %v", err)
 	}
@@ -209,7 +205,7 @@ func (sm *StakingManager) GetEligibleMiners(minStake *big.Int) []common.QuantumA
 }
 
 // Unstake initiates withdrawal of staked tokens
-func (sm *StakingManager) Unstake(address common.QuantumAddress, privKey *ecdsa.PrivateKey) error {
+func (sm *StakingManager) Unstake(address common.QuantumAddress, privKey []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -228,14 +224,9 @@ func (sm *StakingManager) Unstake(address common.QuantumAddress, privKey *ecdsa.
 	}
 
 	// Sign unstake request
-	commitment := crypto.Keccak256Hash(
-		[]byte("UNSTAKE"),
-		address.Bytes(),
-		stake.Amount.Bytes(),
-		[]byte(fmt.Sprintf("%d", time.Now().Unix())),
-	)
+	commitment := stakeCommitmentHash("UNSTAKE", address, stake.Amount, uint64(time.Now().Unix()))
 
-	signature, err := crypto.Sign(commitment.Bytes(), privKey)
+	signature, err := quantum.Sign(privKey, commitment.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to sign unstake: %v", err)
 	}
@@ -357,7 +348,20 @@ func (sm *StakingManager) GetParentHash(height uint64) common.Hash {
 	// This would typically get the parent hash from blockchain
 	// For now, return a dummy hash
 	// TODO: correct this
-	return common.BytesToHash(crypto.Keccak256([]byte(fmt.Sprintf("parent-%d", height))))
+	return common.ComputeHash([]byte(fmt.Sprintf("parent-%d", height)))
+}
+
+func stakeCommitmentHash(action string, address common.QuantumAddress, amount *big.Int, unixTime uint64) common.Hash {
+	buf := new(bytes.Buffer)
+	buf.WriteString(action)
+	buf.Write(address.Bytes())
+	buf.Write(amount.Bytes())
+
+	timeBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timeBytes, unixTime)
+	buf.Write(timeBytes)
+
+	return common.ComputeHash(buf.Bytes())
 }
 
 func (sm *StakingManager) emitEvent(event StakeEvent) {
