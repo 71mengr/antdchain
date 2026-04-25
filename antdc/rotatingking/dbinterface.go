@@ -2,6 +2,7 @@
 package rotatingking
 import (
 //    "context"
+    "encoding/json"
     "time"
     "math/big"
     "github.com/antdaza/antdchain/common"
@@ -17,6 +18,42 @@ type RotatingKingState struct {
     KingsHistory             []KingRotation              `json:"kingsHistory"`
     TotalRewardsDistributed  *big.Int                    `json:"totalRewardsDistributed"`
     KingRewards              map[common.QuantumAddress]*big.Int `json:"kingRewards"`
+}
+
+func (s RotatingKingState) MarshalJSON() ([]byte, error) {
+    type alias RotatingKingState
+    kingRewards := make(map[string]*big.Int, len(s.KingRewards))
+    for addr, amount := range s.KingRewards {
+        kingRewards[addr.String()] = amount
+    }
+    return json.Marshal(struct {
+        alias
+        KingRewards map[string]*big.Int `json:"kingRewards"`
+    }{
+        alias:       alias(s),
+        KingRewards: kingRewards,
+    })
+}
+
+func (s *RotatingKingState) UnmarshalJSON(data []byte) error {
+    type alias RotatingKingState
+    aux := struct {
+        alias
+        KingRewards map[string]*big.Int `json:"kingRewards"`
+    }{}
+    if err := json.Unmarshal(data, &aux); err != nil {
+        return err
+    }
+    *s = RotatingKingState(aux.alias)
+    s.KingRewards = make(map[common.QuantumAddress]*big.Int, len(aux.KingRewards))
+    for addrStr, amount := range aux.KingRewards {
+        addr, err := common.ParseQuantumAddress(addrStr)
+        if err != nil {
+            return err
+        }
+        s.KingRewards[addr] = amount
+    }
+    return nil
 }
 
 type RotatingKingConfig struct {
