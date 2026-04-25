@@ -52,7 +52,20 @@ func ethToQuantumAddress(addr common.QuantumAddress) common.QuantumAddress {
 }
 
 func parseQuantumAddressInput(input string) (common.QuantumAddress, error) {
-	qAddr, err := common.ParseQuantumAddress(strings.TrimSpace(input))
+	normalized := strings.TrimSpace(input)
+	// Be permissive with copy/pasted input where a literal "\n" (or "\r\n")
+	// accidentally gets appended to the address string.
+	for _, marker := range []string{`\r\n`, `\n`, `\r`} {
+		if idx := strings.Index(normalized, marker); idx >= 0 {
+			normalized = normalized[:idx]
+			break
+		}
+	}
+	if fields := strings.Fields(normalized); len(fields) > 0 {
+		normalized = fields[0]
+	}
+
+	qAddr, err := common.ParseQuantumAddress(normalized)
 	if err != nil {
 		return common.QuantumAddress{}, fmt.Errorf("invalid antdchain address '%s': %w", input, err)
 	}
@@ -1642,7 +1655,7 @@ func (c *Console) handleSetAddress(parts []string) {
 		return
 	}
 
-	// Verify it exists in keystore
+	// Try to resolve matching wallet file from local keystore.
 	found := false
 	var file string
 	for _, acc := range c.node.Keystore().Accounts() {
@@ -1653,15 +1666,15 @@ func (c *Console) handleSetAddress(parts []string) {
 		}
 	}
 
-	if !found {
-		fmt.Printf("Wallet %s not found in keystore\n", addr.String())
-		return
-	}
 
 	c.node.SetMinerWalletAddress(addr)
 
 	fmt.Printf("Mining address set to: %s\n", addr.String())
-	fmt.Printf("Keystore file: %s\n", file)
+	if found {
+		fmt.Printf("Keystore file: %s\n", file)
+	} else {
+		fmt.Printf("⚠️ Wallet %s not found in keystore (address still set)\n", addr.String())
+	}
 
 	c.node.mu.RLock()
 	balance := c.node.blockchain.State().GetBalance(addr)

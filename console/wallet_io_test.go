@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"github.com/antdaza/antdchain/common"
 )
 
 func TestExtractHexPrivateKeyPrefersLongestToken(t *testing.T) {
@@ -91,5 +92,25 @@ func TestParseOneShotCommandArgsRejectsFlags(t *testing.T) {
 
 	if _, ok := parseOneShotCommandArgs([]string{"--offline", "export", "0q123"}); ok {
 		t.Fatalf("did not expect flag-prefixed input to be treated as one-shot command")
+	}
+}
+
+func TestParseQuantumAddressInputTrimsEscapedNewlineSuffix(t *testing.T) {
+	t.Parallel()
+
+	const addr = "0qAhsF8imqZ2JhXTL7Nj1fJHvrKS7ZeHhrc"
+
+	want, err := common.ParseQuantumAddress(addr)
+	if err != nil {
+		t.Fatalf("parse expected address: %v", err)
+	}
+
+	got, err := parseQuantumAddressInput(addr + `\nWallet ` + addr + " not found in keystore")
+	if err != nil {
+		t.Fatalf("parseQuantumAddressInput returned error: %v", err)
+	}
+
+	if got != common.QuantumAddress(want) {
+		t.Fatalf("unexpected parsed address: got %s, want %s", got.String(), common.QuantumAddress(want).String())
 	}
 }
