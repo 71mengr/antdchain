@@ -335,8 +335,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         )
         ms.mu.RLock()
         configuredMiner = ms.minerAddress
-        if ms.privateKey != nil {
-        if ms.hasPrivateKey && len(ms.privateKey) > 0 {
+        if ms.privateKey != nil && ms.hasPrivateKey && len(ms.privateKey) > 0 {
             pubKey, err := quantum.DerivePublicKey(ms.privateKey)
             if err == nil {
                 parsedAddr, addrErr := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
