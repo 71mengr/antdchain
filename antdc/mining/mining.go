@@ -336,10 +336,9 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         }
 
         // Check if the expected miner has a loaded private key in this node.
-        // We accept either:
-        //   1) a configured miner address match, or
-        //   2) a direct match with the address derived from the loaded key.
-        // This prevents false "waiting" states when minerAddress and key address drift.
+        // The loaded key must derive to the expected miner address.
+        // NOTE: Do not trust configured miner address alone here, otherwise
+        // blocks can be signed by the wrong key when address/key drift.
         var (
             eligiblePrivKey  []byte
             configuredMiner  common.QuantumAddress
@@ -355,7 +354,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
                     loadedKeyAddress = parsedAddr
                 }
             }
-            if expectedMiner == configuredMiner || expectedMiner == loadedKeyAddress {
+            if expectedMiner == loadedKeyAddress {
                 eligiblePrivKey = append([]byte(nil), ms.privateKey...)
             }
         }

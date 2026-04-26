@@ -2412,8 +2412,31 @@ func (c *Console) handleRegisterStake(parts []string) {
 		return
 	}
 
+	c.node.SetMinerWalletAddress(addr)
+	if c.node.miningState != nil {
+		if err := c.node.miningState.SetPrivateKeyFromBytes(privKey); err != nil {
+			fmt.Printf("⚠️  Stake registered, but failed to load miner private key: %v\n", err)
+		}
+		if err := c.node.miningState.SetMinerAddress(addr); err != nil {
+			fmt.Printf("⚠️  Stake registered, but failed to set miner address: %v\n", err)
+		}
+	}
+
+	if powEngine := c.node.blockchain.Pow(); powEngine != nil {
+		pubKey, err := quantum.DerivePublicKey(privKey)
+		if err != nil {
+			fmt.Printf("⚠️  Stake registered, but failed to derive public key: %v\n", err)
+		} else {
+			powEngine.AutoRegisterIfEligible(addr, stakeAmount, pubKey)
+		}
+	}
+
 	fmt.Printf("✅ Stake registered for %s with 1,000,000 ANTD\n", addr.String())
 	fmt.Println("   Funds are locked during staking lock time and cannot be spent.")
+	if c.node.miningState != nil {
+		fmt.Println("✅ Auto-starting PoS mining for newly registered staker...")
+		mining.StartPosMining(c.node.blockchain, c.node.miningState, addr, c.node.p2pNode)
+	}
 }
 
 func (c *Console) handleUnlockStake(parts []string) {
