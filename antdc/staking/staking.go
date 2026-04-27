@@ -56,6 +56,7 @@ type StakingManager struct {
 type StakeInfo struct {
 	Address       common.QuantumAddress
 	Amount        *big.Int
+	RegisteredAt  uint64
 	StartTime     time.Time
 	LockUntil     time.Time
 	BlocksMined   uint64
@@ -92,11 +93,12 @@ type StakeEvent struct {
 }
 
 type StakeRecord struct {
-	Address      common.QuantumAddress `json:"address"`
-	Amount       *big.Int              `json:"amount"`
-	IsActive     bool                  `json:"is_active"`
-	LastActivity uint64                `json:"last_activity"`
-	UnlockBlock  *uint64               `json:"unlock_block,omitempty"`
+	Address          common.QuantumAddress `json:"address"`
+	Amount           *big.Int              `json:"amount"`
+	RegisteredHeight uint64                `json:"registered_height"`
+	IsActive         bool                  `json:"is_active"`
+	LastActivity     uint64                `json:"last_activity"`
+	UnlockBlock      *uint64               `json:"unlock_block,omitempty"`
 }
 
 type stakingSnapshot struct {
@@ -107,6 +109,7 @@ type stakingSnapshot struct {
 type stakeSnapshotEntry struct {
 	Address       common.QuantumAddress `json:"address"`
 	Amount        string                `json:"amount"`
+	RegisteredAt  uint64                `json:"registered_at"`
 	StartUnix     int64                 `json:"start_unix"`
 	LockUntilUnix int64                 `json:"lock_until_unix"`
 	BlocksMined   uint64                `json:"blocks_mined"`
@@ -203,14 +206,17 @@ func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, 
 		return fmt.Errorf("failed to lock stake amount: %w", err)
 	}
 
+	currentHeight := sm.currentBlockHeight()
+
 	// Create stake record
 	sm.stakes[address] = &StakeInfo{
 		Address:      address,
 		Amount:       new(big.Int).Set(amount),
+		RegisteredAt: currentHeight,
 		StartTime:    time.Now(),
 		LockUntil:    time.Now().Add(sm.lockDuration),
 		IsActive:     true,
-		LastActivity: sm.currentBlockHeight(),
+		LastActivity: currentHeight,
 	}
 
 	sm.totalStaked.Add(sm.totalStaked, amount)
@@ -490,6 +496,7 @@ func (sm *StakingManager) LoadSnapshot(data []byte) error {
 		sm.stakes[entry.Address] = &StakeInfo{
 			Address:       entry.Address,
 			Amount:        amount,
+			RegisteredAt:  entry.RegisteredAt,
 			StartTime:     time.Unix(entry.StartUnix, 0),
 			LockUntil:     time.Unix(entry.LockUntilUnix, 0),
 			BlocksMined:   entry.BlocksMined,
@@ -534,10 +541,11 @@ func (sm *StakingManager) GetStakeRecords() []StakeRecord {
 	records := make([]StakeRecord, 0, len(sm.stakes))
 	for addr, stake := range sm.stakes {
 		record := StakeRecord{
-			Address:      addr,
-			Amount:       new(big.Int).Set(stake.Amount),
-			IsActive:     stake.IsActive,
-			LastActivity: stake.LastActivity,
+			Address:          addr,
+			Amount:           new(big.Int).Set(stake.Amount),
+			RegisteredHeight: stake.RegisteredAt,
+			IsActive:         stake.IsActive,
+			LastActivity:     stake.LastActivity,
 		}
 		if w, ok := sm.withdrawals[addr]; ok && w != nil {
 			unlockBlock := w.UnlockBlock
@@ -559,6 +567,7 @@ func (sm *StakingManager) snapshotBytesLocked() ([]byte, error) {
 		snap.Stakes = append(snap.Stakes, stakeSnapshotEntry{
 			Address:       stake.Address,
 			Amount:        stake.Amount.String(),
+			RegisteredAt:  stake.RegisteredAt,
 			StartUnix:     stake.StartTime.Unix(),
 			LockUntilUnix: stake.LockUntil.Unix(),
 			BlocksMined:   stake.BlocksMined,

@@ -63,14 +63,23 @@ type Header struct {
 	MixDigest   common.Hash           `json:"mixHash"`
 	Nonce       BlockNonce            `json:"nonce"`
 
-	ProtocolVersion  uint32   `json:"protocolVersion"`
-	UpgradeName      string   `json:"upgradeName"`
-	UpgradeTimestamp uint64   `json:"upgradeTimestamp"`
+	ProtocolVersion  uint32                `json:"protocolVersion"`
+	UpgradeName      string                `json:"upgradeName"`
+	UpgradeTimestamp uint64                `json:"upgradeTimestamp"`
 	MainKingAddress  common.QuantumAddress `json:"mainKingAddress"`
-	RewardAmount     *big.Int `json:"rewardAmount"`
-	CurrentReward    *big.Int `json:"currentReward"`
+	RewardAmount     *big.Int              `json:"rewardAmount"`
+	CurrentReward    *big.Int              `json:"currentReward"`
+	Stakers          []StakerRegistration  `json:"stakers,omitempty"`
 
 	TxRoot common.Hash `json:"-"`
+}
+
+type StakerRegistration struct {
+	Address           common.QuantumAddress `json:"address"`
+	Amount            *big.Int              `json:"amount"`
+	RegisteredHeight  uint64                `json:"registeredHeight"`
+	UnlockStakeHeight *uint64               `json:"unlockStakeHeight,omitempty"`
+	IsActive          bool                  `json:"isActive"`
 }
 
 type BlockNonce [8]byte
@@ -300,6 +309,31 @@ func (h *Header) Hash() common.Hash {
 	data = append(data, h.MainKingAddress.Bytes()...)
 	data = append(data, safeBigIntToBytes(h.RewardAmount, 32)...)
 	data = append(data, safeBigIntToBytes(h.CurrentReward, 32)...)
+
+	// Staker registrations snapshot
+	binary.BigEndian.PutUint64(buf, uint64(len(h.Stakers)))
+	data = append(data, buf...)
+	for _, staker := range h.Stakers {
+		data = append(data, staker.Address.Bytes()...)
+		data = append(data, safeBigIntToBytes(staker.Amount, 32)...)
+
+		binary.BigEndian.PutUint64(buf, staker.RegisteredHeight)
+		data = append(data, buf...)
+
+		if staker.UnlockStakeHeight != nil {
+			data = append(data, byte(1))
+			binary.BigEndian.PutUint64(buf, *staker.UnlockStakeHeight)
+			data = append(data, buf...)
+		} else {
+			data = append(data, byte(0))
+		}
+
+		if staker.IsActive {
+			data = append(data, byte(1))
+		} else {
+			data = append(data, byte(0))
+		}
+	}
 
 	return hasher(data)
 }

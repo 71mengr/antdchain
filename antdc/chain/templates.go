@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
@@ -258,7 +259,8 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 			parent.Header.Time,
 			currentTime,
 		),
-		Extra: extraData,
+		Extra:   extraData,
+		Stakers: bc.blockHeaderStakerRegistrations(),
 	}
 	if err := applyProtocolHeaderFields(header); err != nil {
 		return nil, nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
@@ -365,4 +367,32 @@ func executeTransactionsOnState(st *state.State, txs []*tx.Tx, gasLimit uint64) 
 	}
 
 	return st.Root(), nil
+}
+
+func (bc *Blockchain) blockHeaderStakerRegistrations() []block.StakerRegistration {
+	if bc == nil || bc.stakingManager == nil {
+		return nil
+	}
+
+	records := bc.stakingManager.GetStakeRecords()
+	if len(records) == 0 {
+		return nil
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Address.String() < records[j].Address.String()
+	})
+
+	registrations := make([]block.StakerRegistration, 0, len(records))
+	for _, record := range records {
+		registrations = append(registrations, block.StakerRegistration{
+			Address:           record.Address,
+			Amount:            new(big.Int).Set(record.Amount),
+			RegisteredHeight:  record.RegisteredHeight,
+			UnlockStakeHeight: record.UnlockBlock,
+			IsActive:          record.IsActive,
+		})
+	}
+
+	return registrations
 }
