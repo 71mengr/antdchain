@@ -343,6 +343,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	log.Printf("[blockchain] Initializing Proof of Stake engine...")
 	posEngine := pow.NewPoW()
 	bc.pow = posEngine
+	bc.restoreActiveStakersToPoW()
 
 	// ====================
 	// INITIALIZE MAIN KING
@@ -458,6 +459,25 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	blockHeightGauge.Set(float64(bc.GetChainHeight()))
 
 	return bc, nil
+}
+
+func (bc *Blockchain) restoreActiveStakersToPoW() {
+	if bc == nil || bc.stakingManager == nil || bc.pow == nil {
+		return
+	}
+
+	restored := 0
+	for _, record := range bc.stakingManager.GetStakeRecords() {
+		if !record.IsActive || record.Amount == nil || record.Amount.Sign() <= 0 {
+			continue
+		}
+		bc.pow.AutoRegisterIfEligible(record.Address, record.Amount, nil)
+		restored++
+	}
+
+	if restored > 0 {
+		log.Printf("[staking] Restored %d active staker(s) into PoS engine", restored)
+	}
 }
 
 // verifyTipContinuity checks continuity for tip block only (fast)
