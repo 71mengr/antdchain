@@ -2563,6 +2563,16 @@ func (c *Console) checkStakerRegistration(addr common.QuantumAddress) bool {
 		return true
 	}
 
+	// Fallback to on-chain staker snapshots reconstructed from block headers.
+	for _, record := range c.registeredStakerRecords() {
+		if record.Address == addr && record.IsActive {
+			// unlock_stake@0 is a legacy/default marker in some snapshots; treat as active.
+			if record.UnlockBlock == nil || *record.UnlockBlock == 0 {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -2584,7 +2594,7 @@ func (c *Console) printRegisteredStakers(header string) {
 		if !record.IsActive {
 			status = "inactive"
 		}
-		if record.UnlockBlock != nil {
+		if record.UnlockBlock != nil && *record.UnlockBlock > 0 {
 			status = fmt.Sprintf("unlock_stake@%d", *record.UnlockBlock)
 		}
 		amount := "0"
