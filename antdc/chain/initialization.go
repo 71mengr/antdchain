@@ -31,6 +31,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/vm"
 	"github.com/antdaza/antdchain/common"
 	chaincommon "github.com/antdaza/antdchain/common"
+	"github.com/cockroachdb/pebble"
 
 	"github.com/hashicorp/golang-lru"
 )
@@ -229,7 +230,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	})
 	stakingStateKey := []byte("staking:state:v1")
 	bc.stakingManager.SetPersistFunc(func(data []byte) error {
-		return chainDb.DB().Set(stakingStateKey, data, nil)
+		return chainDb.DB().Set(stakingStateKey, data, pebble.Sync)
 	})
 	if data, closer, err := chainDb.DB().Get(stakingStateKey); err == nil {
 		snapshot := append([]byte(nil), data...)
