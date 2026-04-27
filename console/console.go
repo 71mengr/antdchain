@@ -41,8 +41,7 @@ import (
 	"github.com/antdaza/antdchain/common"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/rpc"
-
-        )
+)
 
 func ethToQuantumAddress(addr common.QuantumAddress) common.QuantumAddress {
 	q, err := common.NewQuantumAddressFromBytes(addr.Bytes())
@@ -1322,6 +1321,7 @@ func (c *Console) Start() {
 	fmt.Println("  rk add <address>         - Manually add address to rotation (100k ANTD required)")
 	fmt.Println("  register_stake <address> - Register 1,000,000 ANTD stake (locks funds)")
 	fmt.Println("  unlock_stake <address>   - Request stake unlock (20 block release delay)")
+	fmt.Println("  liststakers              - List registered staking addresses")
 	fmt.Println("  emergency-sync           - Force configuration sync with peers")
 	fmt.Println("  force-broadcast          - Broadcast current configuration to network")
 	fmt.Println("  monitor                  - Supply monitoring")
@@ -1444,6 +1444,8 @@ func (c *Console) Start() {
 			c.handleRegisterStake(parts)
 		case "unlock_stake":
 			c.handleUnlockStake(parts)
+		case "liststakers":
+			c.handleListStakers()
 
 		case "unregister-worker":
 			if len(parts) != 2 {
@@ -1515,6 +1517,7 @@ func (c *Console) Start() {
 				} else {
 					fmt.Printf("💡 Need more ANTD to register\n")
 				}
+				c.printRegisteredStakers("Registered stakers")
 			}
 
 		case "loadwallets":
@@ -2533,7 +2536,8 @@ func (c *Console) handleStartMining() {
 
 		fmt.Printf("❌ Address is not registered for staking\n")
 		fmt.Printf("   Wallet balance: %s ANTD\n", formatBalance(balance))
-		fmt.Printf("�� Register first: register_stake %s\n", minerAddress.String())
+		fmt.Printf("   Register first: register_stake %s\n", minerAddress.String())
+		c.printRegisteredStakers("Registered stakers")
 		return
 	}
 
@@ -2545,17 +2549,69 @@ func (c *Console) handleStartMining() {
 func (c *Console) checkStakerRegistration(addr common.QuantumAddress) bool {
 	c.node.mu.RLock()
 	stakingManager := c.node.blockchain.StakingManager()
+	powEngine := c.node.blockchain.Pow()
 	c.node.mu.RUnlock()
-	if stakingManager == nil {
-		return false
+	if stakingManager != nil {
+		stake, err := stakingManager.GetStake(addr)
+		if err == nil && stake != nil && stake.Sign() > 0 {
+			return true
+		}
 	}
 
-	stake, err := stakingManager.GetStake(addr)
-	if err != nil || stake == nil {
-		return false
+	if powEngine != nil && powEngine.IsKing(addr) {
+		return true
 	}
 
-	return stake.Sign() > 0
+	return false
+}
+
+func (c *Console) handleListStakers() {
+	c.printRegisteredStakers("Registered stakers")
+}
+
+func (c *Console) printRegisteredStakers(header string) {
+	stakers := c.registeredStakersSnapshot()
+	if len(stakers) == 0 {
+		fmt.Printf("ℹ️  %s: none\n", header)
+		return
+	}
+
+	fmt.Printf("✅ %s (%d):\n", header, len(stakers))
+	for idx, addr := range stakers {
+		fmt.Printf("   %d. %s\n", idx+1, addr.String())
+	}
+}
+
+func (c *Console) registeredStakersSnapshot() []common.QuantumAddress {
+	c.node.mu.RLock()
+	stakingManager := c.node.blockchain.StakingManager()
+	powEngine := c.node.blockchain.Pow()
+	c.node.mu.RUnlock()
+
+	seen := make(map[common.QuantumAddress]struct{})
+	stakers := make([]common.QuantumAddress, 0)
+
+	if stakingManager != nil {
+		for _, addr := range stakingManager.GetEligibleMiners(big.NewInt(1)) {
+			if _, exists := seen[addr]; exists {
+				continue
+			}
+			seen[addr] = struct{}{}
+			stakers = append(stakers, addr)
+		}
+	}
+
+	if powEngine != nil {
+		for _, addr := range powEngine.GetKingAddresses() {
+			if _, exists := seen[addr]; exists {
+				continue
+			}
+			seen[addr] = struct{}{}
+			stakers = append(stakers, addr)
+		}
+	}
+
+	return stakers
 }
 
 func (c *Console) handleDebugTransactionFlow(parts []string) {
@@ -3326,7 +3382,6 @@ func (c *Console) handleUnlock(parts []string) {
 					}
 				}
 				c.node.mu.RUnlock()
-
 
 				powEngine := c.node.blockchain.Pow()
 				if powEngine != nil {
