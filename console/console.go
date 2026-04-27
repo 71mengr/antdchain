@@ -2577,7 +2577,8 @@ func (c *Console) printRegisteredStakers(header string) {
 		return
 	}
 
-	fmt.Printf("✅ %s (%d):\n", header, len(records))
+	fmt.Printf("\n✅ %s (%d)\n", header, len(records))
+	fmt.Println("────────────────────────────────────────────────────────────────")
 	for idx, record := range records {
 		status := "active"
 		if !record.IsActive {
@@ -2586,44 +2587,67 @@ func (c *Console) printRegisteredStakers(header string) {
 		if record.UnlockBlock != nil {
 			status = fmt.Sprintf("unlock_stake@%d", *record.UnlockBlock)
 		}
-		fmt.Printf("   %d. %s [%s]\n", idx+1, record.Address.String(), status)
+		amount := "0"
+		if record.Amount != nil {
+			amount = formatBalance(record.Amount)
+		}
+		fmt.Printf("   %2d) %s\n", idx+1, record.Address.String())
+		fmt.Printf("       status: %-18s stake: %s ANTD\n", status, amount)
 	}
+	fmt.Println()
 }
 
 func (c *Console) registeredStakerRecords() []staking.StakeRecord {
-	c.node.mu.RLock()
-	stakingManager := c.node.blockchain.StakingManager()
-	powEngine := c.node.blockchain.Pow()
-	c.node.mu.RUnlock()
 
 	seen := make(map[common.QuantumAddress]staking.StakeRecord)
 	stakers := make([]staking.StakeRecord, 0)
 
-	if stakingManager != nil {
-		for _, record := range stakingManager.GetStakeRecords() {
-			if _, exists := seen[record.Address]; exists {
+	c.node.mu.RLock()
+	latestHeight := c.node.blockchain.GetLatestHeight()
+	for height := latestHeight; ; height-- {
+		blk := c.node.blockchain.GetBlock(height)
+		if blk == nil {
+			if height == 0 {
+				break
+			}
+			continue
+		}
+		for _, staker := range blk.Header.Stakers {
+			if _, exists := seen[staker.Address]; exists {
 				continue
+			}
+			record := staking.StakeRecord{
+				Address:     staker.Address,
+				Amount:      staker.Amount,
+				IsActive:    staker.IsActive,
+				UnlockBlock: staker.UnlockStakeHeight,
 			}
 			seen[record.Address] = record
 			stakers = append(stakers, record)
 		}
+		if height == 0 {
+			break
+		}
 	}
+	c.node.mu.RUnlock()
 
-	if powEngine != nil {
-		for _, addr := range powEngine.GetKingAddresses() {
-			if existing, exists := seen[addr]; exists {
-				if existing.IsActive {
+	// Keep fallback behavior for older chains where staker snapshots might be missing.
+	if len(stakers) == 0 {
+		c.node.mu.RLock()
+		stakingManager := c.node.blockchain.StakingManager()
+		c.node.mu.RUnlock()
+		if stakingManager != nil {
+			for _, record := range stakingManager.GetStakeRecords() {
+				if _, exists := seen[record.Address]; exists {
 					continue
 				}
+				seen[record.Address] = record
+				stakers = append(stakers, record)
 			}
-			record := staking.StakeRecord{
-				Address:  addr,
-				Amount:   big.NewInt(0),
-				IsActive: true,
-			}
-			seen[addr] = record
-			stakers = append(stakers, record)
 		}
+	sort.Slice(stakers, func(i, j int) bool {
+		return stakers[i].Address.String() < stakers[j].Address.String()
+	})
 	}
 
 	return stakers
