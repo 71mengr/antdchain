@@ -28,6 +28,8 @@ const (
 	EpochLength            = 100 // Blocks per epoch for difficulty recalculation
 	BaseDifficulty         = 1
 	MaxDifficulty          = 1000000
+	// Additional selection weight awarded to the rotating king when it is also a staker.
+	RotatingKingHashrateBoostPercent = 50
 )
 
 var (
@@ -123,6 +125,8 @@ type PoW struct {
 
 	currentMiner       common.QuantumAddress
 	currentMinerBlocks uint64
+	priorityMiner      common.QuantumAddress
+	priorityBoostPct   uint64
 
 	blockHistory []common.QuantumAddress // recent miners
 	blockTimes   []uint64                // recent block times for difficulty calculation
@@ -462,19 +466,11 @@ func (p *PoW) GetNextMiner(parentHash common.Hash, height uint64) (common.Quantu
 		return common.QuantumAddress{}, errors.New("no active stakers")
 	}
 
-	current := p.stakers[p.currentMiner]
-	shouldRotate := p.currentMinerBlocks >= BlocksPerMiner ||
-		p.currentMiner == (common.QuantumAddress{}) ||
-		current == nil ||
-		!current.IsActive ||
-		current.UnbondingEnd != nil ||
-		current.StakeAmount.Cmp(MinStakeAmount) < 0
-
-	if shouldRotate {
-		next := p.selectNextMinerLocked(parentHash, height)
-		if next == (common.QuantumAddress{}) {
-			return common.QuantumAddress{}, errors.New("failed to select miner")
-		}
+	next := p.selectNextMinerLocked(parentHash, height)
+	if next == (common.QuantumAddress{}) {
+		return common.QuantumAddress{}, errors.New("failed to select miner")
+	}
+	if next != p.currentMiner {
 		p.currentMiner = next
 		p.currentMinerBlocks = 0
 		p.rotations.Add(1)
@@ -509,6 +505,12 @@ func (p *PoW) selectNextMinerLocked(parentHash common.Hash, height uint64) commo
 		if s.MissedBlocks > 0 {
 			reduction := uint64(100) / (s.MissedBlocks + 1)
 			base = base * reduction / 100
+			if base == 0 {
+				base = 1
+			}
+		}
+		if addr == p.priorityMiner && p.priorityBoostPct > 0 {
+			base = base * (100 + p.priorityBoostPct) / 100
 			if base == 0 {
 				base = 1
 			}
@@ -824,4 +826,12 @@ func (p *PoW) IsKing(addr common.QuantumAddress) bool {
 	defer p.mu.RUnlock()
 	s, ok := p.stakers[addr]
 	return ok && s.IsActive && s.UnbondingEnd == nil
+}
+
+// SetPriorityMiner configures an optional mining weight bonus for one staker.
+func (p *PoW) SetPriorityMiner(addr common.QuantumAddress, boostPercent uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.priorityMiner = addr
+	p.priorityBoostPct = boostPercent
 }

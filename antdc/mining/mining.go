@@ -811,8 +811,9 @@ func (ms *PosMiningState) GetNextMiningSlot(bc *chain.Blockchain) (uint64, time.
         return 0, 0, errors.New("no active validators")
     }
 
-    // Estimate: each validator gets a turn every (BlocksPerMiner * activeStakers) blocks
-    blocksUntilTurn := uint64(pow.BlocksPerMiner * activeStakers)
+    // Estimate: miner selection happens every block using weighted stake.
+    // Rough expectation is one slot every activeStakers blocks for equal stakes.
+    blocksUntilTurn := uint64(activeStakers)
     estimatedBlocks := blocksUntilTurn // rough estimate
     
     // Convert to time (using target block time)

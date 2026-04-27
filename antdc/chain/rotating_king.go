@@ -11,6 +11,7 @@ import (
 "reflect"
 "time"
 
+"github.com/antdaza/antdchain/antdc/pow"
 "github.com/antdaza/antdchain/antdc/block"
 "github.com/antdaza/antdchain/common"
 "github.com/antdaza/antdchain/antdc/reward"
@@ -54,6 +55,10 @@ if bc.rotatingKingManager.ShouldRotate(blockHeight) {
 if err := bc.rotatingKingManager.RotateToNextKing(blockHeight, b.Hash()); err != nil {
 return fmt.Errorf("rotation failed: %w", err)
 }
+}
+
+if bc.pow != nil {
+bc.pow.SetPriorityMiner(bc.rotatingKingManager.GetCurrentKing(), pow.RotatingKingHashrateBoostPercent)
 }
 
 // Update sync state
