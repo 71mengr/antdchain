@@ -227,11 +227,21 @@ func (bc *Blockchain) validatePoSEligibility(b *block.Block, parent *block.Block
 		return errors.New("PoS engine not initialized")
 	}
 
-	// Keep the validator set synchronized with explicit stake registrations only.
+	// Keep the local PoS validator set synchronized before checking eligibility.
+	//
+	// During sync, peers may deliver blocks mined by addresses that are valid
+	// stakers but not yet present in this node's in-memory PoS set (e.g. after
+	// restart or before local staking snapshot restoration completes). In that
+	// case, fall back to account balance so imported blocks are validated against
+	// deterministic on-chain data instead of transient local runtime state.
 	if bc.stakingManager != nil {
 		if stakeAmt, err := bc.stakingManager.GetStake(b.Header.Coinbase); err == nil && stakeAmt != nil {
 			bc.pow.AutoRegisterIfEligible(b.Header.Coinbase, stakeAmt, nil)
+		} else if st := bc.GetState(); st != nil {
+			bc.pow.AutoRegisterIfEligible(b.Header.Coinbase, st.GetBalance(b.Header.Coinbase), nil)
 		}
+	} else if st := bc.GetState(); st != nil {
+		bc.pow.AutoRegisterIfEligible(b.Header.Coinbase, st.GetBalance(b.Header.Coinbase), nil)
 	}
 
 	eligible, err := bc.pow.VerifyMinerEligibility(
