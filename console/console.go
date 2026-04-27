@@ -36,6 +36,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/p2p"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
+	"github.com/antdaza/antdchain/antdc/staking"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/wallet"
 	"github.com/antdaza/antdchain/common"
@@ -2570,44 +2571,58 @@ func (c *Console) handleListStakers() {
 }
 
 func (c *Console) printRegisteredStakers(header string) {
-	stakers := c.registeredStakersSnapshot()
-	if len(stakers) == 0 {
+	records := c.registeredStakerRecords()
+	if len(records) == 0 {
 		fmt.Printf("ℹ️  %s: none\n", header)
 		return
 	}
 
-	fmt.Printf("✅ %s (%d):\n", header, len(stakers))
-	for idx, addr := range stakers {
-		fmt.Printf("   %d. %s\n", idx+1, addr.String())
+	fmt.Printf("✅ %s (%d):\n", header, len(records))
+	for idx, record := range records {
+		status := "active"
+		if !record.IsActive {
+			status = "inactive"
+		}
+		if record.UnlockBlock != nil {
+			status = fmt.Sprintf("unlock_stake@%d", *record.UnlockBlock)
+		}
+		fmt.Printf("   %d. %s [%s]\n", idx+1, record.Address.String(), status)
 	}
 }
 
-func (c *Console) registeredStakersSnapshot() []common.QuantumAddress {
+func (c *Console) registeredStakerRecords() []staking.StakeRecord {
 	c.node.mu.RLock()
 	stakingManager := c.node.blockchain.StakingManager()
 	powEngine := c.node.blockchain.Pow()
 	c.node.mu.RUnlock()
 
-	seen := make(map[common.QuantumAddress]struct{})
-	stakers := make([]common.QuantumAddress, 0)
+	seen := make(map[common.QuantumAddress]staking.StakeRecord)
+	stakers := make([]staking.StakeRecord, 0)
 
 	if stakingManager != nil {
-		for _, addr := range stakingManager.GetEligibleMiners(big.NewInt(1)) {
-			if _, exists := seen[addr]; exists {
+		for _, record := range stakingManager.GetStakeRecords() {
+			if _, exists := seen[record.Address]; exists {
 				continue
 			}
-			seen[addr] = struct{}{}
-			stakers = append(stakers, addr)
+			seen[record.Address] = record
+			stakers = append(stakers, record)
 		}
 	}
 
 	if powEngine != nil {
 		for _, addr := range powEngine.GetKingAddresses() {
-			if _, exists := seen[addr]; exists {
-				continue
+			if existing, exists := seen[addr]; exists {
+				if existing.IsActive {
+					continue
+				}
 			}
-			seen[addr] = struct{}{}
-			stakers = append(stakers, addr)
+			record := staking.StakeRecord{
+				Address:  addr,
+				Amount:   big.NewInt(0),
+				IsActive: true,
+			}
+			seen[addr] = record
+			stakers = append(stakers, record)
 		}
 	}
 

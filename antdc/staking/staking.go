@@ -3,6 +3,7 @@ package staking
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -48,6 +49,8 @@ type StakingManager struct {
 
 	// Events
 	stakeEvents chan StakeEvent
+
+	persistFn func([]byte) error
 }
 
 type StakeInfo struct {
@@ -88,6 +91,40 @@ type StakeEvent struct {
 	Block     uint64
 }
 
+type StakeRecord struct {
+	Address      common.QuantumAddress `json:"address"`
+	Amount       *big.Int              `json:"amount"`
+	IsActive     bool                  `json:"is_active"`
+	LastActivity uint64                `json:"last_activity"`
+	UnlockBlock  *uint64               `json:"unlock_block,omitempty"`
+}
+
+type stakingSnapshot struct {
+	Stakes      []stakeSnapshotEntry      `json:"stakes"`
+	Withdrawals []withdrawalSnapshotEntry `json:"withdrawals"`
+}
+
+type stakeSnapshotEntry struct {
+	Address       common.QuantumAddress `json:"address"`
+	Amount        string                `json:"amount"`
+	StartUnix     int64                 `json:"start_unix"`
+	LockUntilUnix int64                 `json:"lock_until_unix"`
+	BlocksMined   uint64                `json:"blocks_mined"`
+	RewardsEarned string                `json:"rewards_earned"`
+	IsActive      bool                  `json:"is_active"`
+	SlashCount    uint64                `json:"slash_count"`
+	LastActivity  uint64                `json:"last_activity"`
+}
+
+type withdrawalSnapshotEntry struct {
+	Address      common.QuantumAddress `json:"address"`
+	Amount       string                `json:"amount"`
+	RequestUnix  int64                 `json:"request_unix"`
+	RequestBlock uint64                `json:"request_block"`
+	UnlockBlock  uint64                `json:"unlock_block"`
+	Status       WithdrawalStatus      `json:"status"`
+}
+
 type MinerInfo struct {
 	Address     common.QuantumAddress
 	StakeAmount *big.Int
@@ -118,6 +155,12 @@ func (sm *StakingManager) SetBlockHeightProvider(fn func() uint64) {
 	sm.blockHeightFn = fn
 }
 
+func (sm *StakingManager) SetPersistFunc(fn func([]byte) error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.persistFn = fn
+}
+
 // Stake allows an address to stake tokens for mining eligibility
 func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, privKey []byte) error {
 	sm.mu.Lock()
@@ -132,9 +175,12 @@ func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, 
 		return fmt.Errorf("%w: required exact amount %s", ErrInvalidStakeValue, sm.minStakeAmount.String())
 	}
 
-	// Check if already staked
-	if _, exists := sm.stakes[address]; exists {
-		return ErrAlreadyStaked
+	// Check if already staked or waiting for unlock completion.
+	if existing, exists := sm.stakes[address]; exists {
+		withdrawal, hasWithdrawal := sm.withdrawals[address]
+		if existing.IsActive || (hasWithdrawal && withdrawal.Status == Pending) {
+			return ErrAlreadyStaked
+		}
 	}
 
 	// Verify balance
@@ -180,6 +226,10 @@ func (sm *StakingManager) Stake(address common.QuantumAddress, amount *big.Int, 
 
 	log.Printf("[staking] Address %s staked %s ANTD",
 		address.Hex()[:12], new(big.Int).Div(amount, big.NewInt(1e18)).String())
+
+	if err := sm.persistLocked(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -270,6 +320,10 @@ func (sm *StakingManager) Unstake(address common.QuantumAddress, privKey []byte)
 	log.Printf("[staking] Address %s requested unstake of %s ANTD",
 		address.Hex()[:12], new(big.Int).Div(stake.Amount, big.NewInt(1e18)).String())
 
+	if err := sm.persistLocked(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -293,9 +347,6 @@ func (sm *StakingManager) ProcessWithdrawalsAtHeight(currentHeight uint64) error
 			}
 			withdrawal.Status = Completed
 
-			// Remove stake record
-			delete(sm.stakes, addr)
-
 			sm.emitEvent(StakeEvent{
 				Type:      "Withdrawal",
 				Address:   addr,
@@ -308,6 +359,12 @@ func (sm *StakingManager) ProcessWithdrawalsAtHeight(currentHeight uint64) error
 				addr.Hex()[:12], new(big.Int).Div(withdrawal.Amount, big.NewInt(1e18)).String())
 
 			processed++
+		}
+	}
+
+	if processed > 0 {
+		if err := sm.persistLocked(); err != nil {
+			return err
 		}
 	}
 
@@ -358,6 +415,10 @@ func (sm *StakingManager) Slash(address common.QuantumAddress, reason string, re
 		new(big.Int).Div(slashAmount, big.NewInt(1e18)).String(),
 		address.Hex()[:12], reason)
 
+	if err := sm.persistLocked(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -396,6 +457,149 @@ func (sm *StakingManager) currentBlockHeight() uint64 {
 		return sm.blockHeightFn()
 	}
 	return 0
+}
+
+func (sm *StakingManager) LoadSnapshot(data []byte) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil
+	}
+
+	var snap stakingSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return fmt.Errorf("failed to decode staking snapshot: %w", err)
+	}
+
+	sm.stakes = make(map[common.QuantumAddress]*StakeInfo, len(snap.Stakes))
+	sm.withdrawals = make(map[common.QuantumAddress]*WithdrawalRequest, len(snap.Withdrawals))
+	sm.totalStaked = big.NewInt(0)
+
+	for _, entry := range snap.Stakes {
+		amount := new(big.Int)
+		if _, ok := amount.SetString(entry.Amount, 10); !ok {
+			return fmt.Errorf("invalid stake amount for %s", entry.Address.String())
+		}
+		rewards := new(big.Int)
+		if entry.RewardsEarned != "" {
+			if _, ok := rewards.SetString(entry.RewardsEarned, 10); !ok {
+				return fmt.Errorf("invalid rewards amount for %s", entry.Address.String())
+			}
+		}
+		sm.stakes[entry.Address] = &StakeInfo{
+			Address:       entry.Address,
+			Amount:        amount,
+			StartTime:     time.Unix(entry.StartUnix, 0),
+			LockUntil:     time.Unix(entry.LockUntilUnix, 0),
+			BlocksMined:   entry.BlocksMined,
+			RewardsEarned: rewards,
+			IsActive:      entry.IsActive,
+			SlashCount:    entry.SlashCount,
+			LastActivity:  entry.LastActivity,
+		}
+		if entry.IsActive {
+			sm.totalStaked.Add(sm.totalStaked, amount)
+		}
+	}
+
+	for _, entry := range snap.Withdrawals {
+		amount := new(big.Int)
+		if _, ok := amount.SetString(entry.Amount, 10); !ok {
+			return fmt.Errorf("invalid withdrawal amount for %s", entry.Address.String())
+		}
+		sm.withdrawals[entry.Address] = &WithdrawalRequest{
+			Address:      entry.Address,
+			Amount:       amount,
+			RequestTime:  time.Unix(entry.RequestUnix, 0),
+			RequestBlock: entry.RequestBlock,
+			UnlockBlock:  entry.UnlockBlock,
+			Status:       entry.Status,
+		}
+	}
+
+	return nil
+}
+
+func (sm *StakingManager) Snapshot() ([]byte, error) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.snapshotBytesLocked()
+}
+
+func (sm *StakingManager) GetStakeRecords() []StakeRecord {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	records := make([]StakeRecord, 0, len(sm.stakes))
+	for addr, stake := range sm.stakes {
+		record := StakeRecord{
+			Address:      addr,
+			Amount:       new(big.Int).Set(stake.Amount),
+			IsActive:     stake.IsActive,
+			LastActivity: stake.LastActivity,
+		}
+		if w, ok := sm.withdrawals[addr]; ok && w != nil {
+			unlockBlock := w.UnlockBlock
+			record.UnlockBlock = &unlockBlock
+		}
+		records = append(records, record)
+	}
+
+	return records
+}
+
+func (sm *StakingManager) snapshotBytesLocked() ([]byte, error) {
+	snap := stakingSnapshot{
+		Stakes:      make([]stakeSnapshotEntry, 0, len(sm.stakes)),
+		Withdrawals: make([]withdrawalSnapshotEntry, 0, len(sm.withdrawals)),
+	}
+
+	for _, stake := range sm.stakes {
+		snap.Stakes = append(snap.Stakes, stakeSnapshotEntry{
+			Address:       stake.Address,
+			Amount:        stake.Amount.String(),
+			StartUnix:     stake.StartTime.Unix(),
+			LockUntilUnix: stake.LockUntil.Unix(),
+			BlocksMined:   stake.BlocksMined,
+			RewardsEarned: stake.RewardsEarned.String(),
+			IsActive:      stake.IsActive,
+			SlashCount:    stake.SlashCount,
+			LastActivity:  stake.LastActivity,
+		})
+	}
+
+	for _, withdrawal := range sm.withdrawals {
+		snap.Withdrawals = append(snap.Withdrawals, withdrawalSnapshotEntry{
+			Address:      withdrawal.Address,
+			Amount:       withdrawal.Amount.String(),
+			RequestUnix:  withdrawal.RequestTime.Unix(),
+			RequestBlock: withdrawal.RequestBlock,
+			UnlockBlock:  withdrawal.UnlockBlock,
+			Status:       withdrawal.Status,
+		})
+	}
+
+	data, err := json.Marshal(snap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode staking snapshot: %w", err)
+	}
+
+	return data, nil
+}
+
+func (sm *StakingManager) persistLocked() error {
+	if sm.persistFn == nil {
+		return nil
+	}
+	data, err := sm.snapshotBytesLocked()
+	if err != nil {
+		return err
+	}
+	if err := sm.persistFn(data); err != nil {
+		return fmt.Errorf("failed to persist staking state: %w", err)
+	}
+	return nil
 }
 
 // GetStakingStatistics returns current staking stats

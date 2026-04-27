@@ -227,6 +227,21 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	bc.stakingManager.SetBlockHeightProvider(func() uint64 {
 		return bc.GetChainHeight()
 	})
+	stakingStateKey := []byte("staking:state:v1")
+	bc.stakingManager.SetPersistFunc(func(data []byte) error {
+		return chainDb.DB().Set(stakingStateKey, data, nil)
+	})
+	if data, closer, err := chainDb.DB().Get(stakingStateKey); err == nil {
+		snapshot := append([]byte(nil), data...)
+		closer.Close()
+		if err := bc.stakingManager.LoadSnapshot(snapshot); err != nil {
+			log.Printf("[staking] Warning: Failed to restore staking snapshot: %v", err)
+		} else {
+			log.Printf("[staking] Restored staking snapshot from database")
+		}
+	} else if !errors.Is(err, db.ErrNotFound) {
+		log.Printf("[staking] Warning: Failed to read staking snapshot: %v", err)
+	}
 
 	// Set atomic fields
 	if latest != nil {
