@@ -502,19 +502,11 @@ func (p *PoW) selectNextMinerLocked(parentHash common.Hash, height uint64) commo
 		if base == 0 {
 			base = 1
 		}
-		if s.MissedBlocks > 0 {
-			reduction := uint64(100) / (s.MissedBlocks + 1)
-			base = base * reduction / 100
-			if base == 0 {
-				base = 1
-			}
-		}
-		if addr == p.priorityMiner && p.priorityBoostPct > 0 {
-			base = base * (100 + p.priorityBoostPct) / 100
-			if base == 0 {
-				base = 1
-			}
-		}
+		// NOTE: consensus miner selection must be deterministic across nodes.
+		// Do not include local runtime counters/flags (e.g. missed blocks or
+		// locally configured priority miner bonus) in this calculation.
+		// Those values can differ transiently between peers and cause valid
+		// blocks to be rejected with "address not eligible to mine".
 		candidates = append(candidates, candidate{addr: addr, weight: base})
 		totalWeight += base
 	}
