@@ -38,3 +38,31 @@ func TestAutoRegisterIfEligible(t *testing.T) {
 
 	assert.True(t, engine.IsKing(addr))
 }
+
+func TestGetNextMinerIgnoresLocalPenaltyState(t *testing.T) {
+	engineA := NewPoW()
+	engineB := NewPoW()
+
+	addr1 := common.BytesToQuantumAddress([]byte("validator-1"))
+	addr2 := common.BytesToQuantumAddress([]byte("validator-2"))
+	parent := common.BytesToHash([]byte("genesis"))
+
+	stake1 := new(big.Int).Set(MinStakeAmount)
+	stake2 := new(big.Int).Mul(MinStakeAmount, big.NewInt(2))
+
+	engineA.AutoRegisterIfEligible(addr1, stake1, nil)
+	engineA.AutoRegisterIfEligible(addr2, stake2, nil)
+	engineB.AutoRegisterIfEligible(addr1, stake1, nil)
+	engineB.AutoRegisterIfEligible(addr2, stake2, nil)
+
+	// Introduce local-only state drift on engineB.
+	engineB.RecordMissedBlock(addr1)
+	engineB.SetPriorityMiner(addr1, 50)
+
+	minerA, err := engineA.GetNextMiner(parent, 1)
+	require.NoError(t, err)
+	minerB, err := engineB.GetNextMiner(parent, 1)
+	require.NoError(t, err)
+
+	assert.Equal(t, minerA, minerB)
+}
