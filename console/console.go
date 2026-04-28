@@ -1320,9 +1320,6 @@ func (c *Console) Start() {
 	fmt.Println("  rk                       - Rotating King commands")
 	fmt.Println("  rotatingking             - Rotating King commands (alias)")
 	fmt.Println("  rk add <address>         - Manually add address to rotation (100k ANTD required)")
-	fmt.Println("  register_stake <address> - Register 1,000,000 ANTD stake (locks funds)")
-	fmt.Println("  unlock_stake <address>   - Request stake unlock (20 block release delay)")
-	fmt.Println("  liststakers              - List registered staking addresses")
 	fmt.Println("  emergency-sync           - Force configuration sync with peers")
 	fmt.Println("  force-broadcast          - Broadcast current configuration to network")
 	fmt.Println("  monitor                  - Supply monitoring")
@@ -1441,13 +1438,6 @@ func (c *Console) Start() {
 				fmt.Println("Minimum: 1,000,000 ANTD")
 			}
 
-		case "register_stake":
-			c.handleRegisterStake(parts)
-		case "unlock_stake":
-			c.handleUnlockStake(parts)
-		case "liststakers":
-			c.handleListStakers()
-
 		case "unregister-worker":
 			if len(parts) != 2 {
 				fmt.Println("Usage: unregister-worker <address>")
@@ -1493,33 +1483,6 @@ func (c *Console) Start() {
 
 		case "savewallets":
 			c.handleSaveWallets()
-
-		case "check-registration":
-			addr := c.node.MinerWalletAddress()
-			if addr == (common.QuantumAddress{}) {
-				fmt.Println("No miner address set")
-				return
-			}
-
-			if c.checkStakerRegistration(addr) {
-				fmt.Printf("✅ %s is registered as a staker\n", addr.String())
-			} else {
-				c.node.mu.RLock()
-				balance := c.node.blockchain.State().GetBalance(addr)
-				c.node.mu.RUnlock()
-
-				minStake := new(big.Int).Mul(big.NewInt(1000000), big.NewInt(1e18))
-				fmt.Printf("❌ %s is NOT registered as a staker\n", addr.String())
-				fmt.Printf("   Balance: %s ANTD\n", formatBalance(balance))
-				fmt.Printf("   Required: %s ANTD (1,000,000 ANTD)\n", formatBalance(minStake))
-
-				if balance.Cmp(minStake) >= 0 {
-					fmt.Printf("�� Use: register_stake %s\n", addr.String())
-				} else {
-					fmt.Printf("💡 Need more ANTD to register\n")
-				}
-				c.printRegisteredStakers("Registered stakers")
-			}
 
 		case "loadwallets":
 			c.handleLoadWallets()
@@ -2529,22 +2492,9 @@ func (c *Console) handleStartMining() {
 		return
 	}
 
-	// Check if registered as staker
-	if !c.checkStakerRegistration(minerAddress) {
-		c.node.mu.RLock()
-		balance := c.node.blockchain.State().GetBalance(minerAddress)
-		c.node.mu.RUnlock()
-
-		fmt.Printf("❌ Address is not registered for staking\n")
-		fmt.Printf("   Wallet balance: %s ANTD\n", formatBalance(balance))
-		fmt.Printf("   Register first: register_stake %s\n", minerAddress.String())
-		c.printRegisteredStakers("Registered stakers")
-		return
-	}
-
-	fmt.Printf("✅ Starting PoS mining with address: %s\n", minerAddress.String())
+	fmt.Printf("✅ Starting mining with address: %s\n", minerAddress.String())
 	mining.StartPosMining(c.node.blockchain, c.node.miningState, minerAddress, c.node.p2pNode)
-	fmt.Println("✓ PoS mining started. Waiting for your turn to mine blocks...")
+	fmt.Println("✓ Mining started. Waiting for your turn to mine blocks...")
 }
 
 func (c *Console) checkStakerRegistration(addr common.QuantumAddress) bool {
