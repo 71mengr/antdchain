@@ -128,18 +128,18 @@ func (bc *Blockchain) applyMinerReward(b *block.Block) error {
 	}
 
 	log.Printf("[blockchain] Rewards distributed for block %d:", b.Header.Number.Uint64())
-	log.Printf("  • Miner (%s): %s ANTD (25%%)",
+	log.Printf("  • Miner (%s): %s ANTD (45%%)",
 		b.Header.Coinbase.String()[:10], formatWei(distribution.MinerReward))
 	log.Printf("  • Main King (%s): %s ANTD (10%%)",
 		distribution.MainKingAddress.String()[:10], formatWei(distribution.MainKingReward))
 
 	if distribution.RotatingKingEligible {
-		log.Printf("  • Rotating King (%s): %s ANTD (65%%)",
+		log.Printf("  • Rotating King (%s): %s ANTD (45%%)",
 			distribution.RotatingKingAddress.String()[:10], formatWei(distribution.RotatingKingReward))
 	} else {
 		log.Printf("  • Rotating King: Not eligible")
 		totalMainKing := new(big.Int).Add(distribution.MainKingReward, distribution.RotatingKingReward)
-		log.Printf("  • Main King receives rotating share fallback: %s ANTD", formatWei(totalMainKing))
+		log.Printf("  • Main King receives rotating fallback share: %s ANTD", formatWei(totalMainKing))
 	}
 
 	// Log halving info if available
@@ -176,14 +176,14 @@ func (bc *Blockchain) logBlockValidationSuccess(b *block.Block, distribution *re
 	}
 
 	log.Printf("   • Total reward: %s ANTD", formatBalance(distribution.TotalReward))
-	log.Printf("   • Miner reward: %s ANTD (25%%) to %s",
+	log.Printf("   • Miner reward: %s ANTD (45%%) to %s",
 		formatBalance(distribution.MinerReward), b.Header.Coinbase.String()[:10])
 	log.Printf("   • Main King reward: %s ANTD (10%%) to %s",
 		formatBalance(distribution.MainKingReward), distribution.MainKingAddress.String()[:10])
 
 	// Better logging for rotating king status
 	if distribution.RotatingKingEligible {
-		log.Printf("   • Rotating King reward: %s ANTD (65%%) to %s",
+		log.Printf("   • Rotating King reward: %s ANTD (45%%) to %s",
 			formatBalance(distribution.RotatingKingReward),
 			distribution.RotatingKingAddress.String()[:10])
 

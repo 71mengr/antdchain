@@ -224,7 +224,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		orphanBlocks:        make(map[common.Hash]*orphanBlock),
 	}
 
-	bc.stakingManager = staking.NewStakingManager(stateDb, pow.MinStakeAmount)
+	bc.stakingManager = staking.NewStakingManager(stateDb, big.NewInt(0))
 	bc.stakingManager.SetBlockHeightProvider(func() uint64 {
 		return bc.GetChainHeight()
 	})

@@ -14,16 +14,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/antdaza/antdchain/common"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
-	BlockTimeTarget      = 12          // seconds per block
-	DifficultyAdjustment = 100         // blocks between retargets
-	MaxDifficulty        = 1_000_000   // arbitrary cap
-	MinDifficulty        = 1
-	MaxFutureBlockTime   = 30          // seconds of clock drift allowed
+	BlockTimeTarget                  = 12 // seconds per block
+	TargetBlockTimeSeconds           = BlockTimeTarget
+	DifficultyAdjustment             = 100       // blocks between retargets
+	MaxDifficulty                    = 1_000_000 // arbitrary cap
+	MinDifficulty                    = 1
+	MaxFutureBlockTime               = 30 // seconds of clock drift allowed
+	BaseDifficulty                   = 1000
+	RotatingKingHashrateBoostPercent = 50
 )
 
 var (
@@ -62,9 +65,11 @@ type PoW struct {
 	mu sync.RWMutex
 
 	difficulty       *big.Int
-	blockTimes       []uint64   // last N block times for moving average
+	blockTimes       []uint64 // last N block times for moving average
 	averageBlockTime float64
 	lastAdjustment   uint64
+	priorityMiner    common.QuantumAddress
+	priorityBoost    uint64
 
 	totalBlocks atomic.Uint64
 }
@@ -221,10 +226,67 @@ func (p *PoW) RecordBlockMined(miner common.QuantumAddress, height uint64) {
 
 func (p *PoW) Release() {}
 
+// Compatibility no-op for legacy callers.
+func (p *PoW) AutoRegisterIfEligible(common.QuantumAddress, *big.Int, []byte) {}
+
+// SetPriorityMiner sets a preferred miner for informational compatibility only.
+func (p *PoW) SetPriorityMiner(miner common.QuantumAddress, boostPercent uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.priorityMiner = miner
+	p.priorityBoost = boostPercent
+}
+
+// IsKing reports whether the provided address matches the configured priority miner.
+func (p *PoW) IsKing(addr common.QuantumAddress) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.priorityMiner == addr
+}
+
+// VerifyBlockSignature is unused in PoW mode; blocks are validated by hash target.
+func (p *PoW) VerifyBlockSignature(common.QuantumAddress, common.Hash, uint64, uint64, []byte) (bool, error) {
+	return true, nil
+}
+
+// GetNextMiner returns the preferred miner when configured, otherwise the provided miner.
+func (p *PoW) GetNextMiner(parentHash common.Hash, height uint64, timestamp ...uint64) (common.QuantumAddress, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.priorityMiner, nil
+}
+
+// RecordMissedBlock is a no-op compatibility hook in PoW mode.
+func (p *PoW) RecordMissedBlock(common.QuantumAddress, ...uint64) {}
+
+// GetMiningStatistics provides a minimal compatibility payload.
+
+// GetKingAddresses returns the configured compatibility priority miner list.
+func (p *PoW) GetKingAddresses() []common.QuantumAddress {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.priorityMiner == (common.QuantumAddress{}) {
+		return nil
+	}
+	return []common.QuantumAddress{p.priorityMiner}
+}
+
+func (p *PoW) GetMiningStatistics() map[string]interface{} {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return map[string]interface{}{
+		"difficulty":         p.difficulty.String(),
+		"average_block_time": p.averageBlockTime,
+		"total_blocks":       p.totalBlocks.Load(),
+		"priority_miner":     p.priorityMiner.String(),
+		"priority_boost":     p.priorityBoost,
+	}
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 // BlockHeader matches your existing Header struct.
-type BlockHeader = struct {
+type BlockHeader struct {
 	ParentHash common.Hash
 	Coinbase   common.QuantumAddress
 	Root       common.Hash

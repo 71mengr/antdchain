@@ -101,7 +101,7 @@ func init() {
 
 var lastSyncLog time.Time = time.Now()
 
-// PosMiningState manages Proof-of-Stake mining
+// PosMiningState manages Proof-of-Work mining
 type PosMiningState struct {
     mining       bool
     enabled      bool
@@ -163,14 +163,14 @@ func (ms *PosMiningState) SetMinerAddress(addr common.QuantumAddress) error {
     defer ms.mu.Unlock()
 
     if ms.powEngine == nil {
-        return errors.New("PoS engine not initialized")
+        return errors.New("PoW engine not initialized")
     }
 
     ms.minerAddress = addr
     if qAddr, err := common.NewQuantumAddressFromBytes(addr.Bytes()); err == nil {
-        log.Printf("[miner] PoS miner address set → %s", qAddr.String())
+        log.Printf("[miner] PoW miner address set → %s", qAddr.String())
     } else {
-        log.Printf("[miner] PoS miner address set → %s", addr.String())
+        log.Printf("[miner] PoW miner address set → %s", addr.String())
     }
     return nil
 }
@@ -213,55 +213,38 @@ func (ms *PosMiningState) GetPublicKey() []byte {
     return pubKey
 }
 
-// Starts the Proof-of-Stake mining process
-func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node) {
-    if bc == nil || rewardAddr == (common.QuantumAddress{}) || state.powEngine == nil {
-        log.Println("[miner] Missing required components")
-        return
-    }
+// Starts the Proof-of-Work mining process
+func StartPowMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node) {
+	if bc == nil || rewardAddr == (common.QuantumAddress{}) || state.powEngine == nil {
+		log.Println("[miner] Missing required components")
+		return
+	}
 
-    if !state.enabled {
-        log.Println("[miner] Mining disabled")
-        return
-    }
+	if !state.enabled {
+		log.Println("[miner] Mining disabled")
+		return
+	}
 
-    if state.mining {
-        state.mining = false
-        time.Sleep(200 * time.Millisecond)
-    }
+	if state.mining {
+		state.mining = false
+		time.Sleep(200 * time.Millisecond)
+	}
 
-    if rewardAddr == (common.QuantumAddress{}) {
-        log.Println("[miner] Invalid miner address")
-        return
-    }
+	if rewardAddr == (common.QuantumAddress{}) {
+		log.Println("[miner] Invalid miner address")
+		return
+	}
 
-    if err := state.SetMinerAddress(rewardAddr); err != nil {
-        log.Printf("[miner] Cannot set miner address: %v", err)
-        return
-    }
+	if err := state.SetMinerAddress(rewardAddr); err != nil {
+		log.Printf("[miner] Cannot set miner address: %v", err)
+		return
+	}
 
-    // Prefer explicit staking records from staking manager; fallback to account balance
-	effectiveStake := big.NewInt(0)
-	stakeSource := "unregistered"
-    if stakingManager := bc.StakingManager(); stakingManager != nil {
-        if stakedAmount, err := stakingManager.GetStake(rewardAddr); err != nil {
-            log.Printf("[miner] Failed to read stake for %s: %v", rewardAddr.String()[:12], err)
-        } else if stakedAmount != nil && stakedAmount.Sign() > 0 {
-            effectiveStake = stakedAmount
-            stakeSource = "staking_manager"
-        }
-    }
+	log.Printf("[miner] Starting PoW mining checks for %s", rewardAddr.String()[:12])
 
-    bc.Pow().AutoRegisterIfEligible(rewardAddr, effectiveStake, state.GetPublicKey())
-
-    log.Printf("[miner] Auto-checked staking eligibility for %s (%s: %s ANTD)",
-        rewardAddr.String()[:12],
-        stakeSource,
-        new(big.Int).Div(effectiveStake, big.NewInt(1e18)).String())
-
-    state.mining = true
-    log.Printf("[miner] PoS Mining STARTED → %s", rewardAddr.String())
-    go posMiningLoop(bc, state, rewardAddr, p2pNode)
+	state.mining = true
+	log.Printf("[miner] PoW Mining STARTED → %s", rewardAddr.String())
+	go posMiningLoop(bc, state, rewardAddr, p2pNode)
 }
 
 func StopMining(state *PosMiningState) {
@@ -391,7 +374,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         }
 
         // Create block using the eligible address
-        newBlock, _, err := bc.CreatePoSBlock(expectedMiner)
+		newBlock, _, err := bc.CreateMiningBlock(expectedMiner)
         if err != nil || newBlock == nil {
             log.Printf("[miner] Block creation failed: %v", err)
             continue
@@ -458,7 +441,7 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
     log.Println("[miner] Mining stopped")
 }
 
-// Creates a PoS signature for a block using ML-DSA-65
+// Creates a block signature using ML-DSA-65
 func generateBlockSignature(
     miner common.QuantumAddress,
     parentHash common.Hash,
@@ -473,7 +456,7 @@ func generateBlockSignature(
     
     msg := common.ComputeHash(
         append(
-            []byte("ANTDChain-PoS-Block"),
+            []byte("ANTDChain-PoW-Block"),
             append(
                 parentHash.Bytes(),
                 append(
@@ -496,7 +479,7 @@ func generateBlockSignature(
     return signature, nil
 }
 
-// verifyBlockSignature verifies a PoS block signature using ML-DSA-65
+// verifyBlockSignature verifies a block signature using ML-DSA-65
 func verifyBlockSignature(
     miner common.QuantumAddress,
     parentHash common.Hash,
@@ -515,7 +498,7 @@ func verifyBlockSignature(
 
 	msg := common.ComputeHash(
 		append(
-			[]byte("ANTDChain-PoS-Block"),
+			[]byte("ANTDChain-PoW-Block"),
 			append(
 				parentHash.Bytes(),
 				append(
@@ -649,14 +632,14 @@ func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreDir, password strin
 	}
 
 
-    privKey, err := qkeystore.Unlock(minerAddress, password, keystoreDir)
-    if err != nil {
-        return fmt.Errorf("failed to unlock antd keystore: %w", err)
-    }
+	privKey, err := qkeystore.Unlock(minerAddress, password, keystoreDir)
+	if err != nil {
+		return fmt.Errorf("failed to unlock antd keystore: %w", err)
+	}
 
-    if len(privKey) != quantum.MLDSA65PrivateKeySize {
-        return fmt.Errorf("invalid private key length: expected %d bytes, got %d", quantum.MLDSA65PrivateKeySize, len(privKey))
-    }
+	if len(privKey) != quantum.MLDSA65PrivateKeySize {
+		return fmt.Errorf("invalid private key length: expected %d bytes, got %d", quantum.MLDSA65PrivateKeySize, len(privKey))
+	}
 
     if err := ms.SetPrivateKeyFromBytes(privKey); err != nil {
         return err
@@ -747,7 +730,7 @@ func (ms *PosMiningState) ResumeMining() {
 // CheckMiningEligibility checks if the current miner address is eligible to mine
 func (ms *PosMiningState) CheckMiningEligibility(bc *chain.Blockchain) (bool, error) {
     if bc == nil || ms.powEngine == nil {
-        return false, errors.New("blockchain or PoS engine not initialized")
+        return false, errors.New("blockchain or PoW engine not initialized")
     }
 
     ms.mu.RLock()
@@ -778,48 +761,48 @@ func (ms *PosMiningState) CheckMiningEligibility(bc *chain.Blockchain) (bool, er
 
 // GetNextMiningSlot estimates when this miner will get to mine next
 func (ms *PosMiningState) GetNextMiningSlot(bc *chain.Blockchain) (uint64, time.Duration, error) {
-    if bc == nil || ms.powEngine == nil {
-        return 0, 0, errors.New("blockchain or PoS engine not initialized")
-    }
+	if bc == nil || ms.powEngine == nil {
+		return 0, 0, errors.New("blockchain or PoW engine not initialized")
+	}
 
-    ms.mu.RLock()
-    minerAddr := ms.minerAddress
-    ms.mu.RUnlock()
+	ms.mu.RLock()
+	minerAddr := ms.minerAddress
+	ms.mu.RUnlock()
 
-    if minerAddr == (common.QuantumAddress{}) {
-        return 0, 0, errors.New("miner address not set")
-    }
+	if minerAddr == (common.QuantumAddress{}) {
+		return 0, 0, errors.New("miner address not set")
+	}
 
-    // Get current chain state
-    parent := bc.Latest()
-    if parent == nil {
-        return 0, 0, errors.New("no parent block found")
-    }
+	// Get current chain state
+	parent := bc.Latest()
+	if parent == nil {
+		return 0, 0, errors.New("no parent block found")
+	}
 
-    currentHeight := parent.Header.Number.Uint64()
-    
-    // Check if miner is in the validator set
-    isValidator := ms.powEngine.IsKing(minerAddr)
-    if !isValidator {
-        return 0, 0, errors.New("address is not in validator set")
-    }
+	currentHeight := parent.Header.Number.Uint64()
 
-    // Get validator statistics
-    stats := ms.powEngine.GetMiningStatistics()
-    activeStakers, _ := stats["active_stakers"].(int)
-    if activeStakers <= 0 {
-        return 0, 0, errors.New("no active validators")
-    }
+	// Check if miner is in the validator set
+	isValidator := ms.powEngine.IsKing(minerAddr)
+	if !isValidator {
+		return 0, 0, errors.New("address is not in validator set")
+	}
 
-    // Estimate: miner selection happens every block using weighted stake.
-    // Rough expectation is one slot every activeStakers blocks for equal stakes.
-    blocksUntilTurn := uint64(activeStakers)
-    estimatedBlocks := blocksUntilTurn // rough estimate
-    
-    // Convert to time (using target block time)
-    estimatedTime := time.Duration(estimatedBlocks*pow.TargetBlockTimeSeconds) * time.Second
-    
-    return currentHeight + estimatedBlocks, estimatedTime, nil
+	// Get validator statistics
+	stats := ms.powEngine.GetMiningStatistics()
+	activeStakers, _ := stats["active_stakers"].(int)
+	if activeStakers <= 0 {
+		return 0, 0, errors.New("no active validators")
+	}
+
+	// Estimate: miner selection happens every block using weighted stake.
+	// Rough expectation is one slot every activeStakers blocks for equal stakes.
+	blocksUntilTurn := uint64(activeStakers)
+	estimatedBlocks := blocksUntilTurn // rough estimate
+
+	// Convert to time (using target block time)
+	estimatedTime := time.Duration(estimatedBlocks*pow.TargetBlockTimeSeconds) * time.Second
+
+	return currentHeight + estimatedBlocks, estimatedTime, nil
 }
 
 
@@ -836,14 +819,19 @@ func calculateBlockReward(height uint64, bc *chain.Blockchain) *big.Int {
 
 // UpdateTotalRewards updates the total rewards with additional reward
 func (ms *PosMiningState) UpdateTotalRewards(additionalReward *big.Int) {
-    if additionalReward == nil || additionalReward.Sign() == 0 {
-        return
-    }
-    
-    ms.mu.Lock()
-    ms.totalRewards.Add(ms.totalRewards, additionalReward)
-    ms.mu.Unlock()
-    
-    // Update metrics
-    miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
+	if additionalReward == nil || additionalReward.Sign() == 0 {
+		return
+	}
+
+	ms.mu.Lock()
+	ms.totalRewards.Add(ms.totalRewards, additionalReward)
+	ms.mu.Unlock()
+
+	// Update metrics
+	miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
+}
+
+// StartPosMining is kept as a compatibility alias and delegates to PoW mining.
+func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node) {
+	StartPowMining(bc, state, rewardAddr, p2pNode)
 }
