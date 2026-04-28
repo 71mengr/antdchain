@@ -2218,6 +2218,13 @@ func (n *Node) syncIfBehind(pid peer.ID) {
 	err = n.syncMissingBlocks(pid, peerHeight)
 	if err != nil {
 		n.logger.Errorf("Sync failed with %s: %v", pid.String()[:12], err)
+		if isDeterministicSyncValidationFailure(err) {
+			n.logger.Warnf("Detected deterministic validation failure while syncing from %s, trying alternate peer",
+				pid.String()[:12])
+			if recovered := n.retrySyncWithAlternatePeer(pid, finalSyncTarget(peerHeight, n.currentHeight())); recovered {
+				return
+			}
+		}
 		if n.chain.IsSyncing() {
 			n.chain.StopSync()
 		}
@@ -2236,6 +2243,58 @@ func (n *Node) syncIfBehind(pid peer.ID) {
 	} else {
 		n.logger.Warnf("Sync ended at %d but target was %d", finalHeight, peerHeight)
 	}
+}
+
+func isDeterministicSyncValidationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "pos validation failed") ||
+		strings.Contains(msg, "miner eligibility verification failed") ||
+		strings.Contains(msg, "address not eligible to mine")
+}
+
+func finalSyncTarget(initialTarget, localHeight uint64) uint64 {
+	if initialTarget > localHeight {
+		return initialTarget
+	}
+	return localHeight
+}
+
+func (n *Node) retrySyncWithAlternatePeer(exclude peer.ID, targetHeight uint64) bool {
+	peers := n.Peers()
+	for _, candidate := range peers {
+		if candidate == exclude {
+			continue
+		}
+
+		peerHeight, err := n.GetPeerHeight(candidate)
+		if err != nil {
+			continue
+		}
+		if peerHeight < targetHeight {
+			continue
+		}
+
+		n.logger.Warnf("Retrying sync with alternate peer %s (target=%d)",
+			candidate.String()[:12], targetHeight)
+		n.chain.StartSync(targetHeight)
+		if err := n.syncMissingBlocks(candidate, targetHeight); err != nil {
+			n.logger.Warnf("Alternate peer %s sync failed: %v", candidate.String()[:12], err)
+			continue
+		}
+
+		finalHeight := n.currentHeight()
+		if finalHeight >= targetHeight {
+			n.chain.StopSync()
+			n.logger.Infof("Alternate peer sync succeeded at height %d", finalHeight)
+			return true
+		}
+	}
+
+	return false
 }
 
 func (n *Node) syncLoop() {

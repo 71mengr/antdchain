@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -514,6 +515,14 @@ func (p *PoW) selectNextMinerLocked(parentHash common.Hash, height uint64) commo
 	if len(candidates) == 0 {
 		return common.QuantumAddress{}
 	}
+
+	// Ensure deterministic ordering independent of in-memory registration order.
+	// Different nodes can reconstruct the active staker set in different insertion
+	// orders (e.g. map iteration during restore), so normalize candidate ordering
+	// before stake-weighted selection.
+	sort.Slice(candidates, func(i, j int) bool {
+		return string(candidates[i].addr[:]) < string(candidates[j].addr[:])
+	})
 
 	// Quantum‑safe VRF‑like selection using SHA3‑256 instead of Keccak256
 	seed := common.ComputeHash(append(parentHash.Bytes(),
