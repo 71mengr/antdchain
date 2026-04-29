@@ -343,6 +343,13 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
         }
         ms.mu.RUnlock()
 
+        if expectedMiner == (common.QuantumAddress{}) && configuredMiner != (common.QuantumAddress{}) {
+            // In PoW compatibility mode, expected miner may be unset; use configured miner.
+            expectedMiner = configuredMiner
+            if expectedMiner == loadedKeyAddress && len(eligiblePrivKey) == 0 && ms.hasPrivateKey && len(ms.privateKey) > 0 {
+                eligiblePrivKey = append([]byte(nil), ms.privateKey...)
+            }
+        }
         eligibilityChecks++
         if len(eligiblePrivKey) == 0 {
             // Not our turn — or we don't have the key for the expected miner
