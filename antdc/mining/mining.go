@@ -410,10 +410,10 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
 		miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
 		miningUptime.Set(time.Since(startTime).Seconds())
 
-		ms.powEngine.RecordBlockMined(expectedMiner, height)
+		ms.powEngine.RecordBlockMined(minerToUse, height)
 
 		log.Printf("[miner] 🎉 BLOCK #%d MINED by %s! Reward: %s ANTD",
-			height, expectedMiner.String()[:12],
+			height, minerToUse.String()[:12],
 			new(big.Int).Div(blockReward, big.NewInt(1e18)).String())
 		log.Printf("[miner]   Total mined this session: %d", totalMined)
 
