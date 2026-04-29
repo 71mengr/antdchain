@@ -1175,7 +1175,7 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 	cfg := Config{
 		DataDir:           "./antdchain-data",
 		Port:              port,
-		BootstrapPeers:    bootstrap,
+		BootstrapPeers:    ResolveBootstrapPeers(bootstrap),
 		EnableMDNS:        true,
 		EnableDHT:         true,
 		EnableNATService:  true,
@@ -1190,6 +1190,7 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 
 // NewNodeWithConfig is the new configurable version
 func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
+	cfg.BootstrapPeers = ResolveBootstrapPeers(cfg.BootstrapPeers)
 	var ctx context.Context
 	var cancel context.CancelFunc
 

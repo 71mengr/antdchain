@@ -7,6 +7,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/antdaza/antdchain/antdc/p2p"
 	"github.com/libp2p/go-libp2p"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -56,5 +57,10 @@ func main() {
 	fmt.Printf("Full Multiaddress: %s\n", multiaddr)
 
 	fmt.Printf("Use this multiaddress as a bootstrap node: /ip6/::1/tcp/%s/p2p/%s\n", port, peerID.String())
+
+	fmt.Println("Configured default bootstrap peers from antdc/p2p/bootstrap.go:")
+	for _, peer := range p2p.DefaultBootstrapPeers {
+		fmt.Printf("- %s\n", peer)
+	}
 
 }
