@@ -840,7 +840,7 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 		return 0, fmt.Errorf("reorg depth exceeds limit")
 	}
 
-	// Apply fork choice rule (longest chain + earliest timestamp tie-breaker)
+	// Apply fork choice rule (heaviest chain + deterministic hash tie-breaker)
 	if reorgRequired {
 		// Calculate total difficulty/weight for both chains
 		oldChainWeight, err := bc.calculateChainWeight(currentTip, ancestorHeight)
@@ -853,7 +853,7 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 			return 0, fmt.Errorf("failed to calculate new chain weight: %w", err)
 		}
 
-		// Fork choice: prefer heavier chain, tie-break by earlier timestamp
+		// Fork choice: prefer heavier chain, tie-break by lower tip hash
 		if newChainWeight.Cmp(oldChainWeight) < 0 {
 			log.Printf("[blockchain] InsertChain: new chain weight %s < old chain weight %s",
 				newChainWeight.String(), oldChainWeight.String())
@@ -861,11 +861,11 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 		}
 
 		if newChainWeight.Cmp(oldChainWeight) == 0 {
-			// Equal weight, use timestamp tie-breaker
-			if lastBlock.Header.Time >= currentTip.Header.Time {
-				log.Printf("[blockchain] InsertChain: equal weight, but new chain not earlier (%d >= %d)",
-					lastBlock.Header.Time, currentTip.Header.Time)
-				return 0, fmt.Errorf("new chain not better by timestamp tie-breaker")
+			// Equal weight, use deterministic hash tie-breaker
+			if lastBlock.Hash().Hex() >= currentTip.Hash().Hex() {
+				log.Printf("[blockchain] InsertChain: equal weight, but new tip hash is not better (%s >= %s)",
+					lastBlock.Hash().Hex()[:12], currentTip.Hash().Hex()[:12])
+				return 0, fmt.Errorf("new chain not better by hash tie-breaker")
 			}
 		}
 

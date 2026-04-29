@@ -2,5 +2,5 @@
 data_dir = "./node-data"
 p2p_port = 3000
 bootstrap_peers = [
-    "/ip6/2001:db8::1/tcp/3000/p2p/12D3KooWE2NhYpUTx2JVjZV4n77kZMuPxRwMKTvwTsjktDzR1LSd"
+    "/ip4/129.151.164.202/tcp/3000/p2p/12D3KooWDDLZ3Z6xLS22DcoE98ZQggXgi2uMdb4q9sqFQ8WBPJd4"
 ]

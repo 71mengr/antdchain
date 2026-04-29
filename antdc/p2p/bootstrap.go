@@ -6,7 +6,6 @@ import "strings"
 // Add reliable, publicly reachable peers here in multiaddr format.
 var DefaultBootstrapPeers = []string{
 	"/ip4/129.151.164.202/tcp/3000/p2p/12D3KooWDDLZ3Z6xLS22DcoE98ZQggXgi2uMdb4q9sqFQ8WBPJd4",
-	"/ip6/2001:db8::1/tcp/3000/p2p/12D3KooWE2NhYpUTx2JVjZV4n77kZMuPxRwMKTvwTsjktDzR1LSd",
 }
 
 // ResolveBootstrapPeers merges configured peers with default peers,
