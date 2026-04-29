@@ -1157,16 +1157,20 @@ func (n *Node) Keystore() *keystore.KeyStore {
 }
 
 func (n *Node) GetKeystoreDir() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return n.keystoreDir
-	}
+    homeDir, err := os.UserHomeDir()
+    if err != nil {
+        return n.keystoreDir
+    }
 
-	if runtime.GOOS == "windows" {
-		return filepath.Join(homeDir, "Antdchain", "keystore")
-	}
-
-	return filepath.Join(homeDir, ".antdchain", "keystore")
+    switch runtime.GOOS {
+    case "windows":
+        return filepath.Join(homeDir, "AppData", "Local", "Antdchain", "keystore")
+    case "darwin":
+        return filepath.Join(homeDir, "Library", "Application Support", "Antdchain", "keystore")
+    default:
+        // Linux and other Unix-like systems
+        return filepath.Join(homeDir, ".antdchain", "keystore")
+    }
 }
 
 func (n *Node) GetMinerWallet() MinerWallet {
