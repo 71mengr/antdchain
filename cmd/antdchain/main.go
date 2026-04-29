@@ -3,6 +3,7 @@
 // for more information.
 
 package main
+
 import (
 	"context"
 	"crypto/rand"
@@ -62,15 +63,15 @@ type RotatingKingAPI struct {
 type RotatingKingInfo struct {
 	CurrentKing             common.QuantumAddress `json:"currentKing"`
 	NextKing                common.QuantumAddress `json:"nextKing,omitempty"`
-	BlocksUntilRotation     uint64         `json:"blocksUntilRotation"`
-	KingCount               int            `json:"kingCount"`
-	RotationCount           uint64         `json:"rotationCount"`
-	NextRotationAt          uint64         `json:"nextRotationAt"`
-	RotationHeight          uint64         `json:"rotationHeight"`
-	RotationInterval        uint64         `json:"rotationInterval"`
-	ActivationDelay         uint64         `json:"activationDelay"`
-	MinStakeRequired        string         `json:"minStakeRequired"`
-	TotalRewardsDistributed string         `json:"totalRewardsDistributed,omitempty"`
+	BlocksUntilRotation     uint64                `json:"blocksUntilRotation"`
+	KingCount               int                   `json:"kingCount"`
+	RotationCount           uint64                `json:"rotationCount"`
+	NextRotationAt          uint64                `json:"nextRotationAt"`
+	RotationHeight          uint64                `json:"rotationHeight"`
+	RotationInterval        uint64                `json:"rotationInterval"`
+	ActivationDelay         uint64                `json:"activationDelay"`
+	MinStakeRequired        string                `json:"minStakeRequired"`
+	TotalRewardsDistributed string                `json:"totalRewardsDistributed,omitempty"`
 }
 
 type KingStats struct {
@@ -363,7 +364,7 @@ func main() {
 			&cli.IntFlag{Name: "rpc-port", Value: 8089, Usage: "JSON-RPC port"},
 			&cli.IntFlag{Name: "web-port", Value: 8090, Usage: "Web interface port"},
 			&cli.IntFlag{Name: "p2p-port", Value: 3000, Usage: "P2P port"},
-			&cli.StringFlag{Name: "bootstrap", Value: "/ip4/129.151.164.223/tcp/3000/p2p/12D3KooWH3Unn2YQWLpgAFP7VZrjda5jCowp1xc4BgURb8u8Er6B", Usage: "Bootstrap nodes"},
+			&cli.StringFlag{Name: "bootstrap", Value: strings.Join(p2p.DefaultBootstrapPeers, ","), Usage: "Bootstrap nodes"},
 			&cli.BoolFlag{Name: "startmining", Usage: "Start PoS mining"},
 			&cli.BoolFlag{Name: "console", Usage: "Open console"},
 			&cli.BoolFlag{Name: "no-web", Usage: "Disable web interface"},
@@ -507,7 +508,9 @@ func triggerConfigurationSync(bc *chain.Blockchain, p2pNode *p2p.Node, logger *l
 
 	// Get our configuration
 	var ourCount int
-	if manager, ok := rkManager.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
+	if manager, ok := rkManager.(interface {
+		GetKingAddresses() []common.QuantumAddress
+	}); ok {
 		addresses := manager.GetKingAddresses()
 		ourCount = len(addresses)
 
@@ -537,7 +540,9 @@ func triggerConfigurationSync(bc *chain.Blockchain, p2pNode *p2p.Node, logger *l
 				time.Sleep(30 * time.Second)
 
 				// Re-check our count
-				if manager, ok := rkManager.(interface{ GetKingAddresses() []common.QuantumAddress }); ok {
+				if manager, ok := rkManager.(interface {
+					GetKingAddresses() []common.QuantumAddress
+				}); ok {
 					currentCount := len(manager.GetKingAddresses())
 					if currentCount <= 4 {
 						logger.Warnf("🔄 STILL LOW (%d) - FORCING MANUAL CONFIG SYNC", currentCount)
@@ -758,10 +763,11 @@ func runNode(c *cli.Context) error {
 	// ==============================================
 	logger.Info("Initializing P2P network...")
 
-	bootNodes := strings.Split(bootstrap, ",")
-	if bootstrap == "" {
-		bootNodes = nil
+	configuredBootstrap := []string{}
+	if strings.TrimSpace(bootstrap) != "" {
+		configuredBootstrap = strings.Split(bootstrap, ",")
 	}
+	bootNodes := p2p.ResolveBootstrapPeers(configuredBootstrap)
 
 	p2pConfig := p2p.Config{
 		DataDir:           dataDir,
