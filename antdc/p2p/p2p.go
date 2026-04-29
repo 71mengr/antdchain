@@ -1462,7 +1462,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	// Initialize checkpoints system
 	checkpointsPath := filepath.Join(cfg.DataDir, "checkpoints.json")
 
-	genesisHash := common.HexToHash("0xf2bc547fc65acb43884a670a48c420d9a7404ad8184368605ae7c26a81ea4fc2")
+	genesisHash := common.HexToHash("0x860ed1a1e026261b452d2bbe908edf8297b02107912331c4c91e2f757ae9e164")
 
 	cp, err := checkpoints.NewCheckpoints(cfg.DataDir, checkpointsPath, genesisHash)
 	if err != nil {
