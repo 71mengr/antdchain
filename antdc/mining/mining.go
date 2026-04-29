@@ -27,7 +27,9 @@ import (
 
 // Configuration constants (can be made configurable via environment variables)
 const (
-    DefaultMiningInterval    = 2 * time.Second
+    // Keep mining cadence near network target to reduce same-height races.
+    DefaultMiningInterval    = 12 * time.Second
+    MinimumMiningInterval    = 10 * time.Second
     DefaultBroadcastMaxRetries = 5
     DefaultBroadcastInitialBackoff = 100 * time.Millisecond
     DefaultBroadcastMaxBackoff     = 2 * time.Second
@@ -146,6 +148,10 @@ func (ms *PosMiningState) SetMining(v bool)  { ms.mining = v }
 func (ms *PosMiningState) SetMiningInterval(interval time.Duration) {
     ms.mu.Lock()
     defer ms.mu.Unlock()
+    if interval < MinimumMiningInterval {
+        log.Printf("[miner] Requested mining interval %s too fast; clamped to %s", interval, MinimumMiningInterval)
+        interval = MinimumMiningInterval
+    }
     ms.miningInterval = interval
 }
 
@@ -305,6 +311,10 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
 		if height <= bc.GetChainHeight() {
 			continue
 		}
+		if existing := bc.GetBlock(height); existing != nil {
+			// Another block at this height already exists locally (likely received from peers).
+			continue
+		}
 
 		if ms.powEngine == nil {
 			continue
@@ -367,6 +377,19 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
 		newBlock, _, err := bc.CreateMiningBlock(minerToUse)
 		if err != nil || newBlock == nil {
 			log.Printf("[miner] Block creation failed: %v", err)
+			continue
+		}
+		// Before signing/submitting, ensure tip did not advance during template build.
+		currentTip := bc.Latest()
+		if currentTip == nil {
+			continue
+		}
+		if currentTip.Hash() != parent.Hash() || currentTip.Header.Number.Uint64()+1 != height {
+			log.Printf("[miner] Tip changed while building block %d; resyncing before mining next block", height)
+			continue
+		}
+		if bc.IsSyncing() {
+			log.Printf("[miner] Sync resumed while preparing block %d; skipping stale candidate", height)
 			continue
 		}
 
