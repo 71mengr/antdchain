@@ -77,7 +77,7 @@ type PoW struct {
 // NewPoW creates a new PoW engine with default difficulty.
 func NewPoW() *PoW {
 	p := &PoW{
-		difficulty:       big.NewInt(1000), // initial difficulty
+		difficulty:       big.NewInt(BaseDifficulty), // initial difficulty
 		blockTimes:       make([]uint64, 0, DifficultyAdjustment),
 		averageBlockTime: float64(BlockTimeTarget),
 	}
@@ -109,9 +109,22 @@ func (p *PoW) GetTarget() *big.Int {
 	return new(big.Int).Div(maxTarget, p.difficulty)
 }
 
-// CalculateExpectedDifficulty is called by block validation; it simply adjusts.
+// CalculateExpectedDifficulty predicts the next difficulty without mutating engine state.
 func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime uint64) *big.Int {
-	return p.AdjustDifficulty(height, parentTime, currentTime)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	window := append([]uint64(nil), p.blockTimes...)
+	delta := currentTime - parentTime
+	if delta == 0 {
+		delta = 1
+	}
+	window = append(window, delta)
+	if len(window) > DifficultyAdjustment {
+		window = window[1:]
+	}
+
+	return computeAdjustedDifficulty(new(big.Int).Set(p.difficulty), height, window)
 }
 
 // AdjustDifficulty recalculates difficulty every DifficultyAdjustment blocks.
@@ -120,47 +133,26 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 	defer p.mu.Unlock()
 
 	// Record block time for moving average
-	diff := currentTime - parentTime
-	if diff == 0 {
-		diff = 1
+	delta := currentTime - parentTime
+	if delta == 0 {
+		delta = 1
 	}
-	p.blockTimes = append(p.blockTimes, diff)
+	p.blockTimes = append(p.blockTimes, delta)
 	if len(p.blockTimes) > DifficultyAdjustment {
 		p.blockTimes = p.blockTimes[1:]
 	}
 
-	if height%uint64(DifficultyAdjustment) != 0 || len(p.blockTimes) == 0 {
+	adjusted := computeAdjustedDifficulty(new(big.Int).Set(p.difficulty), height, p.blockTimes)
+	if adjusted.Cmp(p.difficulty) == 0 {
 		return p.difficulty
 	}
 
-	// Average block time over the window
 	var total uint64
 	for _, t := range p.blockTimes {
 		total += t
 	}
 	avg := float64(total) / float64(len(p.blockTimes))
 	p.averageBlockTime = avg
-
-	// Adjustment factor capped between 0.25 and 4.0
-	ratio := float64(BlockTimeTarget) / avg
-	if ratio > 4.0 {
-		ratio = 4.0
-	} else if ratio < 0.25 {
-		ratio = 0.25
-	}
-
-	newDiff := new(big.Float).SetInt(p.difficulty)
-	newDiff.Mul(newDiff, big.NewFloat(ratio))
-	adjusted := new(big.Int)
-	newDiff.Int(adjusted)
-
-	if adjusted.Cmp(big.NewInt(MinDifficulty)) < 0 {
-		adjusted = big.NewInt(MinDifficulty)
-	}
-	if adjusted.Cmp(big.NewInt(MaxDifficulty)) > 0 {
-		adjusted = big.NewInt(MaxDifficulty)
-	}
-
 	p.difficulty = adjusted
 	p.lastAdjustment = height
 	difficultyGauge.Set(float64(adjusted.Int64()))
@@ -169,6 +161,38 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 	log.Printf("[pow] Difficulty adjusted at height %d → %s (avg block time %.1fs)",
 		height, adjusted.String(), avg)
 
+	return adjusted
+}
+
+func computeAdjustedDifficulty(current *big.Int, height uint64, blockTimes []uint64) *big.Int {
+	if height%uint64(DifficultyAdjustment) != 0 || len(blockTimes) == 0 {
+		return current
+	}
+
+	var total uint64
+	for _, t := range blockTimes {
+		total += t
+	}
+	avg := float64(total) / float64(len(blockTimes))
+
+	ratio := float64(BlockTimeTarget) / avg
+	if ratio > 4.0 {
+		ratio = 4.0
+	} else if ratio < 0.25 {
+		ratio = 0.25
+	}
+
+	newDiff := new(big.Float).SetInt(current)
+	newDiff.Mul(newDiff, big.NewFloat(ratio))
+	adjusted := new(big.Int)
+	newDiff.Int(adjusted)
+
+	if adjusted.Cmp(big.NewInt(MinDifficulty)) < 0 {
+		return big.NewInt(MinDifficulty)
+	}
+	if adjusted.Cmp(big.NewInt(MaxDifficulty)) > 0 {
+		return big.NewInt(MaxDifficulty)
+	}
 	return adjusted
 }
 
