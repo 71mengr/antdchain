@@ -858,7 +858,12 @@ func runNode(c *cli.Context) error {
 	logger.Info("Initializing Proof-of-Stake mining system...")
 
 	// Create the PoS engine
-	powEngine := pow.NewPoW()
+	// Reuse the blockchain PoW engine so mining and validation share the same state.
+	powEngine := bc.Pow()
+	if powEngine == nil {
+		powEngine = pow.NewPoW()
+		logger.Warn("Blockchain PoW engine was nil; initialized fallback PoW engine for mining state")
+	}
 
 	// Create PoS mining state
 	posMiningState := mining.NewPosMiningState(powEngine)
