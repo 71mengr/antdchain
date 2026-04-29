@@ -142,7 +142,7 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 	p.averageBlockTime = avg
 
 	// Adjustment factor capped between 0.25 and 4.0
-	ratio := avg / float64(BlockTimeTarget)
+	ratio := float64(BlockTimeTarget) / avg
 	if ratio > 4.0 {
 		ratio = 4.0
 	} else if ratio < 0.25 {

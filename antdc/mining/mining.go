@@ -255,197 +255,180 @@ func StopMining(state *PosMiningState) {
 }
 
 func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAddress, p2pNode *p2p.Node) {
-    // Get configuration values
-    ms.mu.RLock()
-    miningInterval := ms.miningInterval
-    ms.mu.RUnlock()
-    
-    ticker := time.NewTicker(miningInterval)
-    defer ticker.Stop()
+	// Get configuration values
+	ms.mu.RLock()
+	miningInterval := ms.miningInterval
+	ms.mu.RUnlock()
 
-    log.Println("[miner] Dynamic wallet mining started — will mine with any eligible address in wallet")
+	ticker := time.NewTicker(miningInterval)
+	defer ticker.Stop()
 
-    var (
-        consecutiveMisses int    = 0
-        totalMined        uint64 = 0
-        startTime         time.Time = time.Now()
-        sessionStartTime  time.Time = time.Now()
-        eligibilityChecks int    = 0
-    )
-    
-    // Update session duration metric
-    go func() {
-        for ms.mining {
-            sessionDuration := time.Since(sessionStartTime).Seconds()
-            miningSessionDuration.Set(sessionDuration)
-            time.Sleep(1 * time.Second)
-        }
-    }()
+	log.Println("[miner] Dynamic wallet mining started — will mine with any eligible address in wallet")
 
-    for ms.mining {
-        <-ticker.C
+	var (
+		consecutiveMisses int       = 0
+		totalMined        uint64    = 0
+		startTime         time.Time = time.Now()
+		sessionStartTime  time.Time = time.Now()
+		eligibilityChecks int       = 0
+	)
 
-        if bc.IsSyncing() {
-            // Optional: log only occasionally to reduce spam
-            if time.Since(lastSyncLog) > LogSyncStatusInterval {
-                log.Printf("[miner] Sync in progress (height %d → %d) — mining paused",
-                    bc.GetChainHeight(), bc.GetSyncTarget())
-                lastSyncLog = time.Now()
-            }
-            time.Sleep(1 * time.Second)
-            continue
-        }
+	// Update session duration metric
+	go func() {
+		for ms.mining {
+			sessionDuration := time.Since(sessionStartTime).Seconds()
+			miningSessionDuration.Set(sessionDuration)
+			time.Sleep(1 * time.Second)
+		}
+	}()
 
-        parent := bc.Latest()
-        if parent == nil {
-            continue
-        }
+	for ms.mining {
+		<-ticker.C
 
-        height := parent.Header.Number.Uint64() + 1
-        if height <= bc.GetChainHeight() {
-            continue
-        }
+		if bc.IsSyncing() {
+			// Optional: log only occasionally to reduce spam
+			if time.Since(lastSyncLog) > LogSyncStatusInterval {
+				log.Printf("[miner] Sync in progress (height %d → %d) — mining paused",
+					bc.GetChainHeight(), bc.GetSyncTarget())
+				lastSyncLog = time.Now()
+			}
+			time.Sleep(1 * time.Second)
+			continue
+		}
 
-        if ms.powEngine == nil {
-            continue
-        }
+		parent := bc.Latest()
+		if parent == nil {
+			continue
+		}
 
-        // Get who the network expects to mine this block
-        expectedMiner, err := ms.powEngine.GetNextMiner(parent.Hash(), height)
-        if err != nil {
-            log.Printf("[miner] Failed to get next miner for block %d: %v", height, err)
-            miningEligibilityChecks.WithLabelValues("error").Inc()
-            continue
-        }
+		height := parent.Header.Number.Uint64() + 1
+		if height <= bc.GetChainHeight() {
+			continue
+		}
 
-        // Check if the expected miner has a loaded private key in this node.
-        // The loaded key must derive to the expected miner address.
-        // NOTE: Do not trust configured miner address alone here, otherwise
-        // blocks can be signed by the wrong key when address/key drift.
-        var (
-            eligiblePrivKey  []byte
-            configuredMiner  common.QuantumAddress
-            loadedKeyAddress common.QuantumAddress
-        )
-        ms.mu.RLock()
-        configuredMiner = ms.minerAddress
-        if ms.privateKey != nil && ms.hasPrivateKey && len(ms.privateKey) > 0 {
-            pubKey, err := quantum.DerivePublicKey(ms.privateKey)
-            if err == nil {
-                parsedAddr, addrErr := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
-                if addrErr == nil {
-                    loadedKeyAddress = parsedAddr
-                }
-            }
-            if expectedMiner == loadedKeyAddress {
-                eligiblePrivKey = append([]byte(nil), ms.privateKey...)
-            }
-        }
-        ms.mu.RUnlock()
+		if ms.powEngine == nil {
+			continue
+		}
 
-        if expectedMiner == (common.QuantumAddress{}) && configuredMiner != (common.QuantumAddress{}) {
-            // In PoW compatibility mode, expected miner may be unset; use configured miner.
-            expectedMiner = configuredMiner
-            if expectedMiner == loadedKeyAddress && len(eligiblePrivKey) == 0 && ms.hasPrivateKey && len(ms.privateKey) > 0 {
-                eligiblePrivKey = append([]byte(nil), ms.privateKey...)
-            }
-        }
-        eligibilityChecks++
-        if len(eligiblePrivKey) == 0 {
-            // Not our turn — or we don't have the key for the expected miner
-            consecutiveMisses++
-            if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
-                hasKey := loadedKeyAddress != (common.QuantumAddress{})
-                log.Printf("[miner] Waiting — expected: %s configured: %s key: %s (loaded key: %v)",
-                    expectedMiner.String()[:12],
-                    configuredMiner.String()[:12],
-                    loadedKeyAddress.String()[:12],
-                    hasKey,
-                )
-            }
-            miningEligibilityChecks.WithLabelValues("not_eligible").Inc()
-            continue
-        }
+		// Dynamic wallet mining: mine with any loaded wallet key.
+		var (
+			eligiblePrivKey  []byte
+			configuredMiner  common.QuantumAddress
+			loadedKeyAddress common.QuantumAddress
+		)
+		ms.mu.RLock()
+		configuredMiner = ms.minerAddress
+		if ms.privateKey != nil && ms.hasPrivateKey && len(ms.privateKey) > 0 {
+			pubKey, err := quantum.DerivePublicKey(ms.privateKey)
+			if err == nil {
+				parsedAddr, addrErr := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
+				if addrErr == nil {
+					loadedKeyAddress = parsedAddr
+					eligiblePrivKey = append([]byte(nil), ms.privateKey...)
+				}
+			}
+		}
+		ms.mu.RUnlock()
 
-        // YES! It's our turn and we have the private key
-        consecutiveMisses = 0
-        miningEligibilityChecks.WithLabelValues("eligible").Inc()
-        log.Printf("[miner] ✅ OUR TURN! Mining block %d as %s", height, expectedMiner.String()[:12])
+		minerToUse := loadedKeyAddress
+		if minerToUse == (common.QuantumAddress{}) {
+			minerToUse = configuredMiner
+		}
 
-        currentTime := uint64(time.Now().Unix())
-        eligible, err := ms.powEngine.VerifyMinerEligibility(expectedMiner, parent.Hash(), height, currentTime)
-        if err != nil || !eligible {
-            log.Printf("[miner] Eligibility failed: %v", err)
-            ms.powEngine.RecordMissedBlock(expectedMiner)
-            continue
-        }
+		eligibilityChecks++
+		if len(eligiblePrivKey) == 0 || minerToUse == (common.QuantumAddress{}) {
+			consecutiveMisses++
+			if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
+				hasKey := loadedKeyAddress != (common.QuantumAddress{})
+				log.Printf("[miner] Waiting — no eligible wallet key loaded (configured: %s, key: %s, loaded key: %v)",
+					configuredMiner.String()[:12],
+					loadedKeyAddress.String()[:12],
+					hasKey,
+				)
+			}
+			miningEligibilityChecks.WithLabelValues("not_eligible").Inc()
+			continue
+		}
 
-        // Create block using the eligible address
-		newBlock, _, err := bc.CreateMiningBlock(expectedMiner)
-        if err != nil || newBlock == nil {
-            log.Printf("[miner] Block creation failed: %v", err)
-            continue
-        }
+		// We have a local wallet key and can mine with it.
+		consecutiveMisses = 0
+		miningEligibilityChecks.WithLabelValues("eligible").Inc()
+		log.Printf("[miner] ✅ Wallet eligible. Mining block %d as %s", height, minerToUse.String()[:12])
 
-        // Sign with our private key
-        timestamp := newBlock.Header.Time
-        signature, err := generateBlockSignature(expectedMiner, parent.Hash(), height, timestamp, eligiblePrivKey)
-        if err != nil {
-            log.Printf("[miner] Signing failed: %v", err)
-            continue
-        }
+		currentTime := uint64(time.Now().Unix())
+		eligible, err := ms.powEngine.VerifyMinerEligibility(minerToUse, parent.Hash(), height, currentTime)
+		if err != nil || !eligible {
+			log.Printf("[miner] Eligibility failed: %v", err)
+			ms.powEngine.RecordMissedBlock(minerToUse)
+			continue
+		}
 
-        if len(signature) > 0 {
-            sigMarker := []byte("|SIG|")
-            extra := append(newBlock.Header.Extra, sigMarker...)
-            extra = append(extra, signature...)
-            newBlock.Header.Extra = extra
-            log.Printf("[miner] Signed block %d", height)
-        }
+		// Create block using the eligible address
+		newBlock, _, err := bc.CreateMiningBlock(minerToUse)
+		if err != nil || newBlock == nil {
+			log.Printf("[miner] Block creation failed: %v", err)
+			continue
+		}
 
-        // Submit
-        if err := bc.AddBlock(newBlock); err != nil {
-            log.Printf("[miner] AddBlock failed: %v", err)
-            if bc.GetBlock(height) != nil {
-                ms.powEngine.RecordMissedBlock(expectedMiner)
-            }
-            continue
-        }
+		// Sign with our private key
+		timestamp := newBlock.Header.Time
+		signature, err := generateBlockSignature(minerToUse, parent.Hash(), height, timestamp, eligiblePrivKey)
+		if err != nil {
+			log.Printf("[miner] Signing failed: %v", err)
+			continue
+		}
 
-        // SUCCESS! Update rewards and metrics
-        totalMined++
-        ms.blocksMined++
-        
-        // Calculate and record rewards (simplified - adjust based on your reward logic)
-        blockReward := calculateBlockReward(height, bc)
-        ms.mu.Lock()
-        ms.totalRewards.Add(ms.totalRewards, blockReward)
-        ms.mu.Unlock()
-        
-        // Update metrics
-        miningBlocksTotal.Inc()
-        miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
-        miningUptime.Set(time.Since(startTime).Seconds())
+		if len(signature) > 0 {
+			sigMarker := []byte("|SIG|")
+			extra := append(newBlock.Header.Extra, sigMarker...)
+			extra = append(extra, signature...)
+			newBlock.Header.Extra = extra
+			log.Printf("[miner] Signed block %d", height)
+		}
 
-        ms.powEngine.RecordBlockMined(expectedMiner, height)
+		// Submit
+		if err := bc.AddBlock(newBlock); err != nil {
+			log.Printf("[miner] AddBlock failed: %v", err)
+			if bc.GetBlock(height) != nil {
+				ms.powEngine.RecordMissedBlock(minerToUse)
+			}
+			continue
+		}
 
-        log.Printf("[miner] 🎉 BLOCK #%d MINED by %s! Reward: %s ANTD",
-            height, expectedMiner.String()[:12],
-            new(big.Int).Div(blockReward, big.NewInt(1e18)).String())
-        log.Printf("[miner]   Total mined this session: %d", totalMined)
+		// SUCCESS! Update rewards and metrics
+		totalMined++
+		ms.blocksMined++
 
-        if p2pNode != nil {
-            go broadcastMinedBlock(p2pNode, newBlock, ms)
-        }
+		// Calculate and record rewards (simplified - adjust based on your reward logic)
+		blockReward := calculateBlockReward(height, bc)
+		ms.mu.Lock()
+		ms.totalRewards.Add(ms.totalRewards, blockReward)
+		ms.mu.Unlock()
 
-        if totalMined%5 == 0 {
-            uptime := time.Since(startTime)
-            avg := uptime.Seconds() / float64(totalMined)
-            log.Printf("[miner] 📊 Mined %d blocks (avg %.1fs/block)", totalMined, avg)
-        }
-    }
+		// Update metrics
+		miningBlocksTotal.Inc()
+		miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
+		miningUptime.Set(time.Since(startTime).Seconds())
 
-    log.Println("[miner] Mining stopped")
+		ms.powEngine.RecordBlockMined(expectedMiner, height)
+
+		log.Printf("[miner] 🎉 BLOCK #%d MINED by %s! Reward: %s ANTD",
+			height, expectedMiner.String()[:12],
+			new(big.Int).Div(blockReward, big.NewInt(1e18)).String())
+		log.Printf("[miner]   Total mined this session: %d", totalMined)
+
+		if p2pNode != nil {
+			go broadcastMinedBlock(p2pNode, newBlock, ms)
+		}
+
+		if totalMined%5 == 0 {
+			uptime := time.Since(startTime)
+			avg := uptime.Seconds() / float64(totalMined)
+			log.Printf("[miner] 📊 Mined %d blocks (avg %.1fs/block)", totalMined, avg)
+		}
+	}
+
+	log.Println("[miner] Mining stopped")
 }
 
 // Creates a block signature using ML-DSA-65
