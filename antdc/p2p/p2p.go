@@ -1271,16 +1271,13 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	}
 
 	// Optional: force announce a specific external IP if you know it (useful for fixed public IP)
-	// Uncomment and replace with your actual public IP if behind NAT without UPnP
-	/*
-	if externalIP := os.Getenv("ANTD_EXTERNAL_IP"); externalIP != "" {
+	if externalIP := os.Getenv("129.151.164.202"); externalIP != "" {
 		externalAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", externalIP, cfg.Port))
 		h.SetAddrsFactory(func(addrs []ma.Multiaddr) []ma.Multiaddr {
 			return append(addrs, externalAddr)
 		})
 		logger.Infof("Forced external address: %s", externalAddr)
 	}
-	*/
 
 	logger.Infof("P2P node started | ID: %s | Addresses:", h.ID().String()[:12])
 	for _, addr := range h.Addrs() {
