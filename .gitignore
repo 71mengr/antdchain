@@ -3,7 +3,7 @@ build
 antdchain-data/
 *.exe
 *.out
-antdchain
+#antdchain
 antdchain-wallet
 
 # Build directories
