@@ -1253,12 +1253,14 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	}
 
 	// ----- CORRECTED NAT SECTION -----
-	if cfg.EnableNATService {
-		opts = append(opts,
-			libp2p.NATPortMap(),     // UPnP / NAT-PMP port mapping
-			libp2p.EnableAutoNAT(),  // helps discover external IP
-		)
-	}
+    if cfg.EnableNATService {
+        opts = append(opts,
+            libp2p.NATPortMap(),        // UPnP / NAT-PMP port mapping
+            libp2p.EnableNATService(),  // Enable the AutoNAT service
+            libp2p.EnableRelay(),       // Enable circuit relay for NAT traversal
+            libp2p.EnableHolePunching(), // Enable hole punching
+        )
+    }
 	// ---------------------------------
 
 	// Create libp2p host
