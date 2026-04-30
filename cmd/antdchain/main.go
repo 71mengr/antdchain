@@ -614,10 +614,28 @@ func getGenesisStakers() []struct {
 // ============================================================================
 // MAIN NODE FUNCTION
 // ============================================================================
+func acquireDataDirLock(dataDir string) (*os.File, error) {
+	lockPath := filepath.Join(dataDir, ".antdchain.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open data directory lock file: %w", err)
+	}
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("data directory is already in use by another ANTDChain node: %s", dataDir)
+		}
+		return nil, fmt.Errorf("failed to lock data directory: %w", err)
+	}
+
+	return lockFile, nil
+}
+
 func runNode(c *cli.Context) error {
 	// Parse flags
 	dataDir := c.String("data-dir")
-	keystoreDir := strings.TrimSpace(c.String("keystore-dir"))
+	keystoreDir := c.String("keystore-dir")
 	rpcPort := c.Int("rpc-port")
 	webPort := c.Int("web-port")
 	p2pPort := c.Int("p2p-port")
@@ -648,6 +666,16 @@ func runNode(c *cli.Context) error {
 	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
 		logger.Fatal("Failed to create data directory:", err)
 	}
+
+	// Prevent multiple nodes on the same machine from sharing one data directory.
+	dataDirLock, err := acquireDataDirLock(dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = syscall.Flock(int(dataDirLock.Fd()), syscall.LOCK_UN)
+		_ = dataDirLock.Close()
+	}()
 
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
@@ -894,7 +922,7 @@ func runNode(c *cli.Context) error {
 	// Check candidate addresses
 	mainKingAddr, _ := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	candidateAddresses := []common.QuantumAddress{
-		mainKingAddr,                                         // Main King
+		mainKingAddr, // Main King
 		common.BytesToQuantumAddress(minerWallet.Address().Bytes()), // Miner wallet
 	}
 
