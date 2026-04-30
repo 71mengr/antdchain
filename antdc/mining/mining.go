@@ -300,7 +300,6 @@ func StopMining(state *PosMiningState) {
 func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node) {
 	ms.mu.RLock()
 	miningInterval := ms.miningInterval
-	pendingTimeout := ms.pendingBlockTimeout
 	ms.mu.RUnlock()
 
 	// Add random jitter to reduce simultaneous mining attempts
