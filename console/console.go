@@ -1080,6 +1080,12 @@ func (n *Node) rebroadcastStaleTransactions(maxAge time.Duration) {
 
 // NewNode creates a new Node with the given components
 func NewNode(bc *chain.Blockchain, posMiningState *mining.PosMiningState, wm *wallet.WalletManager, p2pNode *p2p.Node) (*Node, error) {
+	return NewNodeWithKeystoreDir(bc, posMiningState, wm, p2pNode, "")
+}
+
+// NewNodeWithKeystoreDir creates a new Node with an optional custom keystore directory.
+// If keystoreDir is empty, it defaults to <dataDir>/keystore.
+func NewNodeWithKeystoreDir(bc *chain.Blockchain, posMiningState *mining.PosMiningState, wm *wallet.WalletManager, p2pNode *p2p.Node, keystoreDir string) (*Node, error) {
 	var dataDir string
 	var err error
 
@@ -1096,7 +1102,10 @@ func NewNode(bc *chain.Blockchain, posMiningState *mining.PosMiningState, wm *wa
 		return nil, fmt.Errorf("failed to create data directory %s: %w", dataDir, err)
 	}
 
-	ksDir := filepath.Join(dataDir, "keystore")
+	ksDir := keystoreDir
+	if strings.TrimSpace(ksDir) == "" {
+		ksDir = filepath.Join(dataDir, "keystore")
+	}
 	if err := os.MkdirAll(ksDir, os.ModePerm); err != nil {
 		return nil, err
 	}
@@ -1551,7 +1560,7 @@ func parseOneShotCommandArgs(args []string) ([]string, bool) {
 		// launched with options like --data-dir.
 		if strings.HasPrefix(part, "-") {
 			// Flags that take a value in the next argv token.
-			if part == "--data-dir" || part == "--config" || part == "--p2p-port" || part == "--rpc-port" {
+			if part == "--data-dir" || part == "--keystore-dir" || part == "--config" || part == "--p2p-port" || part == "--rpc-port" {
 				i++
 			}
 			continue

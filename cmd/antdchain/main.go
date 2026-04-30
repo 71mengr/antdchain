@@ -361,6 +361,7 @@ func main() {
 		Version: "v2.0.0 — 2025",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "data-dir", Value: defaultDir, Usage: "Data directory"},
+			&cli.StringFlag{Name: "keystore-dir", Usage: "Optional keystore directory (use different paths when running multiple nodes on one machine)"},
 			&cli.IntFlag{Name: "rpc-port", Value: 8089, Usage: "JSON-RPC port"},
 			&cli.IntFlag{Name: "web-port", Value: 8090, Usage: "Web interface port"},
 			&cli.IntFlag{Name: "p2p-port", Value: 3000, Usage: "P2P port"},
@@ -563,9 +564,9 @@ func triggerConfigurationSync(bc *chain.Blockchain, p2pNode *p2p.Node, logger *l
 }
 
 func createConsoleNode(bc *chain.Blockchain, posMiningState *mining.PosMiningState,
-	walletManager *wallet.WalletManager, p2pNode *p2p.Node) (*console.Node, error) {
+	walletManager *wallet.WalletManager, p2pNode *p2p.Node, keystoreDir string) (*console.Node, error) {
 
-	return console.NewNode(bc, posMiningState, walletManager, p2pNode)
+	return console.NewNodeWithKeystoreDir(bc, posMiningState, walletManager, p2pNode, keystoreDir)
 }
 
 func getGenesisStakers() []struct {
@@ -616,6 +617,7 @@ func getGenesisStakers() []struct {
 func runNode(c *cli.Context) error {
 	// Parse flags
 	dataDir := c.String("data-dir")
+	keystoreDir := strings.TrimSpace(c.String("keystore-dir"))
 	rpcPort := c.Int("rpc-port")
 	webPort := c.Int("web-port")
 	p2pPort := c.Int("p2p-port")
@@ -925,7 +927,7 @@ func runNode(c *cli.Context) error {
 	logger.Info("Creating console node...")
 
 	// Create console node with PosMiningState
-	node, err := createConsoleNode(bc, posMiningState, walletManager, p2pNode)
+	node, err := createConsoleNode(bc, posMiningState, walletManager, p2pNode, keystoreDir)
 	if err != nil {
 		logger.Fatal("Console node creation failed:", err)
 	}
