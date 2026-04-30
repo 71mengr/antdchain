@@ -1540,14 +1540,38 @@ func parseOneShotCommandArgs(args []string) ([]string, bool) {
 		return nil, false
 	}
 
-	command := strings.TrimSpace(args[0])
-	if command == "" || strings.HasPrefix(command, "-") {
+	commandIdx := -1
+	for i := 0; i < len(args); i++ {
+		part := strings.TrimSpace(args[i])
+		if part == "" {
+			continue
+		}
+
+		// Skip global flags so one-shot commands still work when the daemon is
+		// launched with options like --data-dir.
+		if strings.HasPrefix(part, "-") {
+			// Flags that take a value in the next argv token.
+			if part == "--data-dir" || part == "--config" || part == "--p2p-port" || part == "--rpc-port" {
+				i++
+			}
+			continue
+		}
+
+		commandIdx = i
+		break
+	}
+
+	if commandIdx == -1 {
+		return nil, false
+	}
+	command := strings.TrimSpace(args[commandIdx])
+	if command == "" {
 		return nil, false
 	}
 
 	switch command {
 	case "createaddress", "import", "export", "listwallets", "listaddresses", "lock", "unlock", "balance", "datadir":
-		return args, true
+                return args[commandIdx:]
 	default:
 		return nil, false
 	}
