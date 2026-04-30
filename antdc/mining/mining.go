@@ -338,6 +338,14 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node) 
 			time.Sleep(1 * time.Second)
 			continue
 		}
+		if remaining := bc.SyncCooldownRemaining(); remaining > 0 {
+			if time.Since(lastSyncLog) > LogSyncStatusInterval {
+				log.Printf("[miner] Sync completed; waiting %s before resuming mining", remaining.Truncate(time.Second))
+				lastSyncLog = time.Now()
+			}
+			time.Sleep(min(remaining, time.Second))
+			continue
+		}
 
 		parent := bc.Latest()
 		if parent == nil {
@@ -426,6 +434,10 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node) 
 		}
 		if bc.IsSyncing() {
 			log.Printf("[miner] Sync resumed while preparing block %d; skipping", height)
+			continue
+		}
+		if remaining := bc.SyncCooldownRemaining(); remaining > 0 {
+			log.Printf("[miner] Sync cooldown active for %s; skipping block %d", remaining.Truncate(time.Second), height)
 			continue
 		}
 

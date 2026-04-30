@@ -103,6 +103,7 @@ type Blockchain struct {
 	rotatingKingManager reward.RotatingKingManager
 	syncing             atomic.Bool
 	syncTarget          atomic.Uint64
+	syncCooldownUntilNs atomic.Int64
 	syncMu              sync.RWMutex
 	p2pBroadcaster      rotatingking.P2PBroadcaster
 	logger              *logrus.Logger
@@ -197,7 +198,23 @@ func (bc *Blockchain) StopSync() {
 	if bc.syncing.Swap(false) {
 		log.Printf("[blockchain] Sync mode STOPPED")
 	}
+	cooldownUntil := time.Now().Add(10 * time.Second)
+	bc.syncCooldownUntilNs.Store(cooldownUntil.UnixNano())
+	log.Printf("[blockchain] Mining cooldown active until %s", cooldownUntil.Format(time.RFC3339))
 	bc.syncTarget.Store(0)
+}
+
+// SyncCooldownRemaining returns remaining cooldown duration after sync completes.
+func (bc *Blockchain) SyncCooldownRemaining() time.Duration {
+	untilNs := bc.syncCooldownUntilNs.Load()
+	if untilNs <= 0 {
+		return 0
+	}
+	remaining := time.Until(time.Unix(0, untilNs))
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 // GetSyncTarget returns the current sync target height
