@@ -1571,7 +1571,7 @@ func parseOneShotCommandArgs(args []string) ([]string, bool) {
 
 	switch command {
 	case "createaddress", "import", "export", "listwallets", "listaddresses", "lock", "unlock", "balance", "datadir":
-                return args[commandIdx:]
+                return args[commandIdx:], true
 	default:
 		return nil, false
 	}
