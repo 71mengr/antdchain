@@ -186,6 +186,29 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 		includedCount := 0
 		skippedRecent := 0
 
+		// Deterministic ordering across miners prevents divergent state roots
+		// when multiple eligible miners draw from similar mempools.
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i] == nil {
+				return false
+			}
+			if candidates[j] == nil {
+				return true
+			}
+
+			hashI := candidates[i].Hash().Hex()
+			hashJ := candidates[j].Hash().Hex()
+			if hashI != hashJ {
+				return hashI < hashJ
+			}
+
+			if candidates[i].Nonce != candidates[j].Nonce {
+				return candidates[i].Nonce < candidates[j].Nonce
+			}
+
+			return candidates[i].Timestamp < candidates[j].Timestamp
+		})
+
 		for _, tx := range candidates {
 			if tx == nil {
 				continue
