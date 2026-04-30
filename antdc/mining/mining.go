@@ -3,8 +3,8 @@
 // for more information.
 
 package mining
-import (
 
+import (
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"log"
 	"math/big"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -35,6 +36,9 @@ const (
     DefaultBroadcastMaxBackoff     = 2 * time.Second
     LogEligibilityCheckInterval   = 10 // Log every 10th eligibility check
     LogSyncStatusInterval         = 10 * time.Second
+
+    // New: how long to wait for a pending block at the same height before mining
+    DefaultPendingBlockTimeout = 2 * time.Second
 )
 
 var (
@@ -120,6 +124,11 @@ type PosMiningState struct {
     broadcastMaxRetries      int
     broadcastInitialBackoff  time.Duration
     broadcastMaxBackoff      time.Duration
+    pendingBlockTimeout      time.Duration  // new
+
+    // Tracks heights for which a block announcement has been seen but not yet added
+    pendingHeights map[uint64]time.Time
+    pendingMu      sync.RWMutex
 
     mu sync.RWMutex
     onSyncChange func(isSyncing bool)
@@ -136,7 +145,59 @@ func NewPosMiningState(powEngine *pow.PoW) *PosMiningState {
         broadcastMaxRetries:     DefaultBroadcastMaxRetries,
         broadcastInitialBackoff: DefaultBroadcastInitialBackoff,
         broadcastMaxBackoff:     DefaultBroadcastMaxBackoff,
+        pendingBlockTimeout:     DefaultPendingBlockTimeout,
+        pendingHeights:          make(map[uint64]time.Time),
     }
+}
+
+// MarkBlockSeen records that a block at the given height has been announced on the network.
+// This is meant to be called by the p2p layer when it receives a "new block" message.
+func (ms *PosMiningState) MarkBlockSeen(height uint64) {
+    ms.pendingMu.Lock()
+    defer ms.pendingMu.Unlock()
+    if _, exists := ms.pendingHeights[height]; !exists {
+        ms.pendingHeights[height] = time.Now()
+        log.Printf("[miner] Block announced at height %d – will wait before mining it", height)
+    }
+}
+
+// ClearPendingHeight removes a height from the pending set after the block has been added.
+func (ms *PosMiningState) ClearPendingHeight(height uint64) {
+    ms.pendingMu.Lock()
+    defer ms.pendingMu.Unlock()
+    delete(ms.pendingHeights, height)
+}
+
+// waitForPendingBlock waits up to pendingBlockTimeout for any block at the given height
+// to be added to the chain. Returns true if a block appeared, false if timeout occurred.
+func (ms *PosMiningState) waitForPendingBlock(bc *chain.Blockchain, height uint64) bool {
+    // If no pending announcement for this height, start mining immediately
+    ms.pendingMu.RLock()
+    _, pending := ms.pendingHeights[height]
+    ms.pendingMu.RUnlock()
+    if !pending {
+        return false
+    }
+
+    log.Printf("[miner] Block at height %d is pending – waiting up to %v for it to arrive",
+        height, ms.pendingBlockTimeout)
+
+    deadline := time.Now().Add(ms.pendingBlockTimeout)
+    ticker := time.NewTicker(200 * time.Millisecond)
+    defer ticker.Stop()
+
+    for time.Now().Before(deadline) {
+        <-ticker.C
+        if bc.GetBlock(height) != nil {
+            log.Printf("[miner] Pending block at height %d was added – skipping own mining", height)
+            ms.ClearPendingHeight(height)
+            return true
+        }
+    }
+
+    log.Printf("[miner] Timeout waiting for pending block at height %d – proceeding to mine", height)
+    ms.ClearPendingHeight(height)
+    return false
 }
 
 func (ms *PosMiningState) IsMining() bool    { return ms.mining }
@@ -266,6 +327,11 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
 	miningInterval := ms.miningInterval
 	ms.mu.RUnlock()
 
+	// Add random jitter (0 to miningInterval/2) to reduce collision probability
+	jitter := time.Duration(rand.Int63n(int64(miningInterval / 2)))
+	time.Sleep(jitter)
+	log.Printf("[miner] Started mining loop with base interval %v + initial jitter %v", miningInterval, jitter)
+
 	ticker := time.NewTicker(miningInterval)
 	defer ticker.Stop()
 
@@ -313,8 +379,17 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
 		}
 		if existing := bc.GetBlock(height); existing != nil {
 			// Another block at this height already exists locally (likely received from peers).
+			// Remove it from pending set if present.
+			ms.ClearPendingHeight(height)
 			continue
 		}
+
+		// ----- NEW: Wait for a pending block announcement at this height -----
+		if ms.waitForPendingBlock(bc, height) {
+			// A block was added while we waited – continue to next iteration
+			continue
+		}
+		// -----------------------------------------------------------------
 
 		if ms.powEngine == nil {
 			continue
@@ -439,6 +514,9 @@ func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, _ common.QuantumAdd
 			height, minerToUse.String()[:12],
 			new(big.Int).Div(blockReward, big.NewInt(1e18)).String())
 		log.Printf("[miner]   Total mined this session: %d", totalMined)
+
+		// Clear any pending marker for this height, now that we have mined it
+		ms.ClearPendingHeight(height)
 
 		if p2pNode != nil {
 			go broadcastMinedBlock(p2pNode, newBlock, ms)
