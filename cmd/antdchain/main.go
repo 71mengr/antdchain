@@ -621,9 +621,9 @@ func acquireDataDirLock(dataDir string) (*os.File, error) {
 		return nil, fmt.Errorf("failed to open data directory lock file: %w", err)
 	}
 
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockFileExclusiveNonBlocking(lockFile); err != nil {
 		_ = lockFile.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, errDataDirLocked) {
 			return nil, fmt.Errorf("data directory is already in use by another ANTDChain node: %s", dataDir)
 		}
 		return nil, fmt.Errorf("failed to lock data directory: %w", err)
@@ -673,7 +673,7 @@ func runNode(c *cli.Context) error {
 		return err
 	}
 	defer func() {
-		_ = syscall.Flock(int(dataDirLock.Fd()), syscall.LOCK_UN)
+		_ = unlockFile(dataDirLock)
 		_ = dataDirLock.Close()
 	}()
 
