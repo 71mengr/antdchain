@@ -1252,15 +1252,28 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 	}
 
-	// ----- CORRECTED NAT SECTION -----
-    if cfg.EnableNATService {
-        opts = append(opts,
-            libp2p.NATPortMap(),        // UPnP / NAT-PMP port mapping
-            libp2p.EnableNATService(),  // Enable the AutoNAT service
-            libp2p.EnableRelay(),       // Enable circuit relay for NAT traversal
-            libp2p.EnableHolePunching(), // Enable hole punching
-        )
-    }
+	// NAT options for public reachability when running behind routers/firewalls.
+	if cfg.EnableNATService {
+		opts = append(opts,
+			libp2p.NATPortMap(),         // UPnP / NAT-PMP port mapping
+			libp2p.EnableNATService(),   // Enable the AutoNAT service
+			libp2p.EnableRelay(),        // Enable circuit relay for NAT traversal
+			libp2p.EnableHolePunching(), // Enable hole punching
+		)
+	}
+
+	// Optional external address announcement. Set ANTD_EXTERNAL_IP when auto-detection is wrong.
+	if externalIP := os.Getenv("ANTD_EXTERNAL_IP"); externalIP != "" {
+		externalAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", externalIP, cfg.Port))
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("invalid ANTD_EXTERNAL_IP %q: %w", externalIP, err)
+		}
+		opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			return append(addrs, externalAddr)
+		}))
+		logger.Infof("Configured external address: %s", externalAddr)
+	}
 	// ---------------------------------
 
 	// Create libp2p host
@@ -1268,15 +1281,6 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
-	}
-
-	// Optional: force announce a specific external IP if you know it (useful for fixed public IP)
-	if externalIP := os.Getenv("129.151.164.202"); externalIP != "" {
-		externalAddr, _ := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", externalIP, cfg.Port))
-		h.SetAddrsFactory(func(addrs []ma.Multiaddr) []ma.Multiaddr {
-			return append(addrs, externalAddr)
-		})
-		logger.Infof("Forced external address: %s", externalAddr)
 	}
 
 	logger.Infof("P2P node started | ID: %s | Addresses:", h.ID().String()[:12])
