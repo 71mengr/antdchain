@@ -1181,8 +1181,11 @@ func runNode(c *cli.Context) error {
 	<-sigChan
 	logger.Info("Shutting down ANTDChain node...")
 
+	// Allow in-flight sync to finish so the last received block is persisted.
+	waitForFinalBlockSync(bc, p2pNode, logger, 30*time.Second)
+
 	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
 	// Stop mining
@@ -1195,11 +1198,40 @@ func runNode(c *cli.Context) error {
 		logger.Warn("Failed to shutdown RPC server gracefully:", err)
 	}
 
+	// Stop P2P networking after sync window closes.
+	if p2pNode != nil {
+		p2pNode.Stop()
+	}
+
 	// Close blockchain
 	bc.Close()
 
 	logger.Info("ANTDChain node stopped gracefully")
 	return nil
+}
+
+func waitForFinalBlockSync(bc *chain.Blockchain, p2pNode *p2p.Node, logger *logrus.Logger, maxWait time.Duration) {
+	if bc == nil || p2pNode == nil {
+		return
+	}
+
+	startHeight := bc.GetChainHeight()
+	deadline := time.Now().Add(maxWait)
+
+	for time.Now().Before(deadline) {
+		if p2pNode.IsSynced() {
+			currentHeight := bc.GetChainHeight()
+			if currentHeight > startHeight {
+				logger.Infof("Final sync complete before shutdown (height %d → %d)", startHeight, currentHeight)
+			} else {
+				logger.Infof("Chain already synced at height %d before shutdown", currentHeight)
+			}
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	logger.Warnf("Timed out waiting for final block sync after %s; proceeding with shutdown", maxWait)
 }
 
 func configureConsoleLogging(dataDir string, logger *logrus.Logger) (*os.File, func(), error) {
