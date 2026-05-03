@@ -1263,7 +1263,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	}
 
 	// Optional external address announcement. Set ANTD_EXTERNAL_IP when auto-detection is wrong.
-	if externalIP := os.Getenv("ANTD_EXTERNAL_IP"); externalIP != "" {
+	if externalIP := os.Getenv("129.151.164.202"); externalIP != "" {
 		externalAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", externalIP, cfg.Port))
 		if err != nil {
 			cancel()

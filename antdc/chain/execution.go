@@ -31,14 +31,7 @@ func (bc *Blockchain) executeBlockTransactions(b *block.Block) (*big.Int, uint64
 	totalFees := big.NewInt(0)
 	totalGasUsed := uint64(0)
 
-	// Sort and prevalidate transactions before execution.
-	// This prevents nonce replay/double-spend attacks inside the same block.
-	sortedTxs, err := bc.sortAndValidateTransactions(b.Txs)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	for i, transaction := range sortedTxs {
+	for i, transaction := range b.Txs {
 		// Validate transaction before execution
 		if err := bc.validateTransactionForExecution(transaction, i); err != nil {
 			return nil, 0, fmt.Errorf("transaction %d invalid: %w", i, err)
@@ -58,7 +51,7 @@ func (bc *Blockchain) executeBlockTransactions(b *block.Block) (*big.Int, uint64
 		// Log execution progress for large blocks
 		if i > 0 && i%100 == 0 {
 			log.Printf("[blockchain] Executed %d/%d transactions in block %d",
-				i, len(sortedTxs), b.Header.Number.Uint64())
+				i, len(b.Txs), b.Header.Number.Uint64())
 		}
 	}
 
