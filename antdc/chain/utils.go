@@ -5,13 +5,12 @@
 package chain
 import (
     "bytes"
-    "crypto/sha256"
     "math/big"
     "strings"
 
     "github.com/antdaza/antdchain/antdc/block"
-    "github.com/antdaza/antdchain/common"
     "github.com/antdaza/antdchain/antdc/tx"
+    "github.com/antdaza/antdchain/common"
 )
 
 // formatBalance formats balance in ANTD units
@@ -65,59 +64,9 @@ func formatWei(wei *big.Int) string {
     return antd.Text('f', 6)
 }
 
-// CalcTxRoot calculates the Merkle root of transactions
+// CalcTxRoot calculates the transaction root using the canonical block hash algorithm.
 func CalcTxRoot(txs []*tx.Tx) common.Hash {
-    // Handle nil or empty slice
-    if txs == nil || len(txs) == 0 {
-        return common.Hash{}
-    }
-
-    // Special case: single transaction - root is just the transaction hash
-    if len(txs) == 1 {
-        tx := txs[0]
-        if tx == nil {
-            return common.Hash{}
-        }
-        return tx.Hash()
-    }
-
-    // Multiple transactions: calculate Merkle tree
-    hashes := make([]common.Hash, len(txs))
-    for i, transaction := range txs {
-        if transaction == nil {
-            hashes[i] = common.Hash{}
-        } else {
-            hashes[i] = transaction.Hash()
-        }
-    }
-
-    return computeMerkleRoot(hashes)
-}
-
-// computeMerkleRoot - Standard Bitcoin-style Merkle root calculation
-func computeMerkleRoot(hashes []common.Hash) common.Hash {
-    if len(hashes) == 0 {
-        return common.Hash{}
-    }
-
-    // Standard Merkle tree implementation
-    for len(hashes) > 1 {
-        // If odd number, duplicate last hash
-        if len(hashes)%2 == 1 {
-            hashes = append(hashes, hashes[len(hashes)-1])
-        }
-
-        nextLevel := make([]common.Hash, len(hashes)/2)
-        for i := 0; i < len(hashes); i += 2 {
-            // Double SHA-256 (Bitcoin style)
-            firstHash := sha256.Sum256(append(hashes[i][:], hashes[i+1][:]...))
-            secondHash := sha256.Sum256(firstHash[:])
-            nextLevel[i/2] = common.BytesToHash(secondHash[:])
-        }
-        hashes = nextLevel
-    }
-
-    return hashes[0]
+    return block.CalculateTxHash(txs)
 }
 
 // diffToCompact converts difficulty to compact format
