@@ -28,7 +28,7 @@ DefaultMaxTxsPerSender   = 64
 DefaultMaxTxSize         = 128 * 1024    // 128KB
 DefaultMinGasPrice       = 1_000_000_000 // 1 Gwei
 DefaultMaxFutureNonceGap = 1024
-DefaultMinConfirmations  = 10
+DefaultMinConfirmations  = 50
 DefaultStaleBlockAge     = 1000
 DefaultTxTTL             = 24 * time.Hour
 DefaultCleanupInterval   = 2 * time.Minute
@@ -376,13 +376,6 @@ for hash, t := range p.txs {
 if h, ok := p.submitHeight[hash]; ok && cur >= h {
 confirmations := cur - h + 1
 if confirmations >= minConfirmations {
-list = append(list, t)
-} else if time.Since(p.submitTime[hash]) > 45*time.Second {
-list = append(list, t)
-}
-} else {
-// If no submit height, include after 45 seconds
-if time.Since(p.submitTime[hash]) > 45*time.Second {
 list = append(list, t)
 }
 }
