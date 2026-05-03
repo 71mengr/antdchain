@@ -143,6 +143,7 @@ Nonce     uint64  `json:"nonce"`
 Gas       uint64  `json:"gas"`
 GasPrice  string  `json:"gasPrice"`
 Signature string  `json:"signature"`
+Timestamp uint64  `json:"timestamp"`
 }{
 From:      tx.From.String(),
 To:        to,
@@ -153,6 +154,7 @@ Nonce:     tx.Nonce,
 Gas:       tx.Gas,
 GasPrice:  gpStr,
 Signature: hex.EncodeToString(tx.Signature),
+Timestamp: tx.Timestamp,
 })
 }
 
