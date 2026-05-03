@@ -177,7 +177,7 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 	// SAFE TRANSACTION INCLUSION
 	var includedTxs []*tx.Tx
 	if pool := bc.txPool; pool != nil {
-		candidates := pool.GetPending()
+		candidates := pool.GetConfirmedTxs(bc, bc.MinConfirmations())
 
 		// Only include transactions older than 5 seconds → ensures propagation
 		propagationDelay := uint64(5)
