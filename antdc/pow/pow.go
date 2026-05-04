@@ -123,8 +123,15 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
 	if len(window) > DifficultyAdjustment {
 		window = window[1:]
 	}
+	return CalculateDifficultyFromWindow(new(big.Int).Set(p.difficulty), height, window)
+}
 
-	return computeAdjustedDifficulty(new(big.Int).Set(p.difficulty), height, window)
+// CalculateDifficultyFromWindow calculates difficulty from a base difficulty and observed block times.
+func CalculateDifficultyFromWindow(baseDifficulty *big.Int, height uint64, blockTimes []uint64) *big.Int {
+	if baseDifficulty == nil {
+		baseDifficulty = big.NewInt(MinDifficulty)
+	}
+	return computeAdjustedDifficulty(new(big.Int).Set(baseDifficulty), height, blockTimes)
 }
 
 // AdjustDifficulty recalculates difficulty every DifficultyAdjustment blocks.
@@ -142,7 +149,7 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 		p.blockTimes = p.blockTimes[1:]
 	}
 
-	adjusted := computeAdjustedDifficulty(new(big.Int).Set(p.difficulty), height, p.blockTimes)
+	adjusted := CalculateDifficultyFromWindow(new(big.Int).Set(p.difficulty), height, p.blockTimes)
 	if adjusted.Cmp(p.difficulty) == 0 {
 		return p.difficulty
 	}

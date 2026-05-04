@@ -115,12 +115,12 @@ func NewHeader(
 		// Genesis block — fixed difficulty
 		difficulty = big.NewInt(1)
 	} else if powEngine != nil && parent != nil {
-		// Normal block — use dynamic PoS difficulty
-		difficulty = powEngine.CalculateExpectedDifficulty(
-			number.Uint64(),
-			parent.Header.Time,
-			currentTime,
-		)
+		// Normal block — use parent difficulty as base for deterministic chain-wide difficulty calculation
+		baseDifficulty := parent.Header.Difficulty
+		if baseDifficulty == nil {
+			baseDifficulty = big.NewInt(1)
+		}
+		difficulty = pow.CalculateDifficultyFromWindow(baseDifficulty, number.Uint64(), []uint64{maxUint64(1, currentTime-parent.Header.Time)})
 	} else {
 		// Fallback (testing or no engine) — default to 1
 		difficulty = big.NewInt(1)
@@ -162,6 +162,12 @@ func NewHeader(
 	return header, nil
 }
 
+func maxUint64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
 // Validate performs basic header validation
 func (h *Header) Validate(parent *Header) error {
 	if h == nil {

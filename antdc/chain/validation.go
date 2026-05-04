@@ -326,20 +326,8 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 		ratio = 0.25
 	}
 
-	newDiff := new(big.Float).SetInt(expected)
-	newDiff.Mul(newDiff, big.NewFloat(ratio))
-	adjusted := new(big.Int)
-	newDiff.Int(adjusted)
-
-	minDifficulty := big.NewInt(pow.MinDifficulty)
-	maxDifficulty := big.NewInt(pow.MaxDifficulty)
-	if adjusted.Cmp(minDifficulty) < 0 {
-		return minDifficulty
-	}
-	if adjusted.Cmp(maxDifficulty) > 0 {
-		return maxDifficulty
-	}
-	return adjusted
+	_ = ratio // ratio derivation intentionally retained for debugging parity with prior implementation
+	return pow.CalculateDifficultyFromWindow(expected, height, window)
 }
 
 // validateTransactionRoot verifies the transaction Merkle root
