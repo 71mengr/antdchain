@@ -1319,6 +1319,11 @@ func (api *EthAPI) SendRawTransaction(raw string) (string, error) {
 	if err := api.node.Blockchain().TxPool().AddTx(txObj, api.node.Blockchain()); err != nil {
 		return "", err
 	}
+	if p2pNode := api.node.P2PNode(); p2pNode != nil {
+		if err := p2pNode.BroadcastTx(txObj); err != nil {
+			return "", err
+		}
+	}
 	return txObj.Hash().Hex(), nil
 }
 

@@ -6098,6 +6098,10 @@ func (c *Console) handleMempoolInfo(parts []string) {
 		fmt.Printf("   %s: %d tx(s)\n", addr.String()[:8], count)
 	}
 
+	if len(txsByAddress) > 0 {
+		fmt.Println()
+	}
+
 	// Show fee distribution
 	if len(pendingTxs) > 0 {
 		fmt.Printf("\n💰 Fee Distribution:\n")
@@ -6135,7 +6139,7 @@ func (c *Console) handleMempoolInfo(parts []string) {
 		}
 	}
 
-	fmt.Println("════════════════════════════════════════════════")
+	fmt.Printf("\n════════════════════════════════════════════════\n")
 	fmt.Println("💡 Use 'rebroadcast' to resend all pending transactions")
 	fmt.Println("💡 Use 'rebroadcast <txhash>' to resend specific transaction")
 }
