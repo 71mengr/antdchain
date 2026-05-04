@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
+	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -267,11 +268,7 @@ func (bc *Blockchain) validateDifficulty(b *block.Block, parent *block.Block) er
 		return errors.New("PoS engine not initialized")
 	}
 
-	expectedDifficulty := bc.pow.CalculateExpectedDifficulty(
-		b.Header.Number.Uint64(),
-		parent.Header.Time,
-		b.Header.Time,
-	)
+	expectedDifficulty := bc.calculateExpectedDifficultyFromChainState(b, parent)
 
 	if b.Header.Difficulty.Cmp(expectedDifficulty) != 0 {
 		return fmt.Errorf("invalid difficulty: got %s, expected %s",
@@ -279,6 +276,70 @@ func (bc *Blockchain) validateDifficulty(b *block.Block, parent *block.Block) er
 	}
 
 	return nil
+}
+
+func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, parent *block.Block) *big.Int {
+	height := b.Header.Number.Uint64()
+	if parent == nil || parent.Header == nil || parent.Header.Difficulty == nil {
+		return bc.pow.CalculateExpectedDifficulty(height, 0, b.Header.Time)
+	}
+	if height == 0 {
+		return bc.pow.CalculateExpectedDifficulty(height, parent.Header.Time, b.Header.Time)
+	}
+
+	expected := new(big.Int).Set(parent.Header.Difficulty)
+	if height%uint64(pow.DifficultyAdjustment) != 0 {
+		return expected
+	}
+
+	window := make([]uint64, 0, pow.DifficultyAdjustment)
+	curr := parent
+	for len(window) < pow.DifficultyAdjustment && curr != nil && curr.Header != nil && curr.Header.Number.Uint64() > 0 {
+		ancestor, err := bc.GetBlockByHash(curr.Header.ParentHash)
+		if err != nil || ancestor == nil || ancestor.Header == nil {
+			break
+		}
+
+		delta := curr.Header.Time - ancestor.Header.Time
+		if delta == 0 {
+			delta = 1
+		}
+		window = append(window, delta)
+		curr = ancestor
+	}
+
+	delta := b.Header.Time - parent.Header.Time
+	if delta == 0 {
+		delta = 1
+	}
+	window = append(window, delta)
+
+	var total uint64
+	for _, t := range window {
+		total += t
+	}
+	avg := float64(total) / float64(len(window))
+	ratio := float64(pow.BlockTimeTarget) / avg
+	if ratio > 4.0 {
+		ratio = 4.0
+	} else if ratio < 0.25 {
+		ratio = 0.25
+	}
+
+	newDiff := new(big.Float).SetInt(expected)
+	newDiff.Mul(newDiff, big.NewFloat(ratio))
+	adjusted := new(big.Int)
+	newDiff.Int(adjusted)
+
+	minDifficulty := big.NewInt(pow.MinDifficulty)
+	maxDifficulty := big.NewInt(pow.MaxDifficulty)
+	if adjusted.Cmp(minDifficulty) < 0 {
+		return minDifficulty
+	}
+	if adjusted.Cmp(maxDifficulty) > 0 {
+		return maxDifficulty
+	}
+	return adjusted
 }
 
 // validateTransactionRoot verifies the transaction Merkle root
