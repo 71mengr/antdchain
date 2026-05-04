@@ -338,11 +338,15 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 	}
 
 	// ====================
-	// INITIALIZE PROOF OF STAKE ENGINE
+	// INITIALIZE PROOF OF POW ENGINE
 	// ====================
-	log.Printf("[blockchain] Initializing Proof of Stake engine...")
+	log.Printf("[blockchain] Initializing Proof of Pow engine...")
 	posEngine := pow.NewPoW()
 	bc.pow = posEngine
+	if latest != nil && latest.Header != nil && latest.Header.Difficulty != nil {
+		bc.pow.SetDifficulty(new(big.Int).Set(latest.Header.Difficulty))
+		log.Printf("[blockchain] PoS difficulty initialized from tip: %s", latest.Header.Difficulty.String())
+	}
 	bc.restoreActiveStakersToPoW()
 
 	// ====================

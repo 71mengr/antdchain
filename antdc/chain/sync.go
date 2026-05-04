@@ -872,7 +872,11 @@ func (bc *Blockchain) GetBlock(height uint64) *block.Block {
 	// 1. Get canonical hash for this height
 	canonicalHash, err := bc.db.GetCanonicalHash(height)
 	if err != nil || canonicalHash == (common.Hash{}) {
-		log.Printf("[blockchain] No canonical hash for height %d: %v", height, err)
+		if err != nil {
+			log.Printf("[blockchain] No canonical hash for height %d: %v", height, err)
+		} else {
+			log.Printf("[blockchain] No canonical hash for height %d", height)
+		}
 		return nil
 	}
 
