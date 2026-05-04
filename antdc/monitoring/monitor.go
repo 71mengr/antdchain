@@ -32,6 +32,14 @@ type SupplyMonitor struct {
     lastBlock        uint64
     alertCounts      map[string]int
     logger           *log.Logger
+    blockedAddresses map[common.QuantumAddress]BlockedAddress
+}
+
+// BlockedAddress tracks a forged-amount sender lock
+type BlockedAddress struct {
+    Address   common.QuantumAddress
+    Reason    string
+    BlockedAt time.Time
 }
 
 // Creates a new supply monitor
@@ -46,6 +54,7 @@ func NewSupplyMonitor(bc BlockchainProvider, config MonitorConfig, isMainKing bo
         blockchain:       bc,
         isMainKing:       isMainKing,
         alertCounts:      make(map[string]int),
+        blockedAddresses: make(map[common.QuantumAddress]BlockedAddress),
     }
 
     // Initialize logger
@@ -186,6 +195,25 @@ func (sm *SupplyMonitor) analyzeTransaction(t TransactionProvider, blockNumber u
     sm.transactionCount[t.GetFrom()]++
     sm.mu.Unlock()
 
+    if sm.IsAddressBlocked(t.GetFrom()) {
+        toAddr := common.QuantumAddress{}
+        if t.GetTo() != nil {
+            toAddr = *t.GetTo()
+        }
+        sm.alerts <- TransactionAlert{
+            Type:        "BLOCKED_ADDRESS_ATTEMPT",
+            Severity:    "critical",
+            Message:     "Blocked forged-amount address attempted to send transaction",
+            TxHash:      t.GetHash(),
+            Amount:      new(big.Int).Set(t.GetValue()),
+            From:        t.GetFrom(),
+            To:          toAddr,
+            BlockNumber: blockNumber,
+            Timestamp:   time.Unix(int64(blockTime), 0),
+        }
+        return
+    }
+
     // Check for suspicious amount
     if sm.config.AlertThreshold != nil && t.GetValue().Cmp(sm.config.AlertThreshold) > 0 {
         toAddr := common.QuantumAddress{}
@@ -221,6 +249,34 @@ func (sm *SupplyMonitor) analyzeTransaction(t TransactionProvider, blockNumber u
             Type:        "SUPPLY_MANIPULATION",
             Severity:    "critical",
             Message:     "Potential supply manipulation detected",
+            TxHash:      t.GetHash(),
+            Amount:      new(big.Int).Set(t.GetValue()),
+            From:        t.GetFrom(),
+            To:          toAddr,
+            BlockNumber: blockNumber,
+            Timestamp:   time.Unix(int64(blockTime), 0),
+            Data:        data,
+        }
+    }
+
+    // check for forged/invalid amounts and unauthorized spend patterns
+    if sm.isForgedAmountTransaction(t) {
+        sm.BlockAddress(t.GetFrom(), "forged amount / unauthorized spend")
+        toAddr := common.QuantumAddress{}
+        if t.GetTo() != nil {
+            toAddr = *t.GetTo()
+        }
+
+        senderBalance := sm.blockchain.State().GetBalance(t.GetFrom())
+        data, _ := json.Marshal(map[string]interface{}{
+            "sender_balance": senderBalance.String(),
+            "tx_amount":      t.GetValue().String(),
+        })
+
+        sm.alerts <- TransactionAlert{
+            Type:        "FORGED_AMOUNT",
+            Severity:    "critical",
+            Message:     "Forged amount or unauthorized spend pattern detected",
             TxHash:      t.GetHash(),
             Amount:      new(big.Int).Set(t.GetValue()),
             From:        t.GetFrom(),
@@ -275,6 +331,53 @@ func (sm *SupplyMonitor) isSupplyManipulation(t TransactionProvider) bool {
     }
 
     return false
+}
+
+// Checks for forged amounts and wallet-source mismatches
+func (sm *SupplyMonitor) isForgedAmountTransaction(t TransactionProvider) bool {
+    if t.GetValue() == nil || t.GetValue().Sign() <= 0 {
+        return true
+    }
+
+    senderBalance := sm.blockchain.State().GetBalance(t.GetFrom())
+    if senderBalance == nil {
+        return true
+    }
+
+    fee := big.NewInt(0)
+    if t.GetGasPrice() != nil {
+        fee = new(big.Int).Mul(new(big.Int).SetUint64(t.GetGas()), t.GetGasPrice())
+    }
+    totalCost := new(big.Int).Add(t.GetValue(), fee)
+
+    // Any amount that cannot be covered by sender wallet balance is suspicious.
+    return senderBalance.Cmp(totalCost) < 0
+}
+
+// BlockAddress immediately blocks a sender due to forged-amount behavior.
+func (sm *SupplyMonitor) BlockAddress(addr common.QuantumAddress, reason string) {
+    sm.mu.Lock()
+    sm.blockedAddresses[addr] = BlockedAddress{Address: addr, Reason: reason, BlockedAt: time.Now()}
+    sm.mu.Unlock()
+}
+
+// UnblockAddressByGovernance unblocks only when called by governance key.
+func (sm *SupplyMonitor) UnblockAddressByGovernance(caller, addr common.QuantumAddress) error {
+    if caller != sm.config.MainKingAddress {
+        return fmt.Errorf("unauthorized: only main king can unblock")
+    }
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+    delete(sm.blockedAddresses, addr)
+    return nil
+}
+
+// IsAddressBlocked returns true when sender is blocked from forged-amount activity.
+func (sm *SupplyMonitor) IsAddressBlocked(addr common.QuantumAddress) bool {
+    sm.mu.RLock()
+    defer sm.mu.RUnlock()
+    _, blocked := sm.blockedAddresses[addr]
+    return blocked
 }
 
 // Checks for spam patterns

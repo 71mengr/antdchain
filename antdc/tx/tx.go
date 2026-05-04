@@ -3,6 +3,7 @@
 // for more information.
 
 package tx
+
 import (
 "crypto/sha256"
 "encoding/binary"
@@ -107,8 +108,12 @@ return errors.New("zero gas")
 if tx.GasPrice == nil || tx.GasPrice.Sign() <= 0 {
 return errors.New("invalid gas price")
 }
-if tx.Value == nil || tx.Value.Sign() < 0 {
-return errors.New("invalid value")
+
+if tx.Value == nil || tx.Value.Sign() <= 0 {
+return errors.New("invalid value: amount must be greater than zero")
+}
+if tx.Value.BitLen() > 256 {
+return errors.New("invalid value: amount exceeds allowed precision")
 }
 if len(tx.PubKey) != quantum.MLDSA65PublicKeySize {
 return errors.New("invalid public key length")

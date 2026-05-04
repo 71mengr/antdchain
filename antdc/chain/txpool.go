@@ -268,6 +268,11 @@ return errors.New("invalid signature")
 hash := t.Hash()
 sender := t.From
 
+if p.chain != nil && p.chain.monitor != nil && p.chain.monitor.IsAddressBlocked(sender) {
+txValidationErrors.WithLabelValues("blocked_sender").Inc()
+return errors.New("sender blocked due to forged amount activity")
+}
+
 p.mu.Lock()
 defer p.mu.Unlock()
 
