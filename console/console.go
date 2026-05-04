@@ -2035,6 +2035,15 @@ func (c *Console) handleSend(parts []string) {
 			fmt.Printf("   Transaction is in local pool but not broadcast\n")
 		} else {
 			fmt.Printf("✅ Transaction broadcast to network\n")
+
+			for attempt := 1; attempt <= 2; attempt++ {
+				time.Sleep(200 * time.Millisecond)
+				if err := c.node.p2pNode.BroadcastTxForce(txm); err != nil {
+					fmt.Printf("⚠️  Warning: Rebroadcast attempt %d failed: %v\n", attempt, err)
+				} else {
+					fmt.Printf("✅ Rebroadcast attempt %d sent to network\n", attempt)
+				}
+			}
 		}
 	} else {
 		fmt.Printf("⚠️  P2P node not available\n")

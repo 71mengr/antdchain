@@ -446,6 +446,47 @@ func (n *Node) BroadcastTx(t *tx.Tx) error {
 	return nil
 }
 
+// BroadcastTxForce publishes a transaction even if it was recently broadcast.
+// Useful for explicit rebroadcast flows where stronger propagation is required.
+func (n *Node) BroadcastTxForce(t *tx.Tx) error {
+	if t == nil {
+		return errors.New("nil transaction")
+	}
+
+	if err := t.Validate(); err != nil {
+		return fmt.Errorf("invalid transaction: %w", err)
+	}
+	if valid, err := t.Verify(); err != nil || !valid {
+		return errors.New("invalid signature")
+	}
+
+	hash := t.Hash()
+	data, err := json.Marshal(t)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tx: %w", err)
+	}
+
+	msg := make([]byte, 1+len(data))
+	msg[0] = msgTypeTx
+	copy(msg[1:], data)
+
+	if err := n.topic.Publish(n.ctx, msg); err != nil {
+		return fmt.Errorf("failed to publish tx: %w", err)
+	}
+
+	n.knownTxsMu.Lock()
+	n.knownTxs[hash] = time.Now()
+	n.knownTxsMu.Unlock()
+
+	n.logger.Infof("Force-broadcast tx %s (nonce=%d, value=%s)",
+		hash.String()[:10],
+		t.Nonce,
+		t.Value.String(),
+	)
+
+	return nil
+}
+
 // handleMessages processes incoming pubsub messages
 func (n *Node) handleMessages() {
 	for {
