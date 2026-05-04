@@ -1621,8 +1621,22 @@ func (c *Console) handleMonitor(parts []string) {
 
 func (c *Console) handleSupplyStats() {
 	fmt.Println("💰 Network Supply Statistics:")
-	fmt.Println("  Total Supply: <not available>")
-	fmt.Println("  Unique Addresses: <not available>")
+	if c == nil || c.node == nil || c.node.blockchain == nil {
+		fmt.Println("  Total Supply: <not available>")
+		fmt.Println("  Unique Addresses: <not available>")
+		return
+	}
+
+	monitor := c.node.blockchain.Monitor()
+	if monitor == nil {
+		fmt.Println("  Total Supply: <not available>")
+		fmt.Println("  Unique Addresses: <not available>")
+		return
+	}
+
+	stats := monitor.GetSupplyStats()
+	fmt.Printf("  Total Supply: %s ANTD\n", stats.TotalSupply)
+	fmt.Printf("  Unique Addresses: %d\n", stats.UniqueAddresses)
 }
 
 func (c *Console) handleAlerts(parts []string) {
