@@ -410,7 +410,6 @@ func (sm *SupplyMonitor) updateDistribution(addr common.QuantumAddress, amount *
 // Recalculates total supply
 func (sm *SupplyMonitor) updateSupply() {
     sm.mu.Lock()
-    defer sm.mu.Unlock()
 
     // Reset total supply
     sm.totalSupply = big.NewInt(0)
@@ -423,20 +422,30 @@ func (sm *SupplyMonitor) updateSupply() {
     }
 
     // Check if supply exceeds maximum
-    if sm.config.MaxSupply != nil && sm.totalSupply.Cmp(sm.config.MaxSupply) > 0 {
-        data, _ := json.Marshal(map[string]interface{}{
-            "current_supply": sm.totalSupply.String(),
-            "max_supply":     sm.config.MaxSupply.String(),
-        })
+    shouldAlert := sm.config.MaxSupply != nil && sm.totalSupply.Cmp(sm.config.MaxSupply) > 0
+    currentSupply := new(big.Int).Set(sm.totalSupply)
+    maxSupply := (*big.Int)(nil)
+    if sm.config.MaxSupply != nil {
+        maxSupply = new(big.Int).Set(sm.config.MaxSupply)
+    }
+    sm.mu.Unlock()
 
-        sm.alerts <- TransactionAlert{
-            Type:      "SUPPLY_EXCEEDED",
-            Severity:  "critical",
-            Message:   fmt.Sprintf("Total supply exceeded maximum: %s > %s",
-                sm.formatANTD(sm.totalSupply), sm.formatANTD(sm.config.MaxSupply)),
-            Timestamp: time.Now(),
-            Data:      data,
-        }
+    if !shouldAlert {
+        return
+    }
+
+    data, _ := json.Marshal(map[string]interface{}{
+        "current_supply": currentSupply.String(),
+        "max_supply":     maxSupply.String(),
+    })
+
+    sm.alerts <- TransactionAlert{
+        Type:      "SUPPLY_EXCEEDED",
+        Severity:  "critical",
+        Message:   fmt.Sprintf("Total supply exceeded maximum: %s > %s",
+            sm.formatANTD(currentSupply), sm.formatANTD(maxSupply)),
+        Timestamp: time.Now(),
+        Data:      data,
     }
 }
 
