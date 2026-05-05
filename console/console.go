@@ -81,6 +81,17 @@ func mustParseQuantumAddress(input string) common.QuantumAddress {
 	return common.QuantumAddress(qAddr)
 }
 
+func normalizeCommandToken(input string) string {
+	token := strings.TrimSpace(input)
+	for _, marker := range []string{`\r\n`, `\n`, `\r`} {
+		if idx := strings.Index(token, marker); idx >= 0 {
+			token = token[:idx]
+			break
+		}
+	}
+	return strings.TrimSpace(token)
+}
+
 func ethAddressMatchesQuantumAddress(ethAddr interface{ Bytes() []byte }, quantumAddr common.QuantumAddress) bool {
 	return bytes.Equal(ethAddr.Bytes(), quantumAddr.Bytes())
 }
@@ -1354,7 +1365,7 @@ func (c *Console) Start() {
 		}
 
 		parts := strings.Fields(input)
-		command := parts[0]
+		command := normalizeCommandToken(parts[0])
 
 		switch command {
 		case "exit", "quit":
@@ -1573,13 +1584,13 @@ func parseOneShotCommandArgs(args []string) ([]string, bool) {
 	if commandIdx == -1 {
 		return nil, false
 	}
-	command := strings.TrimSpace(args[commandIdx])
+	command := normalizeCommandToken(args[commandIdx])
 	if command == "" {
 		return nil, false
 	}
 
 	switch command {
-	case "createaddress", "import", "export", "listwallets", "listaddresses", "lock", "unlock", "balance", "datadir":
+	case "createaddress", "import", "export", "listwallets", "listaddresses", "lock", "unlock", "balance", "datadir", "supply":
                 return args[commandIdx:], true
 	default:
 		return nil, false
