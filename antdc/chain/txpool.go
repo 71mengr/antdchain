@@ -302,22 +302,23 @@ txDroppedCounter.WithLabelValues("sender_limit").Inc()
 return errors.New("too many pending from sender")
 }
 
-// BALANCE CHECK
+// BALANCE / NONCE CHECKS
+// IMPORTANT: use the txpool lock as little as possible before touching chain state.
+// This avoids lock-order inversions with goroutines that may hold state locks while
+// reading txpool data (which can otherwise look like a hang when adding txs).
 senderAddress := common.BytesToQuantumAddress(sender.Bytes())
+stateNonce := p.chain.State().GetNonce(senderAddress)
 balance := p.chain.State().GetBalance(senderAddress)
+expected := stateNonce
+if len(senderTxs) > 0 {
+expected = senderTxs[len(senderTxs)-1].Nonce + 1
+}
 gasCost := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
 totalCost := new(big.Int).Add(t.Value, gasCost)
 if balance.Cmp(totalCost) < 0 {
 txValidationErrors.WithLabelValues("insufficient_balance").Inc()
 return fmt.Errorf("insufficient balance: have %s, need %s",
 formatBalance(balance), formatBalance(totalCost))
-}
-
-// Nonce checks
-stateNonce := p.chain.State().GetNonce(senderAddress)
-expected := stateNonce
-if len(senderTxs) > 0 {
-expected = senderTxs[len(senderTxs)-1].Nonce + 1
 }
 
 if t.Nonce != expected {
