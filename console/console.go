@@ -1646,8 +1646,35 @@ func (c *Console) handleSupplyStats() {
 	}
 
 	stats := monitor.GetSupplyStats()
-	fmt.Printf("  Total Supply: %s ANTD\n", stats.TotalSupply)
-	fmt.Printf("  Unique Addresses: %d\n", stats.UniqueAddresses)
+	type supplyResult struct {
+		stats *monitoring.SupplyStats
+		err   error
+	}
+
+	resultCh := make(chan supplyResult, 1)
+	go func() {
+		stats := monitor.GetSupplyStats()
+		if stats == nil {
+			resultCh <- supplyResult{err: fmt.Errorf("monitor returned no supply statistics")}
+			return
+		}
+		resultCh <- supplyResult{stats: stats}
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			fmt.Printf("  Total Supply: <error: %v>\n", result.err)
+			fmt.Println("  Unique Addresses: <not available>")
+			return
+		}
+		fmt.Printf("  Total Supply: %s ANTD\n", result.stats.TotalSupply)
+		fmt.Printf("  Unique Addresses: %d\n", result.stats.UniqueAddresses)
+	case <-time.After(3 * time.Second):
+		fmt.Println("  Total Supply: <pending - stats collection is taking longer than expected>")
+		fmt.Println("  Unique Addresses: <pending>")
+		fmt.Println("  ℹ️  The monitor is busy. Retry the command in a moment.")
+	}
 }
 
 func (c *Console) handleAlerts(parts []string) {
