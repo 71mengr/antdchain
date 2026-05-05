@@ -33,6 +33,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/chain"
 	"github.com/antdaza/antdchain/antdc/crypto/quantum"
 	"github.com/antdaza/antdchain/antdc/mining"
+	"github.com/antdaza/antdchain/antdc/monitoring"
 	"github.com/antdaza/antdchain/antdc/p2p"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
@@ -1645,31 +1646,20 @@ func (c *Console) handleSupplyStats() {
 		return
 	}
 
-	stats := monitor.GetSupplyStats()
-	type supplyResult struct {
-		stats *monitoring.SupplyStats
-		err   error
-	}
-
-	resultCh := make(chan supplyResult, 1)
+	resultCh := make(chan *monitoring.SupplyStats, 1)
 	go func() {
-		stats := monitor.GetSupplyStats()
-		if stats == nil {
-			resultCh <- supplyResult{err: fmt.Errorf("monitor returned no supply statistics")}
-			return
-		}
-		resultCh <- supplyResult{stats: stats}
+		resultCh <- monitor.GetSupplyStats()
 	}()
 
 	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			fmt.Printf("  Total Supply: <error: %v>\n", result.err)
+	case stats := <-resultCh:
+		if stats == nil {
+			fmt.Println("  Total Supply: <not available>")
 			fmt.Println("  Unique Addresses: <not available>")
 			return
 		}
-		fmt.Printf("  Total Supply: %s ANTD\n", result.stats.TotalSupply)
-		fmt.Printf("  Unique Addresses: %d\n", result.stats.UniqueAddresses)
+		fmt.Printf("  Total Supply: %s ANTD\n", stats.TotalSupply)
+		fmt.Printf("  Unique Addresses: %d\n", stats.UniqueAddresses)
 	case <-time.After(3 * time.Second):
 		fmt.Println("  Total Supply: <pending - stats collection is taking longer than expected>")
 		fmt.Println("  Unique Addresses: <pending>")
