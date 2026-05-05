@@ -277,14 +277,13 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 		Number:     new(big.Int).Add(parent.Header.Number, big.NewInt(1)),
 		GasLimit:   10_000_000,
 		Time:       currentTime,
-		Difficulty: bc.pow.CalculateExpectedDifficulty(
-			parent.Header.Number.Uint64()+1,
-			parent.Header.Time,
-			currentTime,
-		),
 		Extra:   extraData,
 		Stakers: bc.blockHeaderStakerRegistrations(),
 	}
+	header.Difficulty = bc.calculateExpectedDifficultyFromChainState(
+		&block.Block{Header: header},
+		parent,
+	)
 	if err := applyProtocolHeaderFields(header); err != nil {
 		return nil, nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
 	}
