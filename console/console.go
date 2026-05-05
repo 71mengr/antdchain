@@ -2014,6 +2014,7 @@ func (c *Console) handleSend(parts []string) {
 
 	c.node.mu.Lock()
 	txPool := c.node.blockchain.TxPool()
+	c.node.mu.Unlock()
 
 	// Add transaction to pool
 	var addErr error
@@ -2022,7 +2023,6 @@ func (c *Console) handleSend(parts []string) {
 	} else {
 		addErr = fmt.Errorf("unsupported pool type: %T", txPool)
 	}
-	c.node.mu.Unlock()
 
 	if addErr != nil {
 		fmt.Printf("❌ Failed to add to transaction pool: %v\n", addErr)
