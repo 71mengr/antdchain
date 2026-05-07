@@ -221,6 +221,9 @@ return cpy
 func (p *TxPool) GetNextNonce(addr common.QuantumAddress, _ p2p.Chain) uint64 {
 p.mu.RLock()
 defer p.mu.RUnlock()
+if p.chain == nil || p.chain.State() == nil {
+return 0
+}
 sender := ethToQuantumAddress(addr)
 stateNonce := p.chain.State().GetNonce(common.BytesToQuantumAddress(sender.Bytes()))
 if h := p.nonceTracker[sender]; h >= stateNonce {
@@ -268,7 +271,12 @@ return errors.New("invalid signature")
 hash := t.Hash()
 sender := t.From
 
-if p.chain != nil && p.chain.monitor != nil && p.chain.monitor.IsAddressBlocked(sender) {
+if p.chain == nil || p.chain.State() == nil {
+txValidationErrors.WithLabelValues("chain_unavailable").Inc()
+return errors.New("chain unavailable")
+}
+
+if p.chain.monitor != nil && p.chain.monitor.IsAddressBlocked(sender) {
 txValidationErrors.WithLabelValues("blocked_sender").Inc()
 return errors.New("sender blocked due to forged amount activity")
 }
