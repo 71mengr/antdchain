@@ -28,6 +28,7 @@ import (
     "github.com/antdaza/antdchain/antdc/accounts/keystore"
     "github.com/antdaza/antdchain/antdc/chain"
     "github.com/antdaza/antdchain/antdc/crypto/quantum"
+    "github.com/antdaza/antdchain/antdc/fees"
     "github.com/antdaza/antdchain/antdc/tx"
     "github.com/antdaza/antdchain/common"
 )
@@ -370,7 +371,7 @@ func (w *Wallet) CreateTx(to common.QuantumAddress, value *big.Int, data []byte,
         gas = 21000
     }
     if gasPrice == nil {
-        gasPrice = big.NewInt(1e9) // 1 Gwei
+        gasPrice = fees.AutoGasPriceByAmount(value)
     }
 
     t := tx.NewTx(w.addr, to, value, data, nonce, gas, gasPrice)
@@ -865,7 +866,7 @@ func (wm *WalletManager) SendTransactionWithNonce(from, to common.QuantumAddress
             transaction.Nonce, nextNonce)
 
         // Recreate transaction with correct nonce
-        transaction = tx.NewTx(from, to, amount, nil, nextNonce, 21000, big.NewInt(1e9))
+        transaction = tx.NewTx(from, to, amount, nil, nextNonce, 21000, fees.AutoGasPriceByAmount(amount))
         if err := transaction.Sign(w.privKey, w.pubKey); err != nil {
             return nil, fmt.Errorf("failed to sign corrected transaction: %w", err)
         }

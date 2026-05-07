@@ -32,6 +32,7 @@ import (
 	qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
 	"github.com/antdaza/antdchain/antdc/chain"
 	"github.com/antdaza/antdchain/antdc/crypto/quantum"
+	"github.com/antdaza/antdchain/antdc/fees"
 	"github.com/antdaza/antdchain/antdc/mining"
 	"github.com/antdaza/antdchain/antdc/monitoring"
 	"github.com/antdaza/antdchain/antdc/p2p"
@@ -769,10 +770,10 @@ func handleNonce(rpcClient *RPCClient, addrStr string) {
 
 func handleGasPrice(rpcClient *RPCClient) {
 	gasPrice, err := rpcClient.GetGasPrice()
-	if err != nil {
-		fmt.Printf("❌ Failed to get gas price: %v\n", err)
-		return
-	}
+		if err != nil {
+					fmt.Printf("❌ Failed to get gas price: %v\n", err)
+							return
+								}
 
 	gwei := new(big.Float).Quo(new(big.Float).SetInt(gasPrice), big.NewFloat(1e9))
 	fmt.Printf("⛽ Current gas price: %s Gwei\n", gwei.Text('f', 1))
@@ -1836,11 +1837,14 @@ func (c *Console) handleSend(parts []string) {
 	state := c.node.blockchain.State()
 	stateNonce := state.GetNonce(fromAddr)
 	balance := state.GetBalance(fromAddr)
+	txPool := c.node.blockchain.TxPool()
+	nextNonce := txPool.GetNextNonce(fromAddr, c.node.blockchain)
 	c.node.mu.RUnlock()
 
 	fmt.Printf("\n📊 Current State for %s:\n", fromAddr.String())
 	fmt.Printf("   Balance: %s ANTD\n", formatBalance(balance))
-	fmt.Printf("   Nonce:   %d\n", stateNonce)
+	fmt.Printf("   State Nonce:   %d\n", stateNonce)
+	fmt.Printf("   Next Nonce:    %d (includes pending txs)\n", nextNonce)
 
 	// DETERMINE NONCE
 	var suggestedNonce uint64
@@ -1861,18 +1865,19 @@ func (c *Console) handleSend(parts []string) {
 			pending := txPool.GetPending()
 			c.node.mu.RUnlock()
 
-			// Look for transaction with current nonce
+			// Look for latest pending transaction by this sender to replace
 			for _, pendingTx := range pending {
-				if common.BytesToQuantumAddress(pendingTx.From.Bytes()) == fromAddr && pendingTx.Nonce == stateNonce {
-					suggestedNonce = stateNonce
-					replaceTxHash = pendingTx.Hash()
-					nonceSource = fmt.Sprintf("replace %s", replaceTxHash.String()[:8])
-					break
+				if common.BytesToQuantumAddress(pendingTx.From.Bytes()) == fromAddr {
+					if replaceTxHash == (common.Hash{}) || pendingTx.Nonce > suggestedNonce {
+						suggestedNonce = pendingTx.Nonce
+						replaceTxHash = pendingTx.Hash()
+						nonceSource = fmt.Sprintf("replace %s", replaceTxHash.String()[:8])
+					}
 				}
 			}
 
 			if replaceTxHash == (common.Hash{}) {
-				fmt.Printf("❌ No pending transaction found to replace at nonce %d\n", stateNonce)
+				fmt.Printf("❌ No pending transaction found to replace for sender %s\n", fromAddr.String())
 				fmt.Printf("   Current pending transactions:\n")
 				for _, pendingTx := range pending {
 					if common.BytesToQuantumAddress(pendingTx.From.Bytes()) == fromAddr {
@@ -1893,14 +1898,14 @@ func (c *Console) handleSend(parts []string) {
 			nonceSource = "manual"
 		}
 	} else {
-		// Automatic nonce
-		suggestedNonce = stateNonce
+		// Automatic nonce should include pending transactions in the local pool
+		suggestedNonce = nextNonce
 		nonceSource = "auto"
 	}
 
 	// GAS CALCULATION
-	gasLimit := uint64(21000)             // Standard transfer
-	gasPrice := big.NewInt(2_000_000_000) // 2 Gwei for faster inclusion
+	gasLimit := uint64(21000) // Standard transfer
+	gasPrice := fees.AutoGasPriceByAmount(amount)
 
 	gasCost := new(big.Int).Mul(gasPrice, big.NewInt(int64(gasLimit)))
 	totalCost := new(big.Int).Add(amount, gasCost)
