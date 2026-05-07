@@ -2051,7 +2051,7 @@ func (c *Console) handleSend(parts []string) {
 	fmt.Printf("\n📤 Adding to transaction pool...\n")
 
 	c.node.mu.Lock()
-	txPool := c.node.blockchain.TxPool()
+	txPool = c.node.blockchain.TxPool()
 	c.node.mu.Unlock()
 
 

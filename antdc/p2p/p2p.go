@@ -624,7 +624,7 @@ func (n *Node) handleMessages() {
 			n.processMu.Unlock()
 
 		case msgTypeTx:
-			if len(msg.Data) < 100 {
+			if len(msg.Data) < 2 {
 				continue
 			}
 
