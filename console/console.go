@@ -2049,10 +2049,19 @@ func (c *Console) handleSend(parts []string) {
 	txPool := c.node.blockchain.TxPool()
 	c.node.mu.Unlock()
 
-	// Add transaction to pool
+	// Add transaction to pool with timeout so the console does not appear hung.
 	var addErr error
 	if chainTxPool, ok := txPool.(*chain.TxPool); ok {
-		addErr = chainTxPool.AddTx(txm, c.node.blockchain)
+		addDone := make(chan error, 1)
+		go func() {
+			addDone <- chainTxPool.AddTx(txm, c.node.blockchain)
+		}()
+
+		select {
+		case addErr = <-addDone:
+		case <-time.After(15 * time.Second):
+			addErr = fmt.Errorf("timed out while adding transaction to pool after 15s")
+		}
 	} else {
 		addErr = fmt.Errorf("unsupported pool type: %T", txPool)
 	}
