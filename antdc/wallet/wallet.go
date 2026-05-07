@@ -873,8 +873,21 @@ func (wm *WalletManager) SendTransactionWithNonce(from, to common.QuantumAddress
         log.Printf("✅ Recreated transaction with correct nonce: %d", nextNonce)
     }
 
+    wm.mu.RLock()
+    bc := wm.blockchain
+    wm.mu.RUnlock()
+    if bc == nil {
+        bc = w.bc
+    }
+    if bc == nil {
+        return nil, errors.New("blockchain not configured in wallet manager; cannot submit transaction to tx pool")
+    }
+    if bc.TxPool() == nil {
+        return nil, errors.New("transaction pool is not initialized")
+    }
+
     // Add to transaction pool
-    if err := wm.blockchain.TxPool().AddTx(transaction, wm.blockchain); err != nil {
+    if err := bc.TxPool().AddTx(transaction, bc); err != nil {
         // If it's a nonce conflict, suggest the correct nonce
         if strings.Contains(err.Error(), "invalid nonce") || strings.Contains(err.Error(), "already pending") {
             suggestedNonce := w.Nonce()

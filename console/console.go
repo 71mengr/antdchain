@@ -2054,9 +2054,7 @@ func (c *Console) handleSend(parts []string) {
 	txPool = c.node.blockchain.TxPool()
 	c.node.mu.Unlock()
 
-
-
-	// Add transaction to pool with bounded progress reporting so the CLI doesn't
+// Add transaction to pool with bounded progress reporting so the CLI doesn't
 	// appear hung under temporary lock contention.
 	addResult := make(chan error, 1)
 	go func() {
@@ -2079,7 +2077,14 @@ func (c *Console) handleSend(parts []string) {
 			case addErr = <-addResult:
 				waiting = false
 			case <-ticker.C:
-				if pending := txPool.GetPending(); len(pending) > 0 {
+				// Avoid blocking the timeout loop if txPool is contended by AddTx.
+				pendingResult := make(chan []*tx.Tx, 1)
+				go func() {
+					pendingResult <- txPool.GetPending()
+				}()
+
+				select {
+				case pending := <-pendingResult:
 					for _, pendingTx := range pending {
 						if pendingTx != nil && pendingTx.Hash() == txHash {
 							fmt.Printf("✅ Transaction detected in local mempool after delayed add\n")
@@ -2089,13 +2094,14 @@ func (c *Console) handleSend(parts []string) {
 							break
 						}
 					}
+				case <-time.After(100 * time.Millisecond):
+					// Skip this probe if txPool is busy; deadline still applies.
 				}
 			case <-deadline:
 				addErr = errors.New("timed out while adding transaction to pool after waiting 35s")
 				waiting = false
 			}
 		}
-
 		if foundInPool {
 			addErr = nil
 		}

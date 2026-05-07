@@ -328,7 +328,24 @@ func (p *TxPool) addTx(t *tx.Tx) error {
 
 	expected := stateNonce
 	if len(senderTxs) > 0 {
-		expected = senderTxs[len(senderTxs)-1].Nonce + 1
+		maxPendingNonce := stateNonce
+		havePendingNonce := false
+		for _, pendingTx := range senderTxs {
+			if pendingTx == nil {
+				continue
+			}
+			if pendingTx.Nonce == t.Nonce {
+				txValidationErrors.WithLabelValues("wrong_nonce").Inc()
+				return fmt.Errorf("nonce already pending: %d", t.Nonce)
+			}
+			if !havePendingNonce || pendingTx.Nonce > maxPendingNonce {
+				maxPendingNonce = pendingTx.Nonce
+				havePendingNonce = true
+			}
+		}
+		if havePendingNonce {
+			expected = maxPendingNonce + 1
+		}
 	}
 	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
 	totalCost := new(big.Int).Add(t.Value, gasCost)
