@@ -281,43 +281,43 @@ txValidationErrors.WithLabelValues("blocked_sender").Inc()
 return errors.New("sender blocked due to forged amount activity")
 }
 
-p.mu.Lock()
-defer p.mu.Unlock()
+	// BALANCE / NONCE CHECKS
+	// IMPORTANT: query chain state before taking the txpool mutex to avoid lock-order
+	// inversions that can look like hangs while adding a transaction.
+	senderAddress := common.BytesToQuantumAddress(sender.Bytes())
+	stateNonce := p.chain.State().GetNonce(senderAddress)
+	balance := p.chain.State().GetBalance(senderAddress)
 
-if len(p.txs) >= p.maxPoolSize {
-txDroppedCounter.WithLabelValues("pool_full").Inc()
-return errors.New("pool full")
-}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-if len(t.Data) > p.maxTxSize {
-txDroppedCounter.WithLabelValues("tx_too_large").Inc()
-return errors.New("tx too large")
-}
+	if len(p.txs) >= p.maxPoolSize {
+		txDroppedCounter.WithLabelValues("pool_full").Inc()
+		return errors.New("pool full")
+	}
 
-if t.GasPrice == nil || t.GasPrice.Cmp(p.minGasPrice) < 0 {
-txValidationErrors.WithLabelValues("gas_price").Inc()
-return fmt.Errorf("gas price too low (min: %s)", p.minGasPrice.String())
-}
+	if len(t.Data) > p.maxTxSize {
+		txDroppedCounter.WithLabelValues("tx_too_large").Inc()
+		return errors.New("tx too large")
+	}
 
-if _, exists := p.txs[hash]; exists {
-txValidationErrors.WithLabelValues("known_tx").Inc()
-return errors.New("known tx")
-}
+	if t.GasPrice == nil || t.GasPrice.Cmp(p.minGasPrice) < 0 {
+		txValidationErrors.WithLabelValues("gas_price").Inc()
+		return fmt.Errorf("gas price too low (min: %s)", p.minGasPrice.String())
+	}
 
-senderTxs := p.bySender[sender]
-if len(senderTxs) >= p.maxTxsPerSender {
-txDroppedCounter.WithLabelValues("sender_limit").Inc()
-return errors.New("too many pending from sender")
-}
+	if _, exists := p.txs[hash]; exists {
+		txValidationErrors.WithLabelValues("known_tx").Inc()
+		return errors.New("known tx")
+	}
 
-// BALANCE / NONCE CHECKS
-// IMPORTANT: use the txpool lock as little as possible before touching chain state.
-// This avoids lock-order inversions with goroutines that may hold state locks while
-// reading txpool data (which can otherwise look like a hang when adding txs).
-senderAddress := common.BytesToQuantumAddress(sender.Bytes())
-stateNonce := p.chain.State().GetNonce(senderAddress)
-balance := p.chain.State().GetBalance(senderAddress)
-expected := stateNonce
+	senderTxs := p.bySender[sender]
+	if len(senderTxs) >= p.maxTxsPerSender {
+		txDroppedCounter.WithLabelValues("sender_limit").Inc()
+		return errors.New("too many pending from sender")
+	}
+
+	expected := stateNonce
 if len(senderTxs) > 0 {
 expected = senderTxs[len(senderTxs)-1].Nonce + 1
 }
