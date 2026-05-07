@@ -2045,9 +2045,7 @@ func (c *Console) handleSend(parts []string) {
 	// ADD TO TRANSACTION POOL
 	fmt.Printf("\n📤 Adding to transaction pool...\n")
 
-	c.node.mu.Lock()
 	txPool := c.node.blockchain.TxPool()
-	c.node.mu.Unlock()
 
 	// Add transaction to pool directly to preserve the real validation error.
 	// The timeout wrapper could report false negatives under lock contention.
