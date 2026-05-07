@@ -2045,12 +2045,56 @@ func (c *Console) handleSend(parts []string) {
 	// ADD TO TRANSACTION POOL
 	fmt.Printf("\n📤 Adding to transaction pool...\n")
 
+	c.node.mu.Lock()
 	txPool := c.node.blockchain.TxPool()
+	c.node.mu.Unlock()
 
-	// Add transaction to pool directly to preserve the real validation error.
-	// The timeout wrapper could report false negatives under lock contention.
-	addErr := txPool.AddTx(txm, c.node.blockchain)
 
+
+	// Add transaction to pool with bounded progress reporting so the CLI doesn't
+	// appear hung under temporary lock contention.
+	addResult := make(chan error, 1)
+	go func() {
+		addResult <- txPool.AddTx(txm, c.node.blockchain)
+	}()
+
+	var addErr error
+	select {
+	case addErr = <-addResult:
+	case <-time.After(5 * time.Second):
+		fmt.Printf("⏳ Tx pool is busy, waiting for add result...\n")
+		deadline := time.After(30 * time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		foundInPool := false
+
+		waiting := true
+		for waiting {
+			select {
+			case addErr = <-addResult:
+				waiting = false
+			case <-ticker.C:
+				if pending := txPool.GetPending(); len(pending) > 0 {
+					for _, pendingTx := range pending {
+						if pendingTx != nil && pendingTx.Hash() == txHash {
+							fmt.Printf("✅ Transaction detected in local mempool after delayed add\n")
+							foundInPool = true
+							addErr = nil
+							waiting = false
+							break
+						}
+					}
+				}
+			case <-deadline:
+				addErr = errors.New("timed out while adding transaction to pool after waiting 35s")
+				waiting = false
+			}
+		}
+
+		if foundInPool {
+			addErr = nil
+		}
+	}
 	if addErr != nil {
 		fmt.Printf("❌ Failed to add to transaction pool: %v\n", addErr)
 
