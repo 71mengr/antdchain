@@ -20,6 +20,7 @@ var (
 	eligibilityThreshold = new(big.Int).Mul(big.NewInt(100_000), big.NewInt(1e18))   // 100k ANTD for rotating king bonus
 	initialBlockReward   = new(big.Int).Mul(big.NewInt(200), big.NewInt(1e18))       // 200 ANTD initial block reward
 	minStakeForPoS       = new(big.Int).Mul(big.NewInt(1_000_000), big.NewInt(1e18)) // 1M ANTD for auto-staking
+	genesisPremine      = new(big.Int).Mul(big.NewInt(60_000_000), big.NewInt(1e18)) // 60M ANTD premined at genesis
 
 	// Halving parameters for 12-second blocks
 	secondsPerBlock  = uint64(12)                   // 12-second block time
@@ -138,7 +139,7 @@ func GetNextHalvingInfo(blockNumber uint64) map[string]interface{} {
 
 // Calculate total supply cap
 func CalculateTotalSupplyCap() *big.Int {
-	total := big.NewInt(0)
+	total := new(big.Int).Set(genesisPremine)
 
 	// Sum of all block rewards through all halvings
 	currentReward := new(big.Int).Set(initialBlockReward)
@@ -171,7 +172,7 @@ func CalculateTotalSupplyCap() *big.Int {
 
 // Calculate circulating supply up to a given block
 func CalculateCirculatingSupply(blockNumber uint64) *big.Int {
-	total := big.NewInt(0)
+	total := new(big.Int).Set(genesisPremine)
 	currentBlock := uint64(0)
 	currentReward := new(big.Int).Set(initialBlockReward)
 	currentHalving := uint64(0)
