@@ -137,6 +137,7 @@ async function loadDashboard() {
     document.getElementById('app').innerHTML = `
         <div class="stats-grid">
             <div class="stat-card"><div class="stat-value">${(status.height || 0).toLocaleString()}</div><div class="stat-label">Block Height</div></div>
+            <div class="stat-card"><div class="stat-value">${stats && stats.total_supply ? formatANTD(stats.total_supply) : '0'}</div><div class="stat-label">Circulating Supply (ANTD)</div></div>
             <div class="stat-card"><div class="stat-value">${(stats && stats.totalTransactions || 0).toLocaleString()}</div><div class="stat-label">Transactions</div></div>
             <div class="stat-card"><div class="stat-value">${status.mempoolSize || 0}</div><div class="stat-label">Mempool</div></div>
             <div class="stat-card"><div class="stat-value">${status.peers || 0}</div><div class="stat-label">Peers</div></div>

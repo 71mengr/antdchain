@@ -96,26 +96,26 @@ type WebServer struct {
 
 // NewWebServer creates a new web server
 func NewWebServer(node *console.Node, walletManager *wallet.WalletManager) *WebServer {
-	return &WebServer{
+	ws := &WebServer{
 		node:          node,
 		walletManager: walletManager,
+		router:        mux.NewRouter(),
 		logger:        logrus.New(),
 	}
+	ws.setupRoutes()
+	return ws
 }
 
 // Start starts the web server
 func (ws *WebServer) Start(port int) error {
-	mux := http.NewServeMux()
-
-	// Basic routes
-	mux.HandleFunc("/", ws.handleIndex)
-	mux.HandleFunc("/status", ws.handleStatus)
-	mux.HandleFunc("/blocks", ws.handleBlocks)
-	mux.HandleFunc("/health", ws.handleHealth)
+	if ws.router == nil {
+		ws.router = mux.NewRouter()
+		ws.setupRoutes()
+	}
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
-		Handler:      mux,
+		Handler:      ws.router,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}

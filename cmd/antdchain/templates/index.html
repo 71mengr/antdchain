@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANTDChain Explorer</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">🚀 ANTDChain</div>
+        <div class="nav-search">
+            <input id="searchInput" type="text" placeholder="Search block, tx, or address">
+            <button id="searchBtn" class="btn" type="button">Search</button>
+            <div id="searchResults" class="search-dropdown hidden"></div>
+        </div>
+        <div class="nav-links">
+            <a href="/">Dashboard</a>
+            <a href="/blocks">Blocks</a>
+            <a href="/mempool">Mempool</a>
+            <a href="/validators">Validators</a>
+        </div>
+        <div class="nav-stats">
+            <span id="syncStatus" class="status-dot"></span>
+            <span id="chainHeight">Height: 0</span>
+            <span id="peerCount">Peers: 0</span>
+        </div>
+    </nav>
+    <main id="app" class="container"></main>
+    <div id="toast" class="toast hidden"></div>
+    <footer>
+        <p>ANTDChain Node v2.0.0 | <span id="footerHeight">Block Height: 0</span></p>
+    </footer>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

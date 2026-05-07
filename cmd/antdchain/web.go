@@ -15,8 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/common"
+	"github.com/gorilla/mux"
 )
 
 //go:embed static/* templates/*
@@ -42,9 +43,12 @@ func (ws *WebServer) setupRoutes() {
 	ws.router.HandleFunc("/api/validators", ws.apiValidators).Methods("GET")
 	ws.router.HandleFunc("/api/rotatingking", ws.apiRotatingKing).Methods("GET")
 	ws.router.HandleFunc("/api/search", ws.apiSearch).Methods("GET")
+	ws.router.HandleFunc("/health", ws.apiHealth).Methods("GET")
+	ws.router.HandleFunc("/status", ws.apiChainStatus).Methods("GET")
 
 	// Web pages – all served by the SPA
 	ws.router.HandleFunc("/", ws.serveSPA).Methods("GET")
+	ws.router.HandleFunc("/blocks", ws.serveSPA).Methods("GET")
 	ws.router.PathPrefix("/block/").HandlerFunc(ws.serveSPA)
 	ws.router.PathPrefix("/tx/").HandlerFunc(ws.serveSPA)
 	ws.router.PathPrefix("/address/").HandlerFunc(ws.serveSPA)
@@ -119,6 +123,8 @@ func (ws *WebServer) apiChainStats(w http.ResponseWriter, r *http.Request) {
 		"avgBlockTime":      float64(0),
 		"totalStaked":       "0",
 		"activeValidators":  0,
+		"total_supply":      "0",
+		"totalSupplyANTD":   "0",
 	}
 
 	if latest != nil && latest.Header != nil {
@@ -136,6 +142,10 @@ func (ws *WebServer) apiChainStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		stats["totalTransactions"] = totalTx
+
+		circulatingSupply := reward.CalculateCirculatingSupply(height)
+		stats["total_supply"] = circulatingSupply.String()
+		stats["totalSupplyANTD"] = formatBalance(circulatingSupply)
 
 		if height >= 10 {
 			oldest := bc.GetBlock(height - 10)

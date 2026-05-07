@@ -1634,11 +1634,16 @@ func (c *Console) handleMonitor(parts []string) {
 func (c *Console) handleSupplyStats() {
 	fmt.Println("💰 Network Supply Statistics:")
 	if c == nil || c.node == nil || c.node.blockchain == nil {
+		fmt.Println("  total_supply: <not available>")
 		fmt.Println("  Total Supply: <not available>")
 		fmt.Println("  Unique Addresses: <not available>")
 		return
 	}
 
+	height := c.node.blockchain.GetChainHeight()
+	circulatingSupply := reward.CalculateCirculatingSupply(height)
+	fmt.Printf("  total_supply: %s ANTD (circulating at block %d)\n", formatBalance(circulatingSupply), height)
+	fmt.Printf("  total_supply_raw: %s\n", circulatingSupply.String())
 	monitor := c.node.blockchain.Monitor()
 	if monitor == nil {
 		fmt.Println("  Total Supply: <not available>")
