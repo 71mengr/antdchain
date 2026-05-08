@@ -2061,51 +2061,37 @@ func (c *Console) handleSend(parts []string) {
 		addResult <- txPool.AddTx(txm, c.node.blockchain)
 	}()
 
+	const txPoolAddTimeout = 2 * time.Minute
+	progressTicker := time.NewTicker(5 * time.Second)
+	defer progressTicker.Stop()
+	deadline := time.NewTimer(txPoolAddTimeout)
+	defer deadline.Stop()
+
 	var addErr error
-	select {
-	case addErr = <-addResult:
-	case <-time.After(5 * time.Second):
-		fmt.Printf("⏳ Tx pool is busy, waiting for add result...\n")
-		deadline := time.After(30 * time.Second)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		foundInPool := false
+	for {
+		select {
+		case addErr = <-addResult:
+			goto addDone
+		case <-progressTicker.C:
+			fmt.Printf("⏳ Still adding transaction to pool...\n")
+		case <-deadline.C:
+			// Last chance check: if the tx made it in despite AddTx still blocked,
+			// treat this as success rather than a hard failure.
+			pending := txPool.GetPending()
+			for _, pendingTx := range pending {
+				if pendingTx != nil && pendingTx.Hash() == txHash {
+					fmt.Printf("✅ Transaction detected in local mempool after delayed add\n")
+					addErr = nil
+					goto addDone
 
-		waiting := true
-		for waiting {
-			select {
-			case addErr = <-addResult:
-				waiting = false
-			case <-ticker.C:
-				// Avoid blocking the timeout loop if txPool is contended by AddTx.
-				pendingResult := make(chan []*tx.Tx, 1)
-				go func() {
-					pendingResult <- txPool.GetPending()
-				}()
-
-				select {
-				case pending := <-pendingResult:
-					for _, pendingTx := range pending {
-						if pendingTx != nil && pendingTx.Hash() == txHash {
-							fmt.Printf("✅ Transaction detected in local mempool after delayed add\n")
-							foundInPool = true
-							addErr = nil
-							waiting = false
-							break
-						}
-					}
-				case <-time.After(100 * time.Millisecond):
-					// Skip this probe if txPool is busy; deadline still applies.
 				}
-			case <-deadline:
-				addErr = errors.New("timed out while adding transaction to pool after waiting 35s")
-				waiting = false
 			}
 		}
-		if foundInPool {
-			addErr = nil
+			addErr = fmt.Errorf("timed out while adding transaction to pool after waiting %s", txPoolAddTimeout)
+			goto addDone
 		}
 	}
+addDone:
 	if addErr != nil {
 		fmt.Printf("❌ Failed to add to transaction pool: %v\n", addErr)
 
