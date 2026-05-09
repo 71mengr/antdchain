@@ -346,7 +346,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 		}
 
-		if err := s.bc.TxPool().AddTx(t, s.bc); err != nil {
+		if err := s.bc.TxPool().AddTransaction(t, s.bc); err != nil {
 
 			errCode, errMsg = -32603, err.Error()
 
@@ -538,7 +538,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 		}
 
-		if err := s.bc.TxPool().AddTx(t, s.bc); err != nil {
+		if err := s.bc.TxPool().AddTransaction(t, s.bc); err != nil {
 
 			errCode, errMsg = -32603, err.Error()
 

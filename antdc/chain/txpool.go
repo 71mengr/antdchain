@@ -34,6 +34,7 @@ const (
 	DefaultTxTTL             = 24 * time.Hour
 	DefaultCleanupInterval   = 2 * time.Minute
 	DefaultSaveInterval      = 60 * time.Second
+	defaultLockWaitTimeout   = 15 * time.Second
 )
 
 // Prometheus metrics
@@ -297,7 +298,21 @@ func (p *TxPool) addTx(t *tx.Tx) error {
 		latestHeight = latest.Header.Number.Uint64()
 	}
 
-	p.mu.Lock()
+	lockDeadline := time.NewTimer(defaultLockWaitTimeout)
+	defer lockDeadline.Stop()
+	lockTicker := time.NewTicker(5 * time.Millisecond)
+	defer lockTicker.Stop()
+	for {
+		if p.mu.TryLock() {
+			break
+		}
+		select {
+		case <-lockDeadline.C:
+			txPoolOperations.WithLabelValues("add_lock_timeout").Inc()
+			return fmt.Errorf("txpool busy: timeout acquiring lock after %s", defaultLockWaitTimeout)
+		case <-lockTicker.C:
+		}
+	}
 	defer p.mu.Unlock()
 
 	if len(p.txs) >= p.maxPoolSize {

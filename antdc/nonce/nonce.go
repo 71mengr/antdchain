@@ -9,11 +9,9 @@ import (
 )
 
 func Determine(parts []string, fromAddr common.QuantumAddress, stateNonce, nextNonce uint64, pending []*tx.Tx) (uint64, string, bool, common.Hash, error) {
+	_ = nextNonce
 	if len(parts) <= 4 {
-		if nextNonce < stateNonce {
-			nextNonce = stateNonce
-		}
-		return nextNonce, "auto", false, common.Hash{}, nil
+		return stateNonce, "auto", false, common.Hash{}, nil
 	}
 
 	arg := parts[4]
@@ -25,23 +23,18 @@ func Determine(parts []string, fromAddr common.QuantumAddress, stateNonce, nextN
 		return manualNonce, "manual", false, common.Hash{}, nil
 	}
 
-	var (
-		suggestedNonce uint64
-		replaceTxHash  common.Hash
-		found          bool
-	)
+	var replaceTxHash common.Hash
 	for _, pendingTx := range pending {
 		if pendingTx.From == fromAddr {
-			if !found || pendingTx.Nonce > suggestedNonce {
-				found = true
-				suggestedNonce = pendingTx.Nonce
+			if pendingTx.Nonce == stateNonce {
 				replaceTxHash = pendingTx.Hash()
+				return stateNonce, fmt.Sprintf("replace %s", replaceTxHash.String()[:8]), true, replaceTxHash, nil
 			}
 		}
 	}
-	if !found {
-		return 0, "", true, common.Hash{}, fmt.Errorf("no pending transaction found to replace for sender %s", fromAddr.String())
+	if replaceTxHash == (common.Hash{}) {
+		return 0, "", true, common.Hash{}, fmt.Errorf("no pending transaction found to replace at nonce %d for sender %s", stateNonce, fromAddr.String())
 	}
-
-	return suggestedNonce, fmt.Sprintf("replace %s", replaceTxHash.String()[:8]), true, replaceTxHash, nil
+	return 0, "", true, common.Hash{}, fmt.Errorf("no pending transaction found to replace at nonce %d for sender %s", stateNonce, fromAddr.String())
 }
+

@@ -654,7 +654,7 @@ func (n *Node) handleMessages() {
 				hash.String()[:10], msg.GetFrom().String()[:8], txObj.Nonce)
 
 			n.processMu.Lock()
-			err := n.chain.TxPool().AddTx(&txObj, n.chain)
+			err := n.chain.TxPool().AddTransaction(&txObj, n.chain)
 			wasNew := err == nil
 			if err != nil && !strings.Contains(err.Error(), "already in pool") {
 				n.logger.Warnf("Tx rejected: %v", err)
@@ -2850,7 +2850,7 @@ func (n *Node) processDBSyncRequest(req *DBSyncRequest, requester peer.ID) {
 				config := configManager.GetConfig()
 				response.Config = &config
 			} else if addrManager, ok := mgr.(interface {
-				GetKingAddresses() []common.QuantumAddress
+			    GetKingAddresses() []common.QuantumAddress
 			}); ok {
 				// Fallback: create basic config from addresses
 				addresses := addrManager.GetKingAddresses()

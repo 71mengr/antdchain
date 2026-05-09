@@ -2046,6 +2046,36 @@ func (c *Console) handleSend(parts []string) {
 	}
 addDone:
 	if addErr != nil {
+		// Self-heal common stale nonce mismatch after resync/restart by retrying once
+		// with the txpool-derived next nonce when auto mode used state nonce first.
+		if strings.Contains(addErr.Error(), "nonce") && nonceSource == "auto" && !replaceMode {
+			c.node.mu.RLock()
+			refreshedState := c.node.blockchain.State()
+			refreshedStateNonce := refreshedState.GetNonce(fromAddr)
+			refreshedNextNonce := c.node.blockchain.TxPool().GetNextNonce(fromAddr, c.node.blockchain)
+			c.node.mu.RUnlock()
+
+			if refreshedNextNonce > txm.Nonce {
+				fmt.Printf("⚠️  Nonce mismatch detected (state=%d, pool-next=%d). Retrying with pool nonce.\n", refreshedStateNonce, refreshedNextNonce)
+				txm.Nonce = refreshedNextNonce
+
+				// Re-sign because nonce is part of signing payload.
+				if err := txm.Sign(privKey, pubKey); err != nil {
+					fmt.Printf("❌ Failed to re-sign transaction with nonce %d: %v\n", refreshedNextNonce, err)
+					return
+				}
+				retryErr := txPool.AddTx(txm, c.node.blockchain)
+				if retryErr == nil {
+					addErr = nil
+					txHash = txm.Hash()
+					fmt.Printf("✅ Retry succeeded with nonce %d\n", refreshedNextNonce)
+				} else {
+					addErr = retryErr
+				}
+			}
+		}
+	}
+	if addErr != nil {
 		fmt.Printf("❌ Failed to add to transaction pool: %v\n", addErr)
 
 		// Suggest fixes based on error
