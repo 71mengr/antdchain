@@ -248,161 +248,176 @@ func (p *TxPool) GetSubmitTime(hash common.Hash) (time.Time, bool) {
 }
 
 func (p *TxPool) addTx(t *tx.Tx) error {
-	startTime := time.Now()
-	defer func() {
-		txPoolLatency.WithLabelValues("add").Observe(time.Since(startTime).Seconds())
-	}()
+    startTime := time.Now()
+    defer func() {
+        txPoolLatency.WithLabelValues("add").Observe(time.Since(startTime).Seconds())
+    }()
 
-	txPoolOperations.WithLabelValues("add").Inc()
+    txPoolOperations.WithLabelValues("add").Inc()
 
-	if t == nil {
-		txValidationErrors.WithLabelValues("nil_tx").Inc()
-		return errors.New("nil tx")
-	}
+    // ============================================
+    // Basic validation
+    // ============================================
+    if t == nil {
+        txValidationErrors.WithLabelValues("nil_tx").Inc()
+        return errors.New("nil tx")
+    }
 
-	if err := t.Validate(); err != nil {
-		txValidationErrors.WithLabelValues("validation").Inc()
-		return err
-	}
+    if err := t.Validate(); err != nil {
+        txValidationErrors.WithLabelValues("validation").Inc()
+        return err
+    }
 
-	if valid, err := t.Verify(); err != nil || !valid {
-		txValidationErrors.WithLabelValues("signature").Inc()
-		return errors.New("invalid signature")
-	}
+    if valid, err := t.Verify(); err != nil || !valid {
+        txValidationErrors.WithLabelValues("signature").Inc()
+        return errors.New("invalid signature")
+    }
 
-	hash := t.Hash()
-	sender := t.From
+    hash := t.Hash()
+    sender := t.From
 
-	if p.chain == nil || p.chain.State() == nil {
-		txValidationErrors.WithLabelValues("chain_unavailable").Inc()
-		return errors.New("chain unavailable")
-	}
+    // Check if chain is available
+    if p.chain == nil || p.chain.State() == nil {
+        txValidationErrors.WithLabelValues("chain_unavailable").Inc()
+        return errors.New("chain unavailable")
+    }
 
-	if p.chain.monitor != nil && p.chain.monitor.IsAddressBlocked(sender) {
-		txValidationErrors.WithLabelValues("blocked_sender").Inc()
-		return errors.New("sender blocked due to forged amount activity")
-	}
+    // Check if sender is blocked
+    if p.chain.monitor != nil && p.chain.monitor.IsAddressBlocked(sender) {
+        txValidationErrors.WithLabelValues("blocked_sender").Inc()
+        return errors.New("sender blocked due to forged amount activity")
+    }
 
-	// BALANCE / NONCE CHECKS
-	// IMPORTANT: query chain state before taking the txpool mutex to avoid lock-order
-	// inversions that can look like hangs while adding a transaction.
-	senderAddress := common.BytesToQuantumAddress(sender.Bytes())
-	stateNonce := p.chain.State().GetNonce(senderAddress)
-	balance := p.chain.State().GetBalance(senderAddress)
+    // ============================================
+    // Chain state validation (no pool lock)
+    // ============================================
+    senderAddress := common.BytesToQuantumAddress(sender.Bytes())
+    stateNonce := p.chain.State().GetNonce(senderAddress)
+    balance := p.chain.State().GetBalance(senderAddress)
 
-	// Capture latest block height before taking the txpool mutex. Calling
-	// chain.Latest() while holding p.mu can invert lock order with chain code that
-	// already holds chain locks and then touches the txpool.
-	latestHeight := uint64(0)
-	if latest := p.chain.Latest(); latest != nil && latest.Header != nil {
-		latestHeight = latest.Header.Number.Uint64()
-	}
+    // Basic size check (doesn't need pool state)
+    if len(t.Data) > p.maxTxSize {
+        txDroppedCounter.WithLabelValues("tx_too_large").Inc()
+        return errors.New("tx too large")
+    }
 
-	lockDeadline := time.NewTimer(defaultLockWaitTimeout)
-	defer lockDeadline.Stop()
-	lockTicker := time.NewTicker(5 * time.Millisecond)
-	defer lockTicker.Stop()
-	for {
-		if p.mu.TryLock() {
-			break
-		}
-		select {
-		case <-lockDeadline.C:
-			txPoolOperations.WithLabelValues("add_lock_timeout").Inc()
-			return fmt.Errorf("txpool busy: timeout acquiring lock after %s", defaultLockWaitTimeout)
-		case <-lockTicker.C:
-		}
-	}
-	defer p.mu.Unlock()
+    // Gas price check (doesn't need pool state)
+    if t.GasPrice == nil || t.GasPrice.Cmp(p.minGasPrice) < 0 {
+        txValidationErrors.WithLabelValues("gas_price").Inc()
+        return fmt.Errorf("gas price too low (min: %s)", p.minGasPrice.String())
+    }
 
-	if len(p.txs) >= p.maxPoolSize {
-		txDroppedCounter.WithLabelValues("pool_full").Inc()
-		return errors.New("pool full")
-	}
+    // Balance check (doesn't need pool state)
+    gasCost := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
+    totalCost := new(big.Int).Add(t.Value, gasCost)
+    if balance.Cmp(totalCost) < 0 {
+        txValidationErrors.WithLabelValues("insufficient_balance").Inc()
+        return fmt.Errorf("insufficient balance: have %s, need %s",
+            formatBalance(balance), formatBalance(totalCost))
+    }
 
-	if len(t.Data) > p.maxTxSize {
-		txDroppedCounter.WithLabelValues("tx_too_large").Inc()
-		return errors.New("tx too large")
-	}
+    // Nonce range check (doesn't need pool state)
+    if t.Nonce > stateNonce+p.maxFutureNonceGap {
+        txValidationErrors.WithLabelValues("nonce_too_high").Inc()
+        return errors.New("nonce too high")
+    }
 
-	if t.GasPrice == nil || t.GasPrice.Cmp(p.minGasPrice) < 0 {
-		txValidationErrors.WithLabelValues("gas_price").Inc()
-		return fmt.Errorf("gas price too low (min: %s)", p.minGasPrice.String())
-	}
+    // ============================================
+    // Pool-specific checks (with lock)
+    // Keep this section as SHORT and FAST as possible
+    // ============================================
+    p.mu.Lock()
+    // Check if tx already exists (fast map lookup)
+    if _, exists := p.txs[hash]; exists {
+        p.mu.Unlock()
+        txValidationErrors.WithLabelValues("known_tx").Inc()
+        return errors.New("known tx")
+    }
 
-	if _, exists := p.txs[hash]; exists {
-		txValidationErrors.WithLabelValues("known_tx").Inc()
-		return errors.New("known tx")
-	}
+    // Check pool size limit
+    if len(p.txs) >= p.maxPoolSize {
+        p.mu.Unlock()
+        txDroppedCounter.WithLabelValues("pool_full").Inc()
+        return errors.New("pool full")
+    }
 
-	senderTxs := p.bySender[sender]
-	if len(senderTxs) >= p.maxTxsPerSender {
-		txDroppedCounter.WithLabelValues("sender_limit").Inc()
-		return errors.New("too many pending from sender")
-	}
+    // Check sender limit
+    senderTxs := p.bySender[sender]
+    if len(senderTxs) >= p.maxTxsPerSender {
+        p.mu.Unlock()
+        txDroppedCounter.WithLabelValues("sender_limit").Inc()
+        return errors.New("too many pending from sender")
+    }
 
-	expected := stateNonce
-	if len(senderTxs) > 0 {
-		maxPendingNonce := stateNonce
-		havePendingNonce := false
-		for _, pendingTx := range senderTxs {
-			if pendingTx == nil {
-				continue
-			}
-			if pendingTx.Nonce == t.Nonce {
-				txValidationErrors.WithLabelValues("wrong_nonce").Inc()
-				return fmt.Errorf("nonce already pending: %d", t.Nonce)
-			}
-			if !havePendingNonce || pendingTx.Nonce > maxPendingNonce {
-				maxPendingNonce = pendingTx.Nonce
-				havePendingNonce = true
-			}
-		}
-		if havePendingNonce {
-			expected = maxPendingNonce + 1
-		}
-	}
-	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
-	totalCost := new(big.Int).Add(t.Value, gasCost)
-	if balance.Cmp(totalCost) < 0 {
-		txValidationErrors.WithLabelValues("insufficient_balance").Inc()
-		return fmt.Errorf("insufficient balance: have %s, need %s",
-			formatBalance(balance), formatBalance(totalCost))
-	}
+    // Calculate expected nonce based on pool state
+    expectedNonce := stateNonce
+    if len(senderTxs) > 0 {
+        // Find the highest nonce in pool for this sender
+        maxPendingNonce := uint64(0)
+        for _, pendingTx := range senderTxs {
+            if pendingTx != nil && pendingTx.Nonce > maxPendingNonce {
+                maxPendingNonce = pendingTx.Nonce
+            }
+        }
+        if maxPendingNonce >= stateNonce {
+            expectedNonce = maxPendingNonce + 1
+        }
+    }
 
-	if t.Nonce != expected {
-		txValidationErrors.WithLabelValues("wrong_nonce").Inc()
-		return fmt.Errorf("wrong nonce: want %d got %d", expected, t.Nonce)
-	}
+    // Check nonce matches expected
+    if t.Nonce != expectedNonce {
+        p.mu.Unlock()
+        txValidationErrors.WithLabelValues("wrong_nonce").Inc()
+        return fmt.Errorf("wrong nonce: want %d got %d (state nonce: %d)", 
+            expectedNonce, t.Nonce, stateNonce)
+    }
 
-	if t.Nonce > stateNonce+p.maxFutureNonceGap {
-		txValidationErrors.WithLabelValues("nonce_too_high").Inc()
-		return errors.New("nonce too high")
-	}
+    // Check for duplicate nonce (shouldn't happen with above check, but just in case)
+    for _, pendingTx := range senderTxs {
+        if pendingTx.Nonce == t.Nonce {
+            p.mu.Unlock()
+            txValidationErrors.WithLabelValues("duplicate_nonce").Inc()
+            return fmt.Errorf("nonce %d already pending", t.Nonce)
+        }
+    }
 
-	// All good — add to pool
-	p.txs[hash] = t
-	p.bySender[sender] = append(senderTxs, t)
-	p.submitTime[hash] = time.Now()
+    // ============================================
+    // Add to pool (still holding lock)
+    // All these operations are O(1) or very fast
+    // ============================================
+    latestHeight := uint64(0)
+    if latest := p.chain.Latest(); latest != nil && latest.Header != nil {
+        latestHeight = latest.Header.Number.Uint64()
+    }
 
-	p.submitHeight[hash] = latestHeight
+    // Add to all the maps
+    p.txs[hash] = t
+    p.bySender[sender] = append(senderTxs, t)
+    p.submitTime[hash] = time.Now()
+    p.submitHeight[hash] = latestHeight
 
-	if t.Nonce > p.nonceTracker[sender] {
-		p.nonceTracker[sender] = t.Nonce
-	}
+    // Update nonce tracker
+    if t.Nonce > p.nonceTracker[sender] {
+        p.nonceTracker[sender] = t.Nonce
+    }
 
-	// Add to priority queue
-	heap.Push(p.pendingHeap, t)
+    // Add to priority queue
+    heap.Push(p.pendingHeap, t)
 
-	// Update metrics
-	txAddedCounter.Inc()
-	txPoolSizeGauge.Set(float64(len(p.txs)))
+    // Update metrics
+    txAddedCounter.Inc()
+    txPoolSizeGauge.Set(float64(len(p.txs)))
 
-	log.Printf("[txpool] + %s | %s | nonce=%d | value=%s | gasPrice=%s",
-		hash.Hex()[:10], sender.String()[:10], t.Nonce,
-		formatBalance(t.Value), t.GasPrice.String())
+    p.mu.Unlock()
 
-	return nil
+    // ============================================
+    // Logging (no lock needed)
+    // ============================================
+    log.Printf("[txpool] + %s | %s | nonce=%d | value=%s | gasPrice=%s",
+        hash.Hex()[:10], sender.String()[:10], t.Nonce,
+        formatBalance(t.Value), t.GasPrice.String())
+
+    return nil
 }
 
 func (p *TxPool) getConfirmed(minConfirmations uint64) []*tx.Tx {
@@ -594,56 +609,57 @@ func (p *TxPool) cleanupStale(maxAge uint64) {
 }
 
 func (p *TxPool) cleanupInvalid() int {
-	startTime := time.Now()
-	defer func() {
-		txPoolLatency.WithLabelValues("cleanup_invalid").Observe(time.Since(startTime).Seconds())
-	}()
-
-	txPoolOperations.WithLabelValues("cleanup").Inc()
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	removed := 0
-	cur := uint64(0)
-	if l := p.chain.Latest(); l != nil {
-		cur = l.Header.Number.Uint64()
-	}
-
-	now := time.Now()
-
-	for h, t := range p.txs {
-		// Check for invalid nonce
-		if t.Nonce < p.chain.State().GetNonce(common.BytesToQuantumAddress(t.From.Bytes())) {
-			p.removeLocked(h)
-			removed++
-			txDroppedCounter.WithLabelValues("invalid_nonce").Inc()
-			continue
-		}
-
-		// Check for very old blocks
-		if p.submitHeight[h] > 0 && cur-p.submitHeight[h] > p.staleBlockAge {
-			p.removeLocked(h)
-			removed++
-			txDroppedCounter.WithLabelValues("stale").Inc()
-			continue
-		}
-
-		// Check TTL
-		if now.Sub(p.submitTime[h]) > p.txTTL {
-			p.removeLocked(h)
-			removed++
-			txDroppedCounter.WithLabelValues("expired").Inc()
-		}
-	}
-
-	if removed > 0 {
-		p.rebuildNonceTracker()
-		p.rebuildPendingHeap()
-		log.Printf("[txpool] Cleaned up %d invalid transactions", removed)
-	}
-
-	return removed
+    p.mu.Lock()
+    
+    // Make a snapshot of transactions to process
+    txSnapshot := make(map[common.Hash]*tx.Tx)
+    for h, t := range p.txs {
+        txSnapshot[h] = t
+    }
+    
+    p.mu.Unlock()
+    
+    // Process snapshot without holding the lock
+    toRemove := make([]common.Hash, 0)
+    cur := uint64(0)
+    if l := p.chain.Latest(); l != nil {
+        cur = l.Header.Number.Uint64()
+    }
+    now := time.Now()
+    
+    for h, t := range txSnapshot {
+        if t.Nonce < p.chain.State().GetNonce(common.BytesToQuantumAddress(t.From.Bytes())) {
+            toRemove = append(toRemove, h)
+            continue
+        }
+        if p.submitHeight[h] > 0 && cur-p.submitHeight[h] > p.staleBlockAge {
+            toRemove = append(toRemove, h)
+            continue
+        }
+        if now.Sub(p.submitTime[h]) > p.txTTL {
+            toRemove = append(toRemove, h)
+            continue
+        }
+    }
+    
+    // Take lock only to remove
+    p.mu.Lock()
+    defer p.mu.Unlock()
+    
+    removed := 0
+    for _, h := range toRemove {
+        if _, exists := p.txs[h]; exists {
+            p.removeLocked(h)
+            removed++
+        }
+    }
+    
+    if removed > 0 {
+        p.rebuildNonceTracker()
+        p.rebuildPendingHeap()
+    }
+    
+    return removed
 }
 
 type storedTx struct {
