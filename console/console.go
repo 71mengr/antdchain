@@ -1799,6 +1799,24 @@ func (c *Console) handleCreateAddress() {
 
 
 func (c *Console) handleSend(parts []string) {
+    // Add panic recovery to see stack trace
+    defer func() {
+        if r := recover(); r != nil {
+            fmt.Printf("❌ Panic: %v\n", r)
+            debug.PrintStack()
+        }
+    }()
+    
+    // Add timeout channel for debugging
+    done := make(chan bool, 1)
+    go func() {
+        time.Sleep(5 * time.Second)
+        if !done {
+            fmt.Println("\n⚠️  Operation taking too long - dumping goroutines")
+            debug.PrintStack()
+        }
+    }()
+    defer func() { done <- true }()
     if len(parts) < 4 {
         fmt.Println("Usage: send <from> <to> <amount> [nonce|@replace]")
         return
