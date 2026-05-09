@@ -1797,46 +1797,45 @@ func (c *Console) handleCreateAddress() {
 	fmt.Printf("Keystore: %s\n", keystoreDir)
 }
 
+
 func (c *Console) handleSend(parts []string) {
     if len(parts) < 4 {
         fmt.Println("Usage: send <from> <to> <amount> [nonce|@replace]")
-        fmt.Println("Examples:")
-        fmt.Println("  send 0x123... 0x456... 1.5")
-        fmt.Println("  send 0x123... 0x456... 1.5 42      # manual nonce")
-        fmt.Println("  send 0x123... 0x456... 1.5 @replace # replace pending")
         return
     }
 
-    //PARSE INPUTS
+    // Parse inputs (no locks needed)
     fromAddr, err := parseQuantumAddressInput(parts[1])
     if err != nil {
         fmt.Printf("❌ Invalid from address: %v\n", err)
         return
     }
+    
     toAddr, err := parseQuantumAddressInput(parts[2])
     if err != nil {
         fmt.Printf("❌ Invalid to address: %v\n", err)
         return
     }
+    
     amountStr := parts[3]
-
-    // Parse amount
     amount, err := parseANTDAmount(amountStr)
     if err != nil {
         fmt.Printf("❌ Invalid amount '%s': %v\n", amountStr, err)
         return
     }
+    
     if amount.Sign() <= 0 {
         fmt.Printf("❌ Amount must be positive\n")
         return
     }
 
-    //GET CURRENT STATE
+    // Get state - NO LOCKS NEEDED (blockchain handles its own locking)
     state := c.node.blockchain.State()
     if state == nil {
         fmt.Println("❌ Blockchain state unavailable")
         return
     }
+    
     stateNonce := state.GetNonce(fromAddr)
     balance := state.GetBalance(fromAddr)
 
@@ -1844,7 +1843,7 @@ func (c *Console) handleSend(parts []string) {
     fmt.Printf("   Balance: %s ANTD\n", formatBalance(balance))
     fmt.Printf("   Nonce:   %d\n", stateNonce)
 
-    // DETERMINE NONCE
+    // Determine nonce (no locks needed for this logic)
     var suggestedNonce uint64
     var nonceSource string
     var replaceMode bool
@@ -1852,40 +1851,29 @@ func (c *Console) handleSend(parts []string) {
 
     if len(parts) > 4 {
         arg := parts[4]
-
         if arg == "@replace" || arg == "replace" {
             replaceMode = true
             nonceSource = "replace"
-
-            // Find pending transaction to replace
-            c.node.mu.RLock()
+            
+            // Get pending transactions - txpool has its own locks
             txPool := c.node.blockchain.TxPool()
-            pending := txPool.GetPending()
-            c.node.mu.RUnlock()
-
-            // Look for transaction with current nonce
-            for _, pendingTx := range pending {
-                if pendingTx.From == fromAddr && pendingTx.Nonce == stateNonce {
-                    suggestedNonce = stateNonce
-                    replaceTxHash = pendingTx.Hash()
-                    nonceSource = fmt.Sprintf("replace %s", replaceTxHash.Hex()[:8])
-                    break
-                }
-            }
-
-            if replaceTxHash == (common.Hash{}) {
-                fmt.Printf("❌ No pending transaction found to replace at nonce %d\n", stateNonce)
-                fmt.Printf("   Current pending transactions:\n")
+            if txPool != nil {
+                pending := txPool.GetPending()
                 for _, pendingTx := range pending {
-                    if pendingTx.From == fromAddr {
-                        fmt.Printf("   - Nonce %d: %s\n",
-                            pendingTx.Nonce, pendingTx.Hash().Hex()[:8])
+                    if pendingTx.From == fromAddr && pendingTx.Nonce == stateNonce {
+                        suggestedNonce = stateNonce
+                        replaceTxHash = pendingTx.Hash()
+                        nonceSource = fmt.Sprintf("replace %s", replaceTxHash.Hex()[:8])
+                        break
                     }
                 }
+            }
+            
+            if replaceTxHash == (common.Hash{}) {
+                fmt.Printf("❌ No pending transaction found to replace at nonce %d\n", stateNonce)
                 return
             }
         } else {
-            // Manual nonce
             manualNonce, err := strconv.ParseUint(arg, 10, 64)
             if err != nil {
                 fmt.Printf("❌ Invalid nonce '%s': %v\n", arg, err)
@@ -1895,46 +1883,28 @@ func (c *Console) handleSend(parts []string) {
             nonceSource = "manual"
         }
     } else {
-        // Automatic nonce
         suggestedNonce = stateNonce
         nonceSource = "auto"
     }
 
-    // GAS CALCULATION
-    gasLimit := uint64(21000)  // Standard transfer
-    gasPrice :=  fees.AutoGasPriceByAmount(amount)
-
+    // Gas calculation
+    gasLimit := uint64(21000)
+    gasPrice := fees.AutoGasPriceByAmount(amount)
     gasCost := new(big.Int).Mul(gasPrice, big.NewInt(int64(gasLimit)))
     totalCost := new(big.Int).Add(amount, gasCost)
 
-    // === 5. VALIDATION ===
+    // Validation
     if balance.Cmp(totalCost) < 0 {
         fmt.Printf("\n❌ INSUFFICIENT BALANCE\n")
-        fmt.Printf("   Available:      %s ANTD\n", formatBalance(balance))
-        fmt.Printf("   Required:       %s ANTD\n", formatBalance(totalCost))
-        fmt.Printf("   - Amount:       %s ANTD\n", formatBalance(amount))
-        fmt.Printf("   - Gas (est):    %s ANTD\n", formatBalance(gasCost))
-        fmt.Printf("   Short by:       %s ANTD\n",
-            formatBalance(new(big.Int).Sub(totalCost, balance)))
         return
     }
 
     if suggestedNonce < stateNonce {
-        fmt.Printf("❌ Nonce too low! State nonce is %d, got %d\n",
-            stateNonce, suggestedNonce)
+        fmt.Printf("❌ Nonce too low! State nonce is %d, got %d\n", stateNonce, suggestedNonce)
         return
     }
 
-    // Check for nonce gap
-    if suggestedNonce > stateNonce+5 {
-        fmt.Printf("⚠️  Warning: Nonce %d is far ahead of current %d\n",
-            suggestedNonce, stateNonce)
-        if !c.confirmAction("Continue with large nonce gap?") {
-            return
-        }
-    }
-
-    // TRANSACTION SUMMARY
+    // Transaction summary
     fmt.Printf("\n📝 TRANSACTION SUMMARY\n")
     fmt.Printf("   From:           %s\n", fromAddr.String())
     fmt.Printf("   To:             %s\n", toAddr.String())
@@ -1943,24 +1913,13 @@ func (c *Console) handleSend(parts []string) {
     fmt.Printf("   Gas Limit:      %d\n", gasLimit)
     fmt.Printf("   Gas Price:      %s Gwei\n",
         new(big.Float).Quo(new(big.Float).SetInt(gasPrice), big.NewFloat(1e9)).Text('f', 1))
-    fmt.Printf("   Max Fee:        %s ANTD\n", formatBalance(gasCost))
-    fmt.Printf("   Total Cost:     %s ANTD\n", formatBalance(totalCost))
-    fmt.Printf("   New Balance:    %s ANTD\n",
-        formatBalance(new(big.Int).Sub(balance, totalCost)))
-
-    if replaceMode {
-        fmt.Printf("   Mode:           🔄 REPLACE %s\n", replaceTxHash.Hex()[:8])
-    }
-
+    
     if !c.confirmAction("\nSend this transaction?") {
         fmt.Println("❌ Cancelled")
         return
     }
 
-    // FIND KEYSTORE ACCOUNT 
-
-
-    // DECRYPT PRIVATE KEY
+    // Get password and unlock keystore
     password, err := c.readPassword(fmt.Sprintf("Password for %s: ", fromAddr.String()))
     if err != nil {
         fmt.Printf("❌ Failed to read password: %v\n", err)
@@ -1979,23 +1938,15 @@ func (c *Console) handleSend(parts []string) {
         return
     }
 
-    // CREATE AND SIGN TRANSACTION 
+    // Create and sign transaction
     fmt.Printf("\n🔏 Creating and signing transaction...\n")
-txm := tx.NewTransferTx(
-    fromAddr,
-    toAddr,
-    amount,
-    suggestedNonce,
-    gasPrice,
-)
-
-    // Sign the transaction
+    txm := tx.NewTransferTx(fromAddr, toAddr, amount, suggestedNonce, gasPrice)
+    
     if err := txm.Sign(privKey, pubKey); err != nil {
         fmt.Printf("❌ Failed to sign transaction: %v\n", err)
         return
     }
 
-    // Verify signature
     valid, err := txm.Verify()
     if err != nil || !valid {
         fmt.Printf("❌ Invalid signature: %v\n", err)
@@ -2005,124 +1956,52 @@ txm := tx.NewTransferTx(
     txHash := txm.Hash()
     fmt.Printf("✅ Transaction created: %s\n", txHash.Hex())
 
-    // REMOVE REPLACED TRANSACTION
+    // Remove replaced transaction (NO LOCKS NEEDED - txpool handles locking)
     if replaceMode && replaceTxHash != (common.Hash{}) {
-        c.node.mu.Lock()
         txPool := c.node.blockchain.TxPool()
         if chainTxPool, ok := txPool.(*chain.TxPool); ok {
             chainTxPool.RemoveTx(replaceTxHash)
             fmt.Printf("🗑️  Removed old transaction: %s\n", replaceTxHash.Hex()[:8])
         }
-        c.node.mu.Unlock()
     }
 
-    // ADD TO TRANSACTION POOL
+    // Add to transaction pool (NO LOCKS NEEDED)
     fmt.Printf("\n📤 Adding to transaction pool...\n")
-
+    
     txPool := c.node.blockchain.TxPool()
     if txPool == nil {
-        fmt.Println("❌ Transaction pool unavailable")
+        fmt.Printf("❌ Transaction pool unavailable\n")
         return
     }
-
-    // Add transaction to pool
+    
     var addErr error
     if chainTxPool, ok := txPool.(*chain.TxPool); ok {
         addErr = chainTxPool.AddTx(txm, c.node.blockchain)
+    } else if genericPool, ok := txPool.(interface{ AddTx(*tx.Tx) error }); ok {
+        addErr = genericPool.AddTx(txm)
     } else {
-        // Fallback for other pool types
-        if genericPool, ok := txPool.(interface{ AddTx(*tx.Tx) error }); ok {
-            addErr = genericPool.AddTx(txm)
-        } else {
-            addErr = fmt.Errorf("unsupported pool type: %T", txPool)
-        }
+        addErr = fmt.Errorf("unsupported pool type: %T", txPool)
     }
-    c.node.mu.Unlock()
 
     if addErr != nil {
         fmt.Printf("❌ Failed to add to transaction pool: %v\n", addErr)
-
-        // Suggest fixes based on error
-        if strings.Contains(addErr.Error(), "nonce") {
-            fmt.Printf("💡 Try with nonce %d\n", stateNonce)
-        } else if strings.Contains(addErr.Error(), "balance") {
-            fmt.Printf("💡 Check if you have enough balance for gas\n")
-        } else if strings.Contains(addErr.Error(), "signature") {
-            fmt.Printf("💡 Transaction signing failed\n")
-        }
         return
     }
 
     fmt.Printf("✅ Transaction added to local mempool\n")
 
-    // BROADCAST TO NETWORK 
+    // Broadcast (no locks needed)
     if c.node.p2pNode != nil {
         fmt.Printf("📡 Broadcasting to peers...\n")
-
         if err := c.node.p2pNode.BroadcastTx(txm); err != nil {
             fmt.Printf("⚠️  Warning: Broadcast failed: %v\n", err)
-            fmt.Printf("   Transaction is in local pool but not broadcast\n")
         } else {
             fmt.Printf("✅ Transaction broadcast to network\n")
         }
-    } else {
-        fmt.Printf("⚠️  P2P node not available\n")
-        fmt.Printf("   Transaction is in local pool only\n")
     }
 
-    // FINAL CONFIRMATION 
     fmt.Printf("\n🎉 TRANSACTION SUCCESSFULLY CREATED!\n")
-    fmt.Printf("══════════════════════════════════════════════════════════\n")
     fmt.Printf("   Transaction Hash: %s\n", txHash.Hex())
-    fmt.Printf("   From:            %s\n", fromAddr.String())
-    fmt.Printf("   To:              %s\n", toAddr.String())
-    fmt.Printf("   Amount:          %s ANTD\n", formatBalance(amount))
-    fmt.Printf("   Nonce:           %d\n", txm.Nonce)
-    fmt.Printf("   Gas Price:       %s Gwei\n",
-        new(big.Float).Quo(new(big.Float).SetInt(gasPrice), big.NewFloat(1e9)).Text('f', 1))
-    fmt.Printf("   Max Fee:         %s ANTD\n", formatBalance(gasCost))
-
-    // Check mining status
-    if c.node.miningState.IsMining() {
-        fmt.Printf("   Status:          ⏳ Pending (mining active)\n")
-        fmt.Printf("   Will be mined in the next block\n")
-    } else {
-        fmt.Printf("   Status:          ⏸️  Queued (mining inactive)\n")
-        fmt.Printf("   💡 Use 'startmining' to begin mining\n")
-    }
-
-    fmt.Printf("══════════════════════════════════════════════════════════\n")
-
-    // Show next steps
-    fmt.Printf("\n📋 Next Steps:\n")
-    fmt.Printf("   1. Check status:      gettx %s\n", txHash.Hex())
-    fmt.Printf("   2. View pool:         txpool\n")
-    fmt.Printf("   3. Check balance:     balance %s\n", fromAddr.String())
-    if replaceMode {
-        fmt.Printf("   4. Old tx removed:   cleartx %s\n", replaceTxHash.Hex())
-    }
-
-    // Verify transaction is in pool
-    time.Sleep(500 * time.Millisecond) // Brief pause
-    c.node.mu.RLock()
-    txPoolCheck := c.node.blockchain.TxPool()
-    pendingCheck := txPoolCheck.GetPending()
-    c.node.mu.RUnlock()
-
-    inPool := false
-    for _, pendingTx := range pendingCheck {
-        if pendingTx.Hash() == txHash {
-            inPool = true
-            break
-        }
-    }
-
-    if inPool {
-        fmt.Printf("\n✅ Verified: Transaction is in local transaction pool\n")
-    } else {
-        fmt.Printf("\n⚠️  Warning: Transaction not found in pool after addition\n")
-        fmt.Printf("   Try 'txpool' command to check\n")
-    }
 }
 
 // Check transaction status
