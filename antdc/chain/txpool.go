@@ -249,16 +249,21 @@ func (p *TxPool) GetSubmitTime(hash common.Hash) (time.Time, bool) {
 
 
 func (p *TxPool) addTx(t *tx.Tx) error {
+    txHash := t.Hash().Hex()[:10]
+    log.Printf("[DEBUG addTx] START for tx %s", txHash)
+    
     startTime := time.Now()
     defer func() {
         txPoolLatency.WithLabelValues("add").Observe(time.Since(startTime).Seconds())
+        log.Printf("[DEBUG addTx] END for tx %s (took %v)", txHash, time.Since(startTime))
     }()
 
     txPoolOperations.WithLabelValues("add").Inc()
 
     // ============================================
-    // Basic validation 
+    // Basic validation (no locks needed)
     // ============================================
+    log.Printf("[DEBUG addTx] Phase 1: basic validation")
     if t == nil {
         txValidationErrors.WithLabelValues("nil_tx").Inc()
         return errors.New("nil tx")
@@ -278,6 +283,7 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     sender := t.From
 
     // Check if chain is available
+    log.Printf("[DEBUG addTx] checking chain availability")
     if p.chain == nil || p.chain.State() == nil {
         txValidationErrors.WithLabelValues("chain_unavailable").Inc()
         return errors.New("chain unavailable")
@@ -290,17 +296,26 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     }
 
     // ============================================
-    // Chain state validation 
+    // Chain state validation (no pool lock)
     // ============================================
+    log.Printf("[DEBUG addTx] Phase 2: chain state validation")
     senderAddress := common.BytesToQuantumAddress(sender.Bytes())
-    stateNonce := p.chain.State().GetNonce(senderAddress)
-    balance := p.chain.State().GetBalance(senderAddress)
     
-    // Get latest height BEFORE taking the pool lock
+    log.Printf("[DEBUG addTx] getting state nonce")
+    stateNonce := p.chain.State().GetNonce(senderAddress)
+    log.Printf("[DEBUG addTx] state nonce = %d", stateNonce)
+    
+    log.Printf("[DEBUG addTx] getting balance")
+    balance := p.chain.State().GetBalance(senderAddress)
+    log.Printf("[DEBUG addTx] balance = %v", balance)
+    
+    // CRITICAL FIX: Get latest height BEFORE taking the pool lock
+    log.Printf("[DEBUG addTx] getting latest height")
     latestHeight := uint64(0)
     if latest := p.chain.Latest(); latest != nil && latest.Header != nil {
         latestHeight = latest.Header.Number.Uint64()
     }
+    log.Printf("[DEBUG addTx] latest height = %d", latestHeight)
 
     // Basic size check (doesn't need pool state)
     if len(t.Data) > p.maxTxSize {
@@ -331,9 +346,11 @@ func (p *TxPool) addTx(t *tx.Tx) error {
 
     // ============================================
     // Pool-specific checks (with lock)
-    // Keep this section as SHORT and FAST as possible
     // ============================================
+    log.Printf("[DEBUG addTx] Phase 3: attempting to acquire pool lock")
     p.mu.Lock()
+    log.Printf("[DEBUG addTx] acquired pool lock")
+    
     // Check if tx already exists (fast map lookup)
     if _, exists := p.txs[hash]; exists {
         p.mu.Unlock()
@@ -379,7 +396,7 @@ func (p *TxPool) addTx(t *tx.Tx) error {
             expectedNonce, t.Nonce, stateNonce)
     }
 
-    // Check for duplicate nonce (shouldn't happen with above check, but just in case)
+    // Check for duplicate nonce
     for _, pendingTx := range senderTxs {
         if pendingTx.Nonce == t.Nonce {
             p.mu.Unlock()
@@ -389,28 +406,26 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     }
 
     // ============================================
-    // PAdd to pool
-    // All these operations are O(1) or very fast
+    // Add to pool
     // ============================================
-    // Use the latestHeight we captured BEFORE taking the lock
+    log.Printf("[DEBUG addTx] Phase 4: adding to pool")
     p.txs[hash] = t
     p.bySender[sender] = append(senderTxs, t)
     p.submitTime[hash] = time.Now()
-    p.submitHeight[hash] = latestHeight  // Now using pre-captured value
+    p.submitHeight[hash] = latestHeight
 
-    // Update nonce tracker
     if t.Nonce > p.nonceTracker[sender] {
         p.nonceTracker[sender] = t.Nonce
     }
 
-    // Add to priority queue
+    log.Printf("[DEBUG addTx] pushing to heap")
     heap.Push(p.pendingHeap, t)
 
-    // Update metrics
     txAddedCounter.Inc()
     txPoolSizeGauge.Set(float64(len(p.txs)))
 
     p.mu.Unlock()
+    log.Printf("[DEBUG addTx] released pool lock")
 
     // ============================================
     // Logging
