@@ -35,6 +35,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/fees"
 	"github.com/antdaza/antdchain/antdc/mining"
 	"github.com/antdaza/antdchain/antdc/monitoring"
+	"github.com/antdaza/antdchain/antdc/nonce"
 	"github.com/antdaza/antdchain/antdc/p2p"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
@@ -1847,60 +1848,13 @@ func (c *Console) handleSend(parts []string) {
 	fmt.Printf("   Next Nonce:    %d (includes pending txs)\n", nextNonce)
 
 	// DETERMINE NONCE
-	var suggestedNonce uint64
-	var nonceSource string
-	var replaceMode bool
-	var replaceTxHash common.Hash
-
-	if len(parts) > 4 {
-		arg := parts[4]
-
-		if arg == "@replace" || arg == "replace" {
-			replaceMode = true
-			nonceSource = "replace"
-
-			// Find pending transaction to replace
-			c.node.mu.RLock()
-			txPool := c.node.blockchain.TxPool()
-			pending := txPool.GetPending()
-			c.node.mu.RUnlock()
-
-			// Look for latest pending transaction by this sender to replace
-			for _, pendingTx := range pending {
-				if common.BytesToQuantumAddress(pendingTx.From.Bytes()) == fromAddr {
-					if replaceTxHash == (common.Hash{}) || pendingTx.Nonce > suggestedNonce {
-						suggestedNonce = pendingTx.Nonce
-						replaceTxHash = pendingTx.Hash()
-						nonceSource = fmt.Sprintf("replace %s", replaceTxHash.String()[:8])
-					}
-				}
-			}
-
-			if replaceTxHash == (common.Hash{}) {
-				fmt.Printf("❌ No pending transaction found to replace for sender %s\n", fromAddr.String())
-				fmt.Printf("   Current pending transactions:\n")
-				for _, pendingTx := range pending {
-					if common.BytesToQuantumAddress(pendingTx.From.Bytes()) == fromAddr {
-						fmt.Printf("   - Nonce %d: %s\n",
-							pendingTx.Nonce, pendingTx.Hash().String()[:8])
-					}
-				}
-				return
-			}
-		} else {
-			// Manual nonce
-			manualNonce, err := strconv.ParseUint(arg, 10, 64)
-			if err != nil {
-				fmt.Printf("❌ Invalid nonce '%s': %v\n", arg, err)
-				return
-			}
-			suggestedNonce = manualNonce
-			nonceSource = "manual"
-		}
-	} else {
-		// Automatic nonce should include pending transactions in the local pool
-		suggestedNonce = nextNonce
-		nonceSource = "auto"
+	c.node.mu.RLock()
+	pending := c.node.blockchain.TxPool().GetPending()
+	c.node.mu.RUnlock()
+	suggestedNonce, nonceSource, replaceMode, replaceTxHash, err := nonce.Determine(parts, fromAddr, stateNonce, nextNonce, pending)
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		return
 	}
 
 	// GAS CALCULATION
@@ -2086,7 +2040,6 @@ func (c *Console) handleSend(parts []string) {
 
 				}
 			}
-		}
 			addErr = fmt.Errorf("timed out while adding transaction to pool after waiting %s", txPoolAddTimeout)
 			goto addDone
 		}
