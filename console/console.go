@@ -1832,11 +1832,13 @@ func (c *Console) handleSend(parts []string) {
     }
 
     //GET CURRENT STATE
-    c.node.mu.RLock()
     state := c.node.blockchain.State()
+    if state == nil {
+        fmt.Println("❌ Blockchain state unavailable")
+        return
+    }
     stateNonce := state.GetNonce(fromAddr)
     balance := state.GetBalance(fromAddr)
-    c.node.mu.RUnlock()
 
     fmt.Printf("\n📊 Current State for %s:\n", fromAddr.String())
     fmt.Printf("   Balance: %s ANTD\n", formatBalance(balance))
@@ -2017,8 +2019,11 @@ txm := tx.NewTransferTx(
     // ADD TO TRANSACTION POOL
     fmt.Printf("\n📤 Adding to transaction pool...\n")
 
-    c.node.mu.Lock()
     txPool := c.node.blockchain.TxPool()
+    if txPool == nil {
+        fmt.Println("❌ Transaction pool unavailable")
+        return
+    }
 
     // Add transaction to pool
     var addErr error
