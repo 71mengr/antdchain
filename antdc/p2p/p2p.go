@@ -396,54 +396,115 @@ func (n *Node) directPushBlock(b *block.Block, msg []byte) {
 
 // BroadcastTx — secure, efficient, spam-resistant transaction broadcast
 func (n *Node) BroadcastTx(t *tx.Tx) error {
-	if t == nil {
-		return errors.New("nil transaction")
-	}
+    // Add entry logging
+    n.logger.Debugf("BroadcastTx called for tx %s", t.Hash().Hex()[:10])
+    
+    if t == nil {
+        return errors.New("nil transaction")
+    }
 
-	if err := t.Validate(); err != nil {
-		return fmt.Errorf("invalid transaction: %w", err)
-	}
-	if valid, err := t.Verify(); err != nil || !valid {
-		return errors.New("invalid signature")
-	}
+    if err := t.Validate(); err != nil {
+        return fmt.Errorf("invalid transaction: %w", err)
+    }
+    if valid, err := t.Verify(); err != nil || !valid {
+        return errors.New("invalid signature")
+    }
 
-	hash := t.Hash()
+    hash := t.Hash()
+    n.logger.Debugf("Tx %s validation passed", hash.Hex()[:10])
 
-	// Check if we've recently broadcast this transaction
-	n.knownTxsMu.RLock()
-	_, recentlyBroadcast := n.knownTxs[hash]
-	n.knownTxsMu.RUnlock()
+    // Check context
+    if n.ctx == nil {
+        n.logger.Error("P2P context is nil")
+        return errors.New("p2p context not initialized")
+    }
+    
+    // Check context not canceled
+    select {
+    case <-n.ctx.Done():
+        n.logger.Errorf("P2P context canceled: %v", n.ctx.Err())
+        return fmt.Errorf("p2p context canceled: %w", n.ctx.Err())
+    default:
+        n.logger.Debug("P2P context is valid")
+    }
 
-	if recentlyBroadcast {
-		n.logger.Debugf("Already recently broadcast tx %s, skipping", hash.String()[:10])
-		return nil
-	}
+    // Check if we've recently broadcast this transaction
+    n.knownTxsMu.RLock()
+    broadcastTime, recentlyBroadcast := n.knownTxs[hash]
+    n.knownTxsMu.RUnlock()
 
-	data, err := json.Marshal(t)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tx: %w", err)
-	}
+    if recentlyBroadcast {
+        elapsed := time.Since(broadcastTime)
+        if elapsed < 30*time.Second { // Only skip if really recent
+            n.logger.Debugf("Already broadcast tx %s within %v, skipping", hash.Hex()[:10], elapsed)
+            return nil
+        }
+    }
 
-	msg := make([]byte, 1+len(data))
-	msg[0] = msgTypeTx
-	copy(msg[1:], data)
+    // Check topic
+    if n.topic == nil {
+        n.logger.Error("P2P topic is nil")
+        return errors.New("p2p topic not initialized")
+    }
 
-	if err := n.topic.Publish(n.ctx, msg); err != nil {
-		return fmt.Errorf("failed to publish tx: %w", err)
-	}
+    data, err := json.Marshal(t)
+    if err != nil {
+        n.logger.Errorf("Failed to marshal tx: %v", err)
+        return fmt.Errorf("failed to marshal tx: %w", err)
+    }
 
-	// Mark as broadcast
-	n.knownTxsMu.Lock()
-	n.knownTxs[hash] = time.Now()
-	n.knownTxsMu.Unlock()
+    msg := make([]byte, 1+len(data))
+    msg[0] = msgTypeTx
+    copy(msg[1:], data)
 
-	n.logger.Infof("Broadcast tx %s (nonce=%d, value=%s)",
-		hash.String()[:10],
-		t.Nonce,
-		t.Value.String(),
-	)
+    n.logger.Debugf("Publishing tx %s, msg size=%d bytes", hash.Hex()[:10], len(msg))
+    
+    // Publish with timeout
+    publishDone := make(chan error, 1)
+    go func() {
+        publishDone <- n.topic.Publish(n.ctx, msg)
+    }()
+    
+    select {
+    case err := <-publishDone:
+        if err != nil {
+            n.logger.Errorf("Failed to publish tx: %v", err)
+            return fmt.Errorf("failed to publish tx: %w", err)
+        }
+        n.logger.Infof("Successfully published tx %s", hash.Hex()[:10])
+    case <-time.After(5 * time.Second):
+        n.logger.Errorf("Publish timeout for tx %s", hash.Hex()[:10])
+        return errors.New("publish timeout")
+    }
 
-	return nil
+    // Mark as broadcast
+    n.knownTxsMu.Lock()
+    n.knownTxs[hash] = time.Now()
+    n.knownTxsMu.Unlock()
+
+    n.logger.Infof("Broadcast tx %s (nonce=%d, value=%s)",
+        hash.Hex()[:10],
+        t.Nonce,
+        t.Value.String(),
+    )
+
+    // Clean up old entries periodically
+    go n.cleanupKnownTxs()
+
+    return nil
+}
+
+// Add cleanup function
+func (n *Node) cleanupKnownTxs() {
+    n.knownTxsMu.Lock()
+    defer n.knownTxsMu.Unlock()
+    
+    cutoff := time.Now().Add(-5 * time.Minute)
+    for hash, timestamp := range n.knownTxs {
+        if timestamp.Before(cutoff) {
+            delete(n.knownTxs, hash)
+        }
+    }
 }
 
 // BroadcastTxForce publishes a transaction even if it was recently broadcast.
@@ -2368,7 +2429,7 @@ func (n *Node) shouldUseSyncMode(peerHeight, localHeight uint64) bool {
 	return gap > 50 // Only sync if VERY far behind
 }
 
-func (n *Node) cleanupKnownTxs() {
+/*func (n *Node) cleanupKnownTxs() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -2402,7 +2463,7 @@ func (n *Node) cleanupKnownTxs() {
 			n.logger.Debugf("Cleaned up known transactions cache, now %d entries", len(n.knownTxs))
 		}
 	}
-}
+}*/
 
 // Checks if we're behind and triggers sync immediately
 func (n *Node) triggerImmediateSync() {
