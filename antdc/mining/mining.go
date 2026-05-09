@@ -5,18 +5,10 @@
 package mining
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
-	"github.com/antdaza/antdchain/antdc/block"
-	"github.com/antdaza/antdchain/antdc/chain"
-	"github.com/antdaza/antdchain/antdc/crypto/quantum"
-	"github.com/antdaza/antdchain/antdc/p2p"
-	"github.com/antdaza/antdchain/antdc/pow"
-	"github.com/antdaza/antdchain/common"
-	"github.com/antdaza/antdchain/common/hexutil"
-	"github.com/prometheus/client_golang/prometheus"
 	"log"
 	"math/big"
 	"math/rand"
@@ -24,20 +16,43 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	qkeystore "github.com/antdaza/antdchain/antdc/accounts/keystore"
+	"github.com/antdaza/antdchain/antdc/block"
+	"github.com/antdaza/antdchain/antdc/chain"
+	"github.com/antdaza/antdchain/antdc/crypto/quantum"
+	"github.com/antdaza/antdchain/antdc/p2p"
+	"github.com/antdaza/antdchain/antdc/pow"
+	"github.com/antdaza/antdchain/antdc/tx"
+	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/common/hexutil"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Configuration constants
+// Configuration constants following Bitcoin's defaults
 const (
-	DefaultMiningInterval         = 12 * time.Second
-	MinimumMiningInterval         = 10 * time.Second
-	DefaultBroadcastMaxRetries    = 5
+	DefaultMiningInterval          = 12 * time.Second
+	MinimumMiningInterval          = 10 * time.Second
+	DefaultBroadcastMaxRetries     = 5
 	DefaultBroadcastInitialBackoff = 100 * time.Millisecond
 	DefaultBroadcastMaxBackoff     = 2 * time.Second
-	LogEligibilityCheckInterval    = 10
-	LogSyncStatusInterval          = 10 * time.Second
 
-	// First‑seen rule: how long to wait for a pending block at same height
-	DefaultPendingBlockTimeout = 2 * time.Second
+	// Block resource limits (Bitcoin equivalents)
+	DefaultBlockReservedWeight    = 4000
+	MinimumBlockReservedWeight    = 4000
+	MaxBlockWeight                = 4000000
+	MaxBlockSigOpsCost            = 80000
+
+	// Chunk selection constants
+	MaxConsecutiveFailures = 1000
+	BlockFullEnoughWeightDelta = 4000
+
+	// Timewarp protection (BIP94)
+	MaxTimewarp = 600 // 10 minutes in seconds
+
+	LogEligibilityCheckInterval = 10
+	LogSyncStatusInterval       = 10 * time.Second
+	PendingBlockTimeout         = 2 * time.Second
 )
 
 var (
@@ -96,9 +111,299 @@ func init() {
 	prometheus.MustRegister(miningRewardsTotal)
 }
 
-var lastSyncLog time.Time = time.Now()
+// TxEntry represents a mempool transaction with metadata
+type TxEntry struct {
+	Tx          *tx.Tx
+	Fee         *big.Int
+	ModifiedFee *big.Int
+	Weight      uint64
+	SigOpsCost  uint64
+	TxSize      uint64
+	Height      uint64
+	Time        uint64
+}
 
-// PosMiningState manages Proof-of-Work mining
+// IsFinal checks if transaction is final (locktime verification)
+func (txe *TxEntry) IsFinal(blockHeight uint64, blockTime uint64) bool {
+	if txe.Tx.LockTime == 0 {
+		return true
+	}
+	return txe.Tx.LockTime < blockHeight || txe.Tx.LockTime < blockTime
+}
+
+// BlockTemplate represents a candidate block being assembled
+type BlockTemplate struct {
+	Block           *block.Block
+	TxFees          []*big.Int
+	TxSigOpsCosts   []uint64
+	PackageFeerates []uint64
+	TotalFees       *big.Int
+	TotalWeight     uint64
+	TotalSigOpsCost uint64
+}
+
+// BlockAssemblerOptions configures block assembly
+type BlockAssemblerOptions struct {
+	BlockMaxWeight                   uint64
+	BlockMinFeeRate                  uint64
+	BlockReservedWeight              *uint64
+	CoinbaseOutputMaxAdditionalSigops uint64
+	PrintModifiedFee                 bool
+	TestBlockValidity                bool
+	IncludeDummyExtranonce           bool
+	UseMempool                       bool
+}
+
+// DefaultBlockAssemblerOptions returns default options
+func DefaultBlockAssemblerOptions() BlockAssemblerOptions {
+	reservedWeight := uint64(DefaultBlockReservedWeight)
+	return BlockAssemblerOptions{
+		BlockMaxWeight:                    MaxBlockWeight,
+		BlockMinFeeRate:                   0,
+		BlockReservedWeight:               &reservedWeight,
+		CoinbaseOutputMaxAdditionalSigops: 0,
+		PrintModifiedFee:                  false,
+		TestBlockValidity:                 true,
+		IncludeDummyExtranonce:            true,
+		UseMempool:                        true,
+	}
+}
+
+// clampOptions applies bounds to options
+func clampOptions(opts BlockAssemblerOptions) BlockAssemblerOptions {
+	reservedWeight := uint64(DefaultBlockReservedWeight)
+	if opts.BlockReservedWeight != nil {
+		reservedWeight = *opts.BlockReservedWeight
+	}
+	if reservedWeight < MinimumBlockReservedWeight {
+		reservedWeight = MinimumBlockReservedWeight
+	}
+	if reservedWeight > MaxBlockWeight {
+		reservedWeight = MaxBlockWeight
+	}
+	opts.BlockReservedWeight = &reservedWeight
+
+	if opts.CoinbaseOutputMaxAdditionalSigops > MaxBlockSigOpsCost {
+		opts.CoinbaseOutputMaxAdditionalSigops = MaxBlockSigOpsCost
+	}
+
+	if opts.BlockMaxWeight < reservedWeight {
+		opts.BlockMaxWeight = reservedWeight
+	}
+	if opts.BlockMaxWeight > MaxBlockWeight {
+		opts.BlockMaxWeight = MaxBlockWeight
+	}
+
+	return opts
+}
+
+// BlockAssembler handles block template creation
+type BlockAssembler struct {
+	chainstate      *chain.Blockchain
+	options         BlockAssemblerOptions
+	blockWeight     uint64
+	blockSigOpsCost uint64
+	blockTx         uint32
+	blockFees       *big.Int
+	height          uint64
+	lockTimeCutoff  uint64
+	template        *BlockTemplate
+	timeStart       time.Time
+	timeBuild       time.Duration
+}
+
+// NewBlockAssembler creates a new block assembler
+func NewBlockAssembler(chainstate *chain.Blockchain, opts BlockAssemblerOptions) *BlockAssembler {
+	return &BlockAssembler{
+		chainstate: chainstate,
+		options:    clampOptions(opts),
+		blockFees:  big.NewInt(0),
+	}
+}
+
+// resetBlock resets block building state
+func (ba *BlockAssembler) resetBlock() {
+	ba.blockWeight = *ba.options.BlockReservedWeight
+	ba.blockSigOpsCost = ba.options.CoinbaseOutputMaxAdditionalSigops
+	ba.blockTx = 0
+	ba.blockFees.SetInt64(0)
+}
+
+// getMinimumTime calculates minimum allowed timestamp
+func (ba *BlockAssembler) getMinimumTime(prevBlock *block.Block) uint64 {
+	minTime := prevBlock.Header.Time + 1
+
+	height := prevBlock.Header.Number.Uint64() + 1
+	if height%chain.DifficultyAdjustmentInterval == 0 {
+		if prevBlock.Header.Time > MaxTimewarp {
+			minTime = max(minTime, prevBlock.Header.Time-MaxTimewarp)
+		}
+	}
+
+	return minTime
+}
+
+// updateTime updates block timestamp
+func (ba *BlockAssembler) updateTime(header *block.Header, prevBlock *block.Block) int64 {
+	oldTime := header.Time
+	minTime := ba.getMinimumTime(prevBlock)
+	newTime := max(minTime, uint64(time.Now().Unix()))
+
+	if oldTime < newTime {
+		header.Time = newTime
+	}
+
+	return int64(newTime - oldTime)
+}
+
+// testChunkBlockLimits checks if a chunk fits
+func (ba *BlockAssembler) testChunkBlockLimits(chunkWeight uint64, chunkSigOpsCost uint64) bool {
+	if ba.blockWeight+chunkWeight > ba.options.BlockMaxWeight {
+		return false
+	}
+	if ba.blockSigOpsCost+chunkSigOpsCost > MaxBlockSigOpsCost {
+		return false
+	}
+	return true
+}
+
+// testChunkTransactions checks transaction finality
+func (ba *BlockAssembler) testChunkTransactions(txs []*TxEntry) bool {
+	for _, entry := range txs {
+		if !entry.IsFinal(ba.height, ba.lockTimeCutoff) {
+			return false
+		}
+	}
+	return true
+}
+
+// addToBlock adds a transaction to the block
+func (ba *BlockAssembler) addToBlock(entry *TxEntry) {
+	ba.template.Block.Txs = append(ba.template.Block.Txs, entry.Tx)
+	ba.template.TxFees = append(ba.template.TxFees, new(big.Int).Set(entry.Fee))
+	ba.template.TxSigOpsCosts = append(ba.template.TxSigOpsCosts, entry.SigOpsCost)
+
+	ba.blockWeight += entry.Weight
+	ba.blockTx++
+	ba.blockSigOpsCost += entry.SigOpsCost
+	ba.blockFees.Add(ba.blockFees, entry.Fee)
+
+	if ba.options.PrintModifiedFee {
+		log.Printf("[assembler] fee rate %s txid %s\n",
+			formatFeeRate(entry.ModifiedFee, entry.TxSize),
+			entry.Tx.Hash().Hex())
+	}
+}
+
+// addTransactions adds transactions from mempool
+func (ba *BlockAssembler) addTransactions(mempoolTxns []*TxEntry) {
+	for _, entry := range mempoolTxns {
+		if !ba.testChunkBlockLimits(entry.Weight, entry.SigOpsCost) {
+			continue
+		}
+		if !ba.testChunkTransactions([]*TxEntry{entry}) {
+			continue
+		}
+		ba.addToBlock(entry)
+	}
+}
+
+// createCoinbaseScriptSig creates the coinbase scriptSig with BIP34 height
+func (ba *BlockAssembler) createCoinbaseScriptSig() []byte {
+	heightBytes := make([]byte, 8)
+	binary.PutUvarint(heightBytes, ba.height)
+
+	for len(heightBytes) > 1 && heightBytes[0] == 0 {
+		heightBytes = heightBytes[1:]
+	}
+
+	script := append([]byte{byte(len(heightBytes))}, heightBytes...)
+
+	if ba.options.IncludeDummyExtranonce {
+		script = append(script, 0x00)
+	}
+
+	return script
+}
+
+// CreateNewBlock creates a new block template
+func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mempoolTxns []*TxEntry) (*BlockTemplate, error) {
+	ba.timeStart = time.Now()
+	ba.resetBlock()
+
+	ba.template = &BlockTemplate{
+		Block: &block.Block{
+			Header: &block.Header{},
+			Txs:    make([]*tx.Tx, 0),
+			Uncles: make([]*block.Header, 0),
+		},
+		TxFees:          make([]*big.Int, 0),
+		TxSigOpsCosts:   make([]uint64, 0),
+		PackageFeerates: make([]uint64, 0),
+		TotalFees:       big.NewInt(0),
+	}
+
+	prevBlock := ba.chainstate.Latest()
+	if prevBlock == nil {
+		return nil, errors.New("no chain tip")
+	}
+	ba.height = prevBlock.Header.Number.Uint64() + 1
+
+	ba.template.Block.Header.Version = 1
+	ba.template.Block.Header.Time = uint64(time.Now().Unix())
+	ba.lockTimeCutoff = prevBlock.Header.Time
+
+	if ba.options.UseMempool && len(mempoolTxns) > 0 {
+		ba.addTransactions(mempoolTxns)
+	}
+
+	buildTime := time.Since(ba.timeStart)
+
+	// Convert QuantumAddress to common.Address for block header
+	// Since your block.Header uses common.Address (Ethereum style), we need to convert
+	// For now, we'll use the quantum address bytes converted to common.Address
+	coinbaseEthAddr := common.Address{}
+	copy(coinbaseEthAddr[:], coinbaseAddr.Bytes()[:20])
+
+	// Create header using NewHeader
+	stateRoot := prevBlock.Header.Root // Use parent's state root as placeholder
+	txRoot := block.CalculateTxHash(nil)
+
+	header, err := block.NewHeader(
+		prevBlock,
+		coinbaseEthAddr,
+		stateRoot,
+		txRoot,
+		new(big.Int).SetUint64(ba.height),
+		prevBlock.Header.GasLimit,
+		ba.chainstate.GetPoWEngine(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create header: %w", err)
+	}
+
+	header.GasUsed = 0
+	ba.template.Block.Header = header
+	ba.template.Block.Txs = ba.template.Block.Txs
+
+	if err := ba.template.Block.UpdateHeader(); err != nil {
+		return nil, fmt.Errorf("failed to update header: %w", err)
+	}
+
+	ba.updateTime(ba.template.Block.Header, prevBlock)
+
+	ba.template.TotalWeight = ba.blockWeight
+	ba.template.TotalSigOpsCost = ba.blockSigOpsCost
+	ba.template.TotalFees.Set(ba.blockFees)
+	ba.timeBuild = buildTime
+
+	log.Printf("[assembler] Created new block: weight=%d txs=%d fees=%s sigops=%d\n",
+		ba.template.TotalWeight, ba.blockTx, ba.blockFees.String(), ba.template.TotalSigOpsCost)
+
+	return ba.template, nil
+}
+
+// PosMiningState manages mining state
 type PosMiningState struct {
 	mining       bool
 	enabled      bool
@@ -110,37 +415,44 @@ type PosMiningState struct {
 	blocksMined  uint64
 	totalRewards *big.Int
 
-	// Configuration
 	miningInterval           time.Duration
 	broadcastMaxRetries      int
 	broadcastInitialBackoff  time.Duration
 	broadcastMaxBackoff      time.Duration
 	pendingBlockTimeout      time.Duration
 
-	// Tracking first‑seen blocks
+	assembler     *BlockAssembler
+	assemblerOpts BlockAssemblerOptions
+
 	pendingHeights map[uint64]time.Time
 	pendingMu      sync.RWMutex
 
-	mu sync.RWMutex
+	currentTemplate *BlockTemplate
+	templateMu      sync.RWMutex
+
+	mu           sync.RWMutex
 	onSyncChange func(isSyncing bool)
 }
 
-func NewPosMiningState(powEngine *pow.PoW) *PosMiningState {
+// NewPosMiningState creates a new mining state
+func NewPosMiningState(powEngine *pow.PoW, chainstate *chain.Blockchain) *PosMiningState {
+	opts := DefaultBlockAssemblerOptions()
 	return &PosMiningState{
-		enabled:                true,
-		powEngine:              powEngine,
-		totalRewards:           big.NewInt(0),
-		miningInterval:         DefaultMiningInterval,
-		broadcastMaxRetries:    DefaultBroadcastMaxRetries,
+		enabled:                 true,
+		powEngine:               powEngine,
+		totalRewards:            big.NewInt(0),
+		miningInterval:          DefaultMiningInterval,
+		broadcastMaxRetries:     DefaultBroadcastMaxRetries,
 		broadcastInitialBackoff: DefaultBroadcastInitialBackoff,
 		broadcastMaxBackoff:     DefaultBroadcastMaxBackoff,
-		pendingBlockTimeout:     DefaultPendingBlockTimeout,
+		pendingBlockTimeout:     PendingBlockTimeout,
 		pendingHeights:          make(map[uint64]time.Time),
+		assembler:               NewBlockAssembler(chainstate, opts),
+		assemblerOpts:           opts,
 	}
 }
 
-// OnBlockReceived must be called by the p2p layer whenever a new block is announced or received.
-// It marks the height as “pending” so the miner will wait before trying to mine the same height.
+// OnBlockReceived marks a height as pending
 func (ms *PosMiningState) OnBlockReceived(height uint64) {
 	ms.pendingMu.Lock()
 	defer ms.pendingMu.Unlock()
@@ -151,17 +463,13 @@ func (ms *PosMiningState) OnBlockReceived(height uint64) {
 	}
 }
 
-// clearPendingHeight removes a height from the pending set.
 func (ms *PosMiningState) clearPendingHeight(height uint64) {
 	ms.pendingMu.Lock()
 	defer ms.pendingMu.Unlock()
 	delete(ms.pendingHeights, height)
 }
 
-// waitForPendingBlock waits up to pendingBlockTimeout for a block at the given height
-// to appear in the chain. Returns true if a block was added, false after timeout.
 func (ms *PosMiningState) waitForPendingBlock(bc *chain.Blockchain, height uint64) bool {
-	// Quick check: is this height even pending?
 	ms.pendingMu.RLock()
 	_, pending := ms.pendingHeights[height]
 	ms.pendingMu.RUnlock()
@@ -169,7 +477,7 @@ func (ms *PosMiningState) waitForPendingBlock(bc *chain.Blockchain, height uint6
 		return false
 	}
 
-	log.Printf("[miner] 🕒 Pending block at height %d – waiting up to %v for it to arrive",
+	log.Printf("[miner] �� Pending block at height %d – waiting up to %v for it to arrive",
 		height, ms.pendingBlockTimeout)
 
 	deadline := time.Now().Add(ms.pendingBlockTimeout)
@@ -190,13 +498,262 @@ func (ms *PosMiningState) waitForPendingBlock(bc *chain.Blockchain, height uint6
 	return false
 }
 
-// IsMining, IsEnabled, SetEnabled, SetMining (unchanged, but included for completeness)
+func generateBlockSignature(miner common.QuantumAddress, parentHash common.Hash, height uint64, timestamp uint64, privateKey []byte) ([]byte, error) {
+	if len(privateKey) == 0 {
+		return nil, errors.New("private key required")
+	}
+
+	msgData := append([]byte("ANTDChain-PoW-Block"), parentHash.Bytes()...)
+	msgData = append(msgData, common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32)...)
+	msgData = append(msgData, common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32)...)
+	msgData = append(msgData, miner.Bytes()...)
+
+	msgHash := common.ComputeHash(msgData)
+	return quantum.Sign(privateKey, msgHash.Bytes())
+}
+
+func broadcastMinedBlock(p *p2p.Node, blk *block.Block, ms *PosMiningState) {
+	if p == nil || blk == nil {
+		return
+	}
+
+	ms.mu.RLock()
+	maxRetries := ms.broadcastMaxRetries
+	backoff := ms.broadcastInitialBackoff
+	maxBackoff := ms.broadcastMaxBackoff
+	ms.mu.RUnlock()
+
+	for i := 0; i < maxRetries; i++ {
+		if err := p.BroadcastBlock(blk); err != nil {
+			log.Printf("[miner] Broadcast attempt %d/%d failed: %v", i+1, maxRetries, err)
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		} else {
+			log.Printf("[miner] Block %d broadcasted successfully", blk.Header.Number.Uint64())
+			miningBroadcastSuccess.Inc()
+			return
+		}
+	}
+	miningBroadcastFailures.Inc()
+	log.Printf("[miner] Failed to broadcast block %d after %d attempts", blk.Header.Number.Uint64(), maxRetries)
+}
+
+func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mempoolTxns []*TxEntry) {
+	ms.mu.RLock()
+	miningInterval := ms.miningInterval
+	ms.mu.RUnlock()
+
+	jitter := time.Duration(rand.Int63n(int64(miningInterval / 2)))
+	time.Sleep(jitter)
+	log.Printf("[miner] Mining loop started – base interval %v + jitter %v", miningInterval, jitter)
+
+	ticker := time.NewTicker(miningInterval)
+	defer ticker.Stop()
+
+	var (
+		consecutiveMisses int
+		startTime         = time.Now()
+		sessionStartTime  = time.Now()
+	)
+
+	go func() {
+		for ms.mining {
+			miningSessionDuration.Set(time.Since(sessionStartTime).Seconds())
+			time.Sleep(1 * time.Second)
+		}
+	}()
+
+	for ms.mining {
+		<-ticker.C
+
+		if bc.IsSyncing() {
+			if time.Since(lastSyncLog) > LogSyncStatusInterval {
+				log.Printf("[miner] Sync in progress (height %d → %d) — mining paused",
+					bc.GetChainHeight(), bc.GetSyncTarget())
+				lastSyncLog = time.Now()
+			}
+			continue
+		}
+
+		if remaining := bc.SyncCooldownRemaining(); remaining > 0 {
+			if time.Since(lastSyncLog) > LogSyncStatusInterval {
+				log.Printf("[miner] Sync completed; waiting %s before resuming mining", remaining.Truncate(time.Second))
+				lastSyncLog = time.Now()
+			}
+			time.Sleep(min(remaining, time.Second))
+			continue
+		}
+
+		parent := bc.Latest()
+		if parent == nil {
+			continue
+		}
+
+		height := parent.Header.Number.Uint64() + 1
+
+		if existing := bc.GetBlock(height); existing != nil {
+			ms.clearPendingHeight(height)
+			continue
+		}
+
+		if ms.waitForPendingBlock(bc, height) {
+			continue
+		}
+
+		template, err := ms.assembler.CreateNewBlock(ms.minerAddress, mempoolTxns)
+		if err != nil {
+			log.Printf("[miner] Failed to create block template: %v", err)
+			continue
+		}
+
+		ms.mu.RLock()
+		minerAddr := ms.minerAddress
+		hasPrivKey := ms.hasPrivateKey
+		privKey := ms.privateKey
+		ms.mu.RUnlock()
+
+		if !hasPrivKey || minerAddr == (common.QuantumAddress{}) {
+			consecutiveMisses++
+			if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
+				log.Printf("[miner] Waiting — no eligible wallet key loaded")
+			}
+			miningEligibilityChecks.WithLabelValues("not_eligible").Inc()
+			continue
+		}
+
+		consecutiveMisses = 0
+		miningEligibilityChecks.WithLabelValues("eligible").Inc()
+
+		currentTime := uint64(time.Now().Unix())
+		eligible, err := ms.powEngine.VerifyMinerEligibility(minerAddr, parent.Hash(), height, currentTime)
+		if err != nil || !eligible {
+			log.Printf("[miner] Eligibility failed: %v", err)
+			ms.powEngine.RecordMissedBlock(minerAddr)
+			continue
+		}
+
+		log.Printf("[miner] ✅ Wallet eligible. Mining block %d as %s", height, minerAddr.String()[:12])
+
+		currentTip := bc.Latest()
+		if currentTip == nil || currentTip.Hash() != parent.Hash() {
+			log.Printf("[miner] Tip changed while preparing block %d; regenerating template", height)
+			continue
+		}
+
+		blk := template.Block
+		signature, err := generateBlockSignature(minerAddr, parent.Hash(), height, blk.Header.Time, privKey)
+		if err != nil {
+			log.Printf("[miner] Signing failed: %v", err)
+			continue
+		}
+
+		if len(signature) > 0 {
+			sigMarker := []byte("|SIG|")
+			blk.Header.Extra = append(blk.Header.Extra, sigMarker...)
+			blk.Header.Extra = append(blk.Header.Extra, signature...)
+		}
+
+		if err := bc.AddBlock(blk); err != nil {
+			log.Printf("[miner] AddBlock failed: %v", err)
+			if bc.GetBlock(height) != nil {
+				ms.powEngine.RecordMissedBlock(minerAddr)
+			}
+			continue
+		}
+
+		ms.blocksMined++
+		ms.mu.Lock()
+		ms.totalRewards.Add(ms.totalRewards, template.TotalFees)
+		blockReward := bc.GetBlockSubsidy(height)
+		ms.totalRewards.Add(ms.totalRewards, blockReward)
+		ms.mu.Unlock()
+
+		miningBlocksTotal.Inc()
+		miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
+		miningUptime.Set(time.Since(startTime).Seconds())
+		ms.powEngine.RecordBlockMined(minerAddr, height)
+
+		log.Printf("[miner] �� BLOCK #%d MINED by %s! Reward: %s ANTD",
+			height, minerAddr.String()[:12],
+			new(big.Int).Div(new(big.Int).Add(template.TotalFees, blockReward), big.NewInt(1e18)).String())
+
+		ms.clearPendingHeight(height)
+
+		if p2pNode != nil {
+			go broadcastMinedBlock(p2pNode, blk, ms)
+		}
+
+		ms.templateMu.Lock()
+		ms.currentTemplate = nil
+		ms.templateMu.Unlock()
+	}
+
+	log.Println("[miner] Mining stopped")
+}
+
+// StartPowMining starts the mining loop
+func StartPowMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node, mempoolTxns []*TxEntry) {
+	if bc == nil || rewardAddr == (common.QuantumAddress{}) || state.powEngine == nil {
+		log.Println("[miner] Missing required components")
+		return
+	}
+	if !state.enabled {
+		log.Println("[miner] Mining disabled")
+		return
+	}
+	if state.mining {
+		state.mining = false
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err := state.SetMinerAddress(rewardAddr); err != nil {
+		log.Printf("[miner] Cannot set miner address: %v", err)
+		return
+	}
+
+	log.Printf("[miner] Starting PoW mining checks for %s", rewardAddr.String()[:12])
+	state.mining = true
+	log.Printf("[miner] PoW Mining STARTED → %s", rewardAddr.String())
+
+	go miningLoop(bc, state, p2pNode, mempoolTxns)
+}
+
+// StopMining stops mining
+func StopMining(state *PosMiningState) {
+	if state != nil {
+		state.mining = false
+		log.Println("[miner] Mining STOPPED")
+	}
+}
+
+func formatFeeRate(fee *big.Int, size uint64) string {
+	rate := new(big.Float).SetInt(fee)
+	rate.Quo(rate, new(big.Float).SetUint64(size))
+	return rate.Text('f', 8)
+}
+
+func min(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// Existing methods for compatibility
 func (ms *PosMiningState) IsMining() bool    { return ms.mining }
 func (ms *PosMiningState) IsEnabled() bool   { return ms.enabled }
 func (ms *PosMiningState) SetEnabled(v bool) { ms.enabled = v }
 func (ms *PosMiningState) SetMining(v bool)  { ms.mining = v }
 
-// SetMiningInterval sets the mining check interval
 func (ms *PosMiningState) SetMiningInterval(interval time.Duration) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -207,7 +764,6 @@ func (ms *PosMiningState) SetMiningInterval(interval time.Duration) {
 	ms.miningInterval = interval
 }
 
-// SetBroadcastRetryConfig sets broadcast retry configuration
 func (ms *PosMiningState) SetBroadcastRetryConfig(maxRetries int, initialBackoff, maxBackoff time.Duration) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -265,349 +821,88 @@ func (ms *PosMiningState) GetPublicKey() []byte {
 	return pubKey
 }
 
-// StartPowMining starts the mining loop
-func StartPowMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node) {
-	if bc == nil || rewardAddr == (common.QuantumAddress{}) || state.powEngine == nil {
-		log.Println("[miner] Missing required components")
-		return
-	}
-	if !state.enabled {
-		log.Println("[miner] Mining disabled")
-		return
-	}
-	if state.mining {
-		state.mining = false
-		time.Sleep(200 * time.Millisecond)
-	}
-	if err := state.SetMinerAddress(rewardAddr); err != nil {
-		log.Printf("[miner] Cannot set miner address: %v", err)
-		return
-	}
-	log.Printf("[miner] Starting PoW mining checks for %s", rewardAddr.String()[:12])
-	state.mining = true
-	log.Printf("[miner] PoW Mining STARTED → %s", rewardAddr.String())
-	go posMiningLoop(bc, state, p2pNode)
+func (ms *PosMiningState) SetSyncCallback(cb func(isSyncing bool)) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	ms.onSyncChange = cb
 }
 
-func StopMining(state *PosMiningState) {
-	if state != nil {
-		state.mining = false
-		log.Println("[miner] Mining STOPPED")
+func (ms *PosMiningState) PauseMining() {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	if ms.mining {
+		ms.mining = false
+		log.Println("[miner] Mining PAUSED due to sync")
+		if ms.onSyncChange != nil {
+			ms.onSyncChange(true)
+		}
 	}
 }
 
-// posMiningLoop is the main mining goroutine
-func posMiningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node) {
-	ms.mu.RLock()
-	miningInterval := ms.miningInterval
-	ms.mu.RUnlock()
-
-	// Add random jitter to reduce simultaneous mining attempts
-	jitter := time.Duration(rand.Int63n(int64(miningInterval / 2)))
-	time.Sleep(jitter)
-	log.Printf("[miner] Mining loop started – base interval %v + jitter %v", miningInterval, jitter)
-
-	ticker := time.NewTicker(miningInterval)
-	defer ticker.Stop()
-
-	var (
-		consecutiveMisses int
-		totalMined        uint64
-		startTime         = time.Now()
-		sessionStartTime  = time.Now()
-		eligibilityChecks int
-	)
-
-	// Update session duration metric
-	go func() {
-		for ms.mining {
-			miningSessionDuration.Set(time.Since(sessionStartTime).Seconds())
-			time.Sleep(1 * time.Second)
-		}
-	}()
-
-	for ms.mining {
-		<-ticker.C
-
-		if bc.IsSyncing() {
-			if time.Since(lastSyncLog) > LogSyncStatusInterval {
-				log.Printf("[miner] Sync in progress (height %d → %d) — mining paused",
-					bc.GetChainHeight(), bc.GetSyncTarget())
-				lastSyncLog = time.Now()
-			}
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		if remaining := bc.SyncCooldownRemaining(); remaining > 0 {
-			if time.Since(lastSyncLog) > LogSyncStatusInterval {
-				log.Printf("[miner] Sync completed; waiting %s before resuming mining", remaining.Truncate(time.Second))
-				lastSyncLog = time.Now()
-			}
-			time.Sleep(min(remaining, time.Second))
-			continue
-		}
-
-		parent := bc.Latest()
-		if parent == nil {
-			continue
-		}
-
-		height := parent.Header.Number.Uint64() + 1
-		if height <= bc.GetChainHeight() {
-			continue
-		}
-		if existing := bc.GetBlock(height); existing != nil {
-			ms.clearPendingHeight(height)
-			continue
-		}
-
-		// ----- CRITICAL: Wait for a pending block (first‑seen rule) -----
-		if ms.waitForPendingBlock(bc, height) {
-			continue // block arrived, skip mining
-		}
-		// -------------------------------------------------------------
-
-		if ms.powEngine == nil {
-			continue
-		}
-
-		// Dynamic wallet mining: get eligible key and address
-		var (
-			eligiblePrivKey   []byte
-			configuredMiner   common.QuantumAddress
-			loadedKeyAddress  common.QuantumAddress
-		)
-		ms.mu.RLock()
-		configuredMiner = ms.minerAddress
-		if ms.hasPrivateKey && len(ms.privateKey) > 0 {
-			pubKey, err := quantum.DerivePublicKey(ms.privateKey)
-			if err == nil {
-				parsedAddr, addrErr := common.ParseQuantumAddress(quantum.PubKeyToAddress(pubKey))
-				if addrErr == nil {
-					loadedKeyAddress = parsedAddr
-					eligiblePrivKey = append([]byte(nil), ms.privateKey...)
-				}
-			}
-		}
-		ms.mu.RUnlock()
-
-		minerToUse := loadedKeyAddress
-		if minerToUse == (common.QuantumAddress{}) {
-			minerToUse = configuredMiner
-		}
-
-		eligibilityChecks++
-		if len(eligiblePrivKey) == 0 || minerToUse == (common.QuantumAddress{}) {
-			consecutiveMisses++
-			if consecutiveMisses == 1 || consecutiveMisses%LogEligibilityCheckInterval == 0 {
-				log.Printf("[miner] Waiting — no eligible wallet key loaded (configured: %s, key: %s)",
-					configuredMiner.String()[:12], loadedKeyAddress.String()[:12])
-			}
-			miningEligibilityChecks.WithLabelValues("not_eligible").Inc()
-			continue
-		}
-
-		consecutiveMisses = 0
-		miningEligibilityChecks.WithLabelValues("eligible").Inc()
-		log.Printf("[miner] ✅ Wallet eligible. Mining block %d as %s", height, minerToUse.String()[:12])
-
-		currentTime := uint64(time.Now().Unix())
-		eligible, err := ms.powEngine.VerifyMinerEligibility(minerToUse, parent.Hash(), height, currentTime)
-		if err != nil || !eligible {
-			log.Printf("[miner] Eligibility failed: %v", err)
-			ms.powEngine.RecordMissedBlock(minerToUse)
-			continue
-		}
-
-		// Create block
-		newBlock, _, err := bc.CreateMiningBlock(minerToUse)
-		if err != nil || newBlock == nil {
-			log.Printf("[miner] Block creation failed: %v", err)
-			continue
-		}
-
-		// Check tip hasn't changed
-		currentTip := bc.Latest()
-		if currentTip == nil || currentTip.Hash() != parent.Hash() || currentTip.Header.Number.Uint64()+1 != height {
-			log.Printf("[miner] Tip changed while building block %d; resyncing", height)
-			continue
-		}
-		if bc.IsSyncing() {
-			log.Printf("[miner] Sync resumed while preparing block %d; skipping", height)
-			continue
-		}
-		if remaining := bc.SyncCooldownRemaining(); remaining > 0 {
-			log.Printf("[miner] Sync cooldown active for %s; skipping block %d", remaining.Truncate(time.Second), height)
-			continue
-		}
-
-		// Sign
-		signature, err := generateBlockSignature(minerToUse, parent.Hash(), height, newBlock.Header.Time, eligiblePrivKey)
-		if err != nil {
-			log.Printf("[miner] Signing failed: %v", err)
-			continue
-		}
-		if len(signature) > 0 {
-			sigMarker := []byte("|SIG|")
-			extra := append(newBlock.Header.Extra, sigMarker...)
-			extra = append(extra, signature...)
-			newBlock.Header.Extra = extra
-		}
-
-		// Submit
-		if err := bc.AddBlock(newBlock); err != nil {
-			log.Printf("[miner] AddBlock failed: %v", err)
-			if bc.GetBlock(height) != nil {
-				ms.powEngine.RecordMissedBlock(minerToUse)
-			}
-			continue
-		}
-
-		// Success
-		totalMined++
-		ms.blocksMined++
-		blockReward := calculateBlockReward(height, bc)
-		ms.mu.Lock()
-		ms.totalRewards.Add(ms.totalRewards, blockReward)
-		ms.mu.Unlock()
-
-		miningBlocksTotal.Inc()
-		miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
-		miningUptime.Set(time.Since(startTime).Seconds())
-		ms.powEngine.RecordBlockMined(minerToUse, height)
-
-		log.Printf("[miner] 🎉 BLOCK #%d MINED by %s! Reward: %s ANTD",
-			height, minerToUse.String()[:12],
-			new(big.Int).Div(blockReward, big.NewInt(1e18)).String())
-		log.Printf("[miner]   Total mined this session: %d", totalMined)
-
-		ms.clearPendingHeight(height)
-
-		if p2pNode != nil {
-			go broadcastMinedBlock(p2pNode, newBlock, ms)
-		}
-
-		if totalMined%5 == 0 {
-			avg := time.Since(startTime).Seconds() / float64(totalMined)
-			log.Printf("[miner] 📊 Mined %d blocks (avg %.1fs/block)", totalMined, avg)
+func (ms *PosMiningState) ResumeMining() {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	if !ms.mining {
+		ms.mining = true
+		log.Println("[miner] Mining RESUMED")
+		if ms.onSyncChange != nil {
+			ms.onSyncChange(false)
 		}
 	}
-	log.Println("[miner] Mining stopped")
 }
 
-// generateBlockSignature creates a quantum signature for a block
-func generateBlockSignature(miner common.QuantumAddress, parentHash common.Hash, height uint64, timestamp uint64, privateKey []byte) ([]byte, error) {
-	if len(privateKey) == 0 {
-		return nil, errors.New("private key required")
-	}
-	msg := common.ComputeHash(
-		append(
-			[]byte("ANTDChain-PoW-Block"),
-			append(
-				parentHash.Bytes(),
-				append(
-					common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
-					append(
-						common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
-						miner.Bytes()...,
-					)...,
-				)...,
-			)...,
-		),
-	).Bytes()
-	return quantum.Sign(privateKey, msg)
-}
-
-// verifyBlockSignature verifies a block signature (kept for completeness)
-func verifyBlockSignature(miner common.QuantumAddress, parentHash common.Hash, height uint64, timestamp uint64, signature []byte, expectedPublicKey []byte) (bool, error) {
-	if len(signature) == 0 {
-		return true, nil
-	}
-	if len(expectedPublicKey) == 0 {
-		return false, errors.New("expected public key required")
-	}
-	msg := common.ComputeHash(
-		append(
-			[]byte("ANTDChain-PoW-Block"),
-			append(
-				parentHash.Bytes(),
-				append(
-					common.LeftPadBytes(big.NewInt(int64(height)).Bytes(), 32),
-					append(
-						common.LeftPadBytes(big.NewInt(int64(timestamp)).Bytes(), 32),
-						miner.Bytes()...,
-					)...,
-				)...,
-			)...,
-		),
-	).Bytes()
-	return quantum.Verify(expectedPublicKey, msg, signature), nil
-}
-
-// broadcastMinedBlock with exponential backoff
-func broadcastMinedBlock(p *p2p.Node, blk *block.Block, ms *PosMiningState) {
-	if p == nil || blk == nil {
-		return
+func (ms *PosMiningState) CheckMiningEligibility(bc *chain.Blockchain) (bool, error) {
+	if bc == nil || ms.powEngine == nil {
+		return false, errors.New("blockchain or PoW engine not initialized")
 	}
 	ms.mu.RLock()
-	maxRetries := ms.broadcastMaxRetries
-	backoff := ms.broadcastInitialBackoff
-	maxBackoff := ms.broadcastMaxBackoff
+	minerAddr := ms.minerAddress
 	ms.mu.RUnlock()
-
-	for i := 0; i < maxRetries; i++ {
-		if err := p.BroadcastBlock(blk); err != nil {
-			log.Printf("[miner] Broadcast attempt %d/%d failed: %v", i+1, maxRetries, err)
-			time.Sleep(backoff)
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		} else {
-			log.Printf("[miner] Block %d broadcasted successfully", blk.Header.Number.Uint64())
-			miningBroadcastSuccess.Inc()
-			return
-		}
+	if minerAddr == (common.QuantumAddress{}) {
+		return false, errors.New("miner address not set")
 	}
-	miningBroadcastFailures.Inc()
-	log.Printf("[miner] Failed to broadcast block %d after %d attempts", blk.Header.Number.Uint64(), maxRetries)
+	parent := bc.Latest()
+	if parent == nil {
+		return false, errors.New("no parent block found")
+	}
+	height := parent.Header.Number.Uint64() + 1
+	currentTime := uint64(time.Now().Unix())
+	eligible, err := ms.powEngine.VerifyMinerEligibility(minerAddr, parent.Hash(), height, currentTime)
+	if err != nil {
+		return false, fmt.Errorf("eligibility check failed: %w", err)
+	}
+	return eligible, nil
 }
 
-// extractSignatureFromBlock extracts the signature from a block's Extra field
-func extractSignatureFromBlock(blk *block.Block) []byte {
-	if blk == nil || blk.Header == nil {
-		return nil
+func (ms *PosMiningState) GetNextMiningSlot(bc *chain.Blockchain) (uint64, time.Duration, error) {
+	if bc == nil || ms.powEngine == nil {
+		return 0, 0, errors.New("blockchain or PoW engine not initialized")
 	}
-	extra := blk.Header.Extra
-	sigMarker := []byte("|SIG|")
-	for i := 0; i <= len(extra)-len(sigMarker); i++ {
-		if string(extra[i:i+len(sigMarker)]) == string(sigMarker) {
-			return extra[i+len(sigMarker):]
-		}
+	ms.mu.RLock()
+	minerAddr := ms.minerAddress
+	ms.mu.RUnlock()
+	if minerAddr == (common.QuantumAddress{}) {
+		return 0, 0, errors.New("miner address not set")
 	}
-	return nil
+	parent := bc.Latest()
+	if parent == nil {
+		return 0, 0, errors.New("no parent block found")
+	}
+	currentHeight := parent.Header.Number.Uint64()
+	if !ms.powEngine.IsKing(minerAddr) {
+		return 0, 0, errors.New("address is not in validator set")
+	}
+	stats := ms.powEngine.GetMiningStatistics()
+	activeStakers, _ := stats["active_stakers"].(int)
+	if activeStakers <= 0 {
+		return 0, 0, errors.New("no active validators")
+	}
+	blocksUntilTurn := uint64(activeStakers)
+	estimatedBlocks := blocksUntilTurn
+	estimatedTime := time.Duration(estimatedBlocks*pow.TargetBlockTimeSeconds) * time.Second
+	return currentHeight + estimatedBlocks, estimatedTime, nil
 }
 
-// VerifyBlockSignature verifies the signature of a mined block
-func (ms *PosMiningState) VerifyBlockSignature(blk *block.Block, expectedPublicKey []byte) (bool, error) {
-	if blk == nil || blk.Header == nil {
-		return false, errors.New("nil block or header")
-	}
-	signature := extractSignatureFromBlock(blk)
-	if len(signature) == 0 {
-		return false, errors.New("no signature found in block")
-	}
-	return verifyBlockSignature(
-		blk.Header.Coinbase,
-		blk.Header.ParentHash,
-		blk.Header.Number.Uint64(),
-		blk.Header.Time,
-		signature,
-		expectedPublicKey,
-	)
-}
-
-// GetMiningStatistics returns current mining stats
 func (ms *PosMiningState) GetMiningStatistics() map[string]interface{} {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
@@ -627,10 +922,14 @@ func (ms *PosMiningState) GetMiningStatistics() map[string]interface{} {
 			stats["pos_"+k] = v
 		}
 	}
+	if ms.currentTemplate != nil {
+		stats["current_template_weight"] = ms.currentTemplate.TotalWeight
+		stats["current_template_txs"] = len(ms.currentTemplate.Block.Txs)
+		stats["current_template_fees"] = ms.currentTemplate.TotalFees.String()
+	}
 	return stats
 }
 
-// LoadPrivateKeyFromKeystore loads and decrypts the private key from keystore
 func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreDir, password string) error {
 	ms.mu.RLock()
 	minerAddress := ms.minerAddress
@@ -648,7 +947,6 @@ func (ms *PosMiningState) LoadPrivateKeyFromKeystore(keystoreDir, password strin
 	return ms.SetPrivateKeyFromBytes(privKey)
 }
 
-// LoadPrivateKeyFromFile loads a private key from a keystore file
 func (ms *PosMiningState) LoadPrivateKeyFromFile(filePath, password string) error {
 	ms.mu.RLock()
 	minerAddress := ms.minerAddress
@@ -690,110 +988,9 @@ func formatWei(wei *big.Int) string {
 	return antd.Text('f', 6)
 }
 
-func (ms *PosMiningState) SetSyncCallback(cb func(isSyncing bool)) {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-	ms.onSyncChange = cb
+// StartPosMining is compatibility alias
+func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node, mempoolTxns []*TxEntry) {
+	StartPowMining(bc, state, rewardAddr, p2pNode, mempoolTxns)
 }
 
-func (ms *PosMiningState) PauseMining() {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-	if ms.mining {
-		ms.mining = false
-		log.Println("[miner] Mining PAUSED due to sync")
-		if ms.onSyncChange != nil {
-			ms.onSyncChange(true)
-		}
-	}
-}
-
-func (ms *PosMiningState) ResumeMining() {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-	if !ms.mining {
-		ms.mining = true
-		log.Println("[miner] Mining RESUMED")
-		if ms.onSyncChange != nil {
-			ms.onSyncChange(false)
-		}
-	}
-}
-
-// CheckMiningEligibility checks if the current miner address is eligible to mine
-func (ms *PosMiningState) CheckMiningEligibility(bc *chain.Blockchain) (bool, error) {
-	if bc == nil || ms.powEngine == nil {
-		return false, errors.New("blockchain or PoW engine not initialized")
-	}
-	ms.mu.RLock()
-	minerAddr := ms.minerAddress
-	ms.mu.RUnlock()
-	if minerAddr == (common.QuantumAddress{}) {
-		return false, errors.New("miner address not set")
-	}
-	parent := bc.Latest()
-	if parent == nil {
-		return false, errors.New("no parent block found")
-	}
-	height := parent.Header.Number.Uint64() + 1
-	currentTime := uint64(time.Now().Unix())
-	eligible, err := ms.powEngine.VerifyMinerEligibility(minerAddr, parent.Hash(), height, currentTime)
-	if err != nil {
-		return false, fmt.Errorf("eligibility check failed: %w", err)
-	}
-	return eligible, nil
-}
-
-// GetNextMiningSlot estimates when this miner will get to mine next
-func (ms *PosMiningState) GetNextMiningSlot(bc *chain.Blockchain) (uint64, time.Duration, error) {
-	if bc == nil || ms.powEngine == nil {
-		return 0, 0, errors.New("blockchain or PoW engine not initialized")
-	}
-	ms.mu.RLock()
-	minerAddr := ms.minerAddress
-	ms.mu.RUnlock()
-	if minerAddr == (common.QuantumAddress{}) {
-		return 0, 0, errors.New("miner address not set")
-	}
-	parent := bc.Latest()
-	if parent == nil {
-		return 0, 0, errors.New("no parent block found")
-	}
-	currentHeight := parent.Header.Number.Uint64()
-	if !ms.powEngine.IsKing(minerAddr) {
-		return 0, 0, errors.New("address is not in validator set")
-	}
-	stats := ms.powEngine.GetMiningStatistics()
-	activeStakers, _ := stats["active_stakers"].(int)
-	if activeStakers <= 0 {
-		return 0, 0, errors.New("no active validators")
-	}
-	blocksUntilTurn := uint64(activeStakers)
-	estimatedBlocks := blocksUntilTurn
-	estimatedTime := time.Duration(estimatedBlocks*pow.TargetBlockTimeSeconds) * time.Second
-	return currentHeight + estimatedBlocks, estimatedTime, nil
-}
-
-func calculateBlockReward(height uint64, bc *chain.Blockchain) *big.Int {
-	baseReward := new(big.Int).Mul(big.NewInt(200), big.NewInt(1e18))
-	if height > 0 && height%1000000 == 0 {
-		baseReward.Div(baseReward, big.NewInt(2))
-	}
-	return baseReward
-}
-
-// UpdateTotalRewards updates the total rewards with additional reward
-func (ms *PosMiningState) UpdateTotalRewards(additionalReward *big.Int) {
-	if additionalReward == nil || additionalReward.Sign() == 0 {
-		return
-	}
-	ms.mu.Lock()
-	ms.totalRewards.Add(ms.totalRewards, additionalReward)
-	ms.mu.Unlock()
-	miningRewardsTotal.Set(float64(new(big.Int).Div(ms.totalRewards, big.NewInt(1e18)).Int64()))
-}
-
-// StartPosMining is kept as a compatibility alias
-func StartPosMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node) {
-	StartPowMining(bc, state, rewardAddr, p2pNode)
-}
+var lastSyncLog time.Time = time.Now()
