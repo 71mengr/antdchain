@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+        "runtime/debug"
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
@@ -1800,6 +1801,7 @@ func (c *Console) handleCreateAddress() {
 
 func (c *Console) handleSend(parts []string) {
     // Add panic recovery to see stack trace
+    // Add panic recovery to see stack trace
     defer func() {
         if r := recover(); r != nil {
             fmt.Printf("❌ Panic: %v\n", r)
@@ -1811,12 +1813,16 @@ func (c *Console) handleSend(parts []string) {
     done := make(chan bool, 1)
     go func() {
         time.Sleep(5 * time.Second)
-        if !done {
+        select {
+        case <-done:
+            // Completed normally
+            return
+        default:
             fmt.Println("\n⚠️  Operation taking too long - dumping goroutines")
             debug.PrintStack()
         }
     }()
-    defer func() { done <- true }()
+    defer func() { close(done) }()  // Close instead of send to avoid blocking
     if len(parts) < 4 {
         fmt.Println("Usage: send <from> <to> <amount> [nonce|@replace]")
         return

@@ -249,21 +249,14 @@ func (p *TxPool) GetSubmitTime(hash common.Hash) (time.Time, bool) {
 
 
 func (p *TxPool) addTx(t *tx.Tx) error {
-    txHash := t.Hash().Hex()[:10]
-    log.Printf("[DEBUG addTx] START for tx %s", txHash)
-    
     startTime := time.Now()
     defer func() {
         txPoolLatency.WithLabelValues("add").Observe(time.Since(startTime).Seconds())
-        log.Printf("[DEBUG addTx] END for tx %s (took %v)", txHash, time.Since(startTime))
     }()
 
     txPoolOperations.WithLabelValues("add").Inc()
 
-    // ============================================
-    // Basic validation (no locks needed)
-    // ============================================
-    log.Printf("[DEBUG addTx] Phase 1: basic validation")
+    // Basic validation (fast, no locks needed)
     if t == nil {
         txValidationErrors.WithLabelValues("nil_tx").Inc()
         return errors.New("nil tx")
@@ -282,54 +275,83 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     hash := t.Hash()
     sender := t.From
 
-    // Check if chain is available
-    log.Printf("[DEBUG addTx] checking chain availability")
-    if p.chain == nil || p.chain.State() == nil {
+    // Check chain availability with timeout
+    if p.chain == nil {
         txValidationErrors.WithLabelValues("chain_unavailable").Inc()
         return errors.New("chain unavailable")
     }
 
-    // Check if sender is blocked
-    if p.chain.monitor != nil && p.chain.monitor.IsAddressBlocked(sender) {
-        txValidationErrors.WithLabelValues("blocked_sender").Inc()
-        return errors.New("sender blocked due to forged amount activity")
+    // Helper function for chain calls with timeout
+    callWithTimeout := func(fn func() interface{}, timeout time.Duration) (interface{}, error) {
+        resultCh := make(chan interface{}, 1)
+        go func() {
+            resultCh <- fn()
+        }()
+        select {
+        case res := <-resultCh:
+            return res, nil
+        case <-time.After(timeout):
+            return nil, fmt.Errorf("timeout after %v", timeout)
+        }
     }
 
-    // ============================================
-    // Chain state validation (no pool lock)
-    // ============================================
-    log.Printf("[DEBUG addTx] Phase 2: chain state validation")
+    // Get chain state with timeout
+    stateInterface, err := callWithTimeout(func() interface{} {
+        return p.chain.State()
+    }, 2*time.Second)
+    if err != nil {
+        txValidationErrors.WithLabelValues("chain_timeout").Inc()
+        return fmt.Errorf("blockchain busy: %v", err)
+    }
+    state := stateInterface.(interface{ GetNonce(common.QuantumAddress) uint64; GetBalance(common.QuantumAddress) *big.Int })
+    
     senderAddress := common.BytesToQuantumAddress(sender.Bytes())
-    
-    log.Printf("[DEBUG addTx] getting state nonce")
-    stateNonce := p.chain.State().GetNonce(senderAddress)
-    log.Printf("[DEBUG addTx] state nonce = %d", stateNonce)
-    
-    log.Printf("[DEBUG addTx] getting balance")
-    balance := p.chain.State().GetBalance(senderAddress)
-    log.Printf("[DEBUG addTx] balance = %v", balance)
-    
-    // CRITICAL FIX: Get latest height BEFORE taking the pool lock
-    log.Printf("[DEBUG addTx] getting latest height")
-    latestHeight := uint64(0)
-    if latest := p.chain.Latest(); latest != nil && latest.Header != nil {
-        latestHeight = latest.Header.Number.Uint64()
-    }
-    log.Printf("[DEBUG addTx] latest height = %d", latestHeight)
 
-    // Basic size check (doesn't need pool state)
+    // Get nonce with timeout
+    nonceInterface, err := callWithTimeout(func() interface{} {
+        return state.GetNonce(senderAddress)
+    }, 2*time.Second)
+    if err != nil {
+        txValidationErrors.WithLabelValues("nonce_timeout").Inc()
+        return fmt.Errorf("blockchain busy getting nonce: %v", err)
+    }
+    stateNonce := nonceInterface.(uint64)
+
+    // Get balance with timeout
+    balanceInterface, err := callWithTimeout(func() interface{} {
+        return state.GetBalance(senderAddress)
+    }, 2*time.Second)
+    if err != nil {
+        txValidationErrors.WithLabelValues("balance_timeout").Inc()
+        return fmt.Errorf("blockchain busy getting balance: %v", err)
+    }
+    balance := balanceInterface.(*big.Int)
+
+    // Get latest height with timeout (optional - can use 0 if timeout)
+    latestHeight := uint64(0)
+    heightInterface, err := callWithTimeout(func() interface{} {
+        if latest := p.chain.Latest(); latest != nil && latest.Header != nil {
+            return latest.Header.Number.Uint64()
+        }
+        return uint64(0)
+    }, 1*time.Second)
+    if err == nil {
+        latestHeight = heightInterface.(uint64)
+    }
+
+    // Size check
     if len(t.Data) > p.maxTxSize {
         txDroppedCounter.WithLabelValues("tx_too_large").Inc()
         return errors.New("tx too large")
     }
 
-    // Gas price check (doesn't need pool state)
+    // Gas price check
     if t.GasPrice == nil || t.GasPrice.Cmp(p.minGasPrice) < 0 {
         txValidationErrors.WithLabelValues("gas_price").Inc()
         return fmt.Errorf("gas price too low (min: %s)", p.minGasPrice.String())
     }
 
-    // Balance check (doesn't need pool state)
+    // Balance check
     gasCost := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
     totalCost := new(big.Int).Add(t.Value, gasCost)
     if balance.Cmp(totalCost) < 0 {
@@ -338,29 +360,36 @@ func (p *TxPool) addTx(t *tx.Tx) error {
             formatBalance(balance), formatBalance(totalCost))
     }
 
-    // Nonce range check (doesn't need pool state)
+    // Nonce range check
     if t.Nonce > stateNonce+p.maxFutureNonceGap {
         txValidationErrors.WithLabelValues("nonce_too_high").Inc()
         return errors.New("nonce too high")
     }
 
-    // ============================================
-    // Pool-specific checks (with lock)
-    // ============================================
-    log.Printf("[DEBUG addTx] Phase 3: attempting to acquire pool lock")
-    p.mu.Lock()
-    log.Printf("[DEBUG addTx] acquired pool lock")
+    // Acquire pool lock with timeout
+    lockAcquired := make(chan bool, 1)
+    go func() {
+        p.mu.Lock()
+        lockAcquired <- true
+    }()
     
-    // Check if tx already exists (fast map lookup)
+    select {
+    case <-lockAcquired:
+        // Lock acquired
+    case <-time.After(3 * time.Second):
+        txValidationErrors.WithLabelValues("lock_timeout").Inc()
+        return fmt.Errorf("transaction pool busy: timeout acquiring lock")
+    }
+    defer p.mu.Unlock()
+
+    // Check if tx already exists
     if _, exists := p.txs[hash]; exists {
-        p.mu.Unlock()
         txValidationErrors.WithLabelValues("known_tx").Inc()
         return errors.New("known tx")
     }
 
     // Check pool size limit
     if len(p.txs) >= p.maxPoolSize {
-        p.mu.Unlock()
         txDroppedCounter.WithLabelValues("pool_full").Inc()
         return errors.New("pool full")
     }
@@ -368,15 +397,13 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     // Check sender limit
     senderTxs := p.bySender[sender]
     if len(senderTxs) >= p.maxTxsPerSender {
-        p.mu.Unlock()
         txDroppedCounter.WithLabelValues("sender_limit").Inc()
         return errors.New("too many pending from sender")
     }
 
-    // Calculate expected nonce based on pool state
+    // Calculate expected nonce
     expectedNonce := stateNonce
     if len(senderTxs) > 0 {
-        // Find the highest nonce in pool for this sender
         maxPendingNonce := uint64(0)
         for _, pendingTx := range senderTxs {
             if pendingTx != nil && pendingTx.Nonce > maxPendingNonce {
@@ -390,25 +417,20 @@ func (p *TxPool) addTx(t *tx.Tx) error {
 
     // Check nonce matches expected
     if t.Nonce != expectedNonce {
-        p.mu.Unlock()
         txValidationErrors.WithLabelValues("wrong_nonce").Inc()
-        return fmt.Errorf("wrong nonce: want %d got %d (state nonce: %d)", 
+        return fmt.Errorf("wrong nonce: want %d got %d (state nonce: %d)",
             expectedNonce, t.Nonce, stateNonce)
     }
 
     // Check for duplicate nonce
     for _, pendingTx := range senderTxs {
         if pendingTx.Nonce == t.Nonce {
-            p.mu.Unlock()
             txValidationErrors.WithLabelValues("duplicate_nonce").Inc()
             return fmt.Errorf("nonce %d already pending", t.Nonce)
         }
     }
 
-    // ============================================
     // Add to pool
-    // ============================================
-    log.Printf("[DEBUG addTx] Phase 4: adding to pool")
     p.txs[hash] = t
     p.bySender[sender] = append(senderTxs, t)
     p.submitTime[hash] = time.Now()
@@ -418,18 +440,12 @@ func (p *TxPool) addTx(t *tx.Tx) error {
         p.nonceTracker[sender] = t.Nonce
     }
 
-    log.Printf("[DEBUG addTx] pushing to heap")
     heap.Push(p.pendingHeap, t)
 
+    // Update metrics
     txAddedCounter.Inc()
     txPoolSizeGauge.Set(float64(len(p.txs)))
 
-    p.mu.Unlock()
-    log.Printf("[DEBUG addTx] released pool lock")
-
-    // ============================================
-    // Logging
-    // ============================================
     log.Printf("[txpool] + %s | %s | nonce=%d | value=%s | gasPrice=%s",
         hash.Hex()[:10], sender.String()[:10], t.Nonce,
         formatBalance(t.Value), t.GasPrice.String())
