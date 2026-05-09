@@ -62,6 +62,7 @@ type Header struct {
 	Extra       []byte                `json:"extraData"`
 	MixDigest   common.Hash           `json:"mixHash"`
 	Nonce       BlockNonce            `json:"nonce"`
+	Version     uint32                `json:"version"`
 
 	ProtocolVersion  uint32                `json:"protocolVersion"`
 	UpgradeName      string                `json:"upgradeName"`
@@ -150,6 +151,7 @@ func NewHeader(
 		Extra:      []byte("ANTDChain"),
 		MixDigest:  common.Hash{},
 		Nonce:      BlockNonce{},
+		Version:    1,
 	}
 
 	// Genesis block special handling
@@ -168,6 +170,7 @@ func maxUint64(a, b uint64) uint64 {
 	}
 	return b
 }
+
 // Validate performs basic header validation
 func (h *Header) Validate(parent *Header) error {
 	if h == nil {
@@ -302,6 +305,8 @@ func (h *Header) Hash() common.Hash {
 	data = append(data, h.Nonce[:]...)
 
 	// Protocol fields
+	binary.BigEndian.PutUint32(buf[:4], h.Version)
+	data = append(data, buf[:4]...)
 	binary.BigEndian.PutUint32(buf[:4], h.ProtocolVersion)
 	data = append(data, buf[:4]...)
 	binary.BigEndian.PutUint64(buf, h.UpgradeTimestamp)
@@ -412,6 +417,11 @@ func (b *Block) updateHeader() error {
 
 	b.Header.GasUsed = b.CalculateGasUsed()
 	return nil
+}
+
+// UpdateHeader updates header fields based on block contents.
+func (b *Block) UpdateHeader() error {
+	return b.updateHeader()
 }
 
 // CalculateTxHash computes the Merkle root of transactions using SHA3‑256

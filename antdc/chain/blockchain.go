@@ -471,6 +471,11 @@ func (bc *Blockchain) Pow() *pow.PoW {
 	return bc.pow
 }
 
+// GetPoWEngine returns the configured PoW engine.
+func (bc *Blockchain) GetPoWEngine() *pow.PoW {
+	return bc.pow
+}
+
 // TxPool returns the transaction pool
 func (bc *Blockchain) TxPool() p2p.TxPool {
 	return bc.txPool

@@ -23,6 +23,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/crypto/quantum"
 	"github.com/antdaza/antdchain/antdc/p2p"
 	"github.com/antdaza/antdchain/antdc/pow"
+	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/common/hexutil"
@@ -38,13 +39,13 @@ const (
 	DefaultBroadcastMaxBackoff     = 2 * time.Second
 
 	// Block resource limits (Bitcoin equivalents)
-	DefaultBlockReservedWeight    = 4000
-	MinimumBlockReservedWeight    = 4000
-	MaxBlockWeight                = 4000000
-	MaxBlockSigOpsCost            = 80000
+	DefaultBlockReservedWeight = 4000
+	MinimumBlockReservedWeight = 4000
+	MaxBlockWeight             = 4000000
+	MaxBlockSigOpsCost         = 80000
 
 	// Chunk selection constants
-	MaxConsecutiveFailures = 1000
+	MaxConsecutiveFailures     = 1000
 	BlockFullEnoughWeightDelta = 4000
 
 	// Timewarp protection (BIP94)
@@ -125,10 +126,14 @@ type TxEntry struct {
 
 // IsFinal checks if transaction is final (locktime verification)
 func (txe *TxEntry) IsFinal(blockHeight uint64, blockTime uint64) bool {
-	if txe.Tx.LockTime == 0 {
+	_ = blockHeight
+	if txe.Tx == nil {
+		return false
+	}
+	if txe.Tx.Timestamp == 0 {
 		return true
 	}
-	return txe.Tx.LockTime < blockHeight || txe.Tx.LockTime < blockTime
+	return txe.Tx.Timestamp <= blockTime
 }
 
 // BlockTemplate represents a candidate block being assembled
@@ -144,14 +149,14 @@ type BlockTemplate struct {
 
 // BlockAssemblerOptions configures block assembly
 type BlockAssemblerOptions struct {
-	BlockMaxWeight                   uint64
-	BlockMinFeeRate                  uint64
-	BlockReservedWeight              *uint64
+	BlockMaxWeight                    uint64
+	BlockMinFeeRate                   uint64
+	BlockReservedWeight               *uint64
 	CoinbaseOutputMaxAdditionalSigops uint64
-	PrintModifiedFee                 bool
-	TestBlockValidity                bool
-	IncludeDummyExtranonce           bool
-	UseMempool                       bool
+	PrintModifiedFee                  bool
+	TestBlockValidity                 bool
+	IncludeDummyExtranonce            bool
+	UseMempool                        bool
 }
 
 // DefaultBlockAssemblerOptions returns default options
@@ -234,7 +239,7 @@ func (ba *BlockAssembler) getMinimumTime(prevBlock *block.Block) uint64 {
 	minTime := prevBlock.Header.Time + 1
 
 	height := prevBlock.Header.Number.Uint64() + 1
-	if height%chain.DifficultyAdjustmentInterval == 0 {
+	if height%block.DifficultyAdjustment == 0 {
 		if prevBlock.Header.Time > MaxTimewarp {
 			minTime = max(minTime, prevBlock.Header.Time-MaxTimewarp)
 		}
@@ -349,7 +354,6 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 	}
 	ba.height = prevBlock.Header.Number.Uint64() + 1
 
-	ba.template.Block.Header.Version = 1
 	ba.template.Block.Header.Time = uint64(time.Now().Unix())
 	ba.lockTimeCutoff = prevBlock.Header.Time
 
@@ -359,19 +363,13 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 
 	buildTime := time.Since(ba.timeStart)
 
-	// Convert QuantumAddress to common.Address for block header
-	// Since your block.Header uses common.Address (Ethereum style), we need to convert
-	// For now, we'll use the quantum address bytes converted to common.Address
-	coinbaseEthAddr := common.Address{}
-	copy(coinbaseEthAddr[:], coinbaseAddr.Bytes()[:20])
-
 	// Create header using NewHeader
 	stateRoot := prevBlock.Header.Root // Use parent's state root as placeholder
-	txRoot := block.CalculateTxHash(nil)
+	txRoot := block.CalculateTxHash(ba.template.Block.Txs)
 
 	header, err := block.NewHeader(
 		prevBlock,
-		coinbaseEthAddr,
+		coinbaseAddr,
 		stateRoot,
 		txRoot,
 		new(big.Int).SetUint64(ba.height),
@@ -382,9 +380,9 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 		return nil, fmt.Errorf("failed to create header: %w", err)
 	}
 
+	header.Version = 1
 	header.GasUsed = 0
 	ba.template.Block.Header = header
-	ba.template.Block.Txs = ba.template.Block.Txs
 
 	if err := ba.template.Block.UpdateHeader(); err != nil {
 		return nil, fmt.Errorf("failed to update header: %w", err)
@@ -405,21 +403,21 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 
 // PosMiningState manages mining state
 type PosMiningState struct {
-	mining       bool
-	enabled      bool
-	minerAddress common.QuantumAddress
-	powEngine    *pow.PoW
-	privateKey   []byte
+	mining        bool
+	enabled       bool
+	minerAddress  common.QuantumAddress
+	powEngine     *pow.PoW
+	privateKey    []byte
 	hasPrivateKey bool
 
 	blocksMined  uint64
 	totalRewards *big.Int
 
-	miningInterval           time.Duration
-	broadcastMaxRetries      int
-	broadcastInitialBackoff  time.Duration
-	broadcastMaxBackoff      time.Duration
-	pendingBlockTimeout      time.Duration
+	miningInterval          time.Duration
+	broadcastMaxRetries     int
+	broadcastInitialBackoff time.Duration
+	broadcastMaxBackoff     time.Duration
+	pendingBlockTimeout     time.Duration
 
 	assembler     *BlockAssembler
 	assemblerOpts BlockAssemblerOptions
@@ -667,7 +665,7 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 		ms.blocksMined++
 		ms.mu.Lock()
 		ms.totalRewards.Add(ms.totalRewards, template.TotalFees)
-		blockReward := bc.GetBlockSubsidy(height)
+		blockReward := reward.CalculateBlockReward(height)
 		ms.totalRewards.Add(ms.totalRewards, blockReward)
 		ms.mu.Unlock()
 
