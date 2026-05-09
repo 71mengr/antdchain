@@ -35,7 +35,6 @@ import (
 	"github.com/antdaza/antdchain/antdc/fees"
 	"github.com/antdaza/antdchain/antdc/mining"
 	"github.com/antdaza/antdchain/antdc/monitoring"
-	"github.com/antdaza/antdchain/antdc/nonce"
 	"github.com/antdaza/antdchain/antdc/p2p"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
@@ -1809,8 +1808,16 @@ func (c *Console) handleSend(parts []string) {
     }
 
     //PARSE INPUTS
-    fromAddr := common.HexToAddress(parts[1])
-    toAddr := common.HexToAddress(parts[2])
+    fromAddr, err := parseQuantumAddressInput(parts[1])
+    if err != nil {
+        fmt.Printf("❌ Invalid from address: %v\n", err)
+        return
+    }
+    toAddr, err := parseQuantumAddressInput(parts[2])
+    if err != nil {
+        fmt.Printf("❌ Invalid to address: %v\n", err)
+        return
+    }
     amountStr := parts[3]
 
     // Parse amount
@@ -1831,7 +1838,7 @@ func (c *Console) handleSend(parts []string) {
     balance := state.GetBalance(fromAddr)
     c.node.mu.RUnlock()
 
-    fmt.Printf("\n📊 Current State for %s:\n", fromAddr.Hex())
+    fmt.Printf("\n📊 Current State for %s:\n", fromAddr.String())
     fmt.Printf("   Balance: %s ANTD\n", formatBalance(balance))
     fmt.Printf("   Nonce:   %d\n", stateNonce)
 
@@ -1893,7 +1900,7 @@ func (c *Console) handleSend(parts []string) {
 
     // GAS CALCULATION
     gasLimit := uint64(21000)  // Standard transfer
-    gasPrice := big.NewInt(2_000_000_000) // 2 Gwei for faster inclusion
+    gasPrice :=  fees.AutoGasPriceByAmount(amount)
 
     gasCost := new(big.Int).Mul(gasPrice, big.NewInt(int64(gasLimit)))
     totalCost := new(big.Int).Add(amount, gasCost)
@@ -1927,8 +1934,8 @@ func (c *Console) handleSend(parts []string) {
 
     // TRANSACTION SUMMARY
     fmt.Printf("\n📝 TRANSACTION SUMMARY\n")
-    fmt.Printf("   From:           %s\n", fromAddr.Hex())
-    fmt.Printf("   To:             %s\n", toAddr.Hex())
+    fmt.Printf("   From:           %s\n", fromAddr.String())
+    fmt.Printf("   To:             %s\n", toAddr.String())
     fmt.Printf("   Amount:         %s ANTD\n", formatBalance(amount))
     fmt.Printf("   Nonce:          %d (%s)\n", suggestedNonce, nonceSource)
     fmt.Printf("   Gas Limit:      %d\n", gasLimit)
@@ -1949,42 +1956,24 @@ func (c *Console) handleSend(parts []string) {
     }
 
     // FIND KEYSTORE ACCOUNT 
-    var account accounts.Account
-    found := false
-    for _, acc := range c.node.Keystore().Accounts() {
-        if acc.Address == fromAddr {
-            account = acc
-            found = true
-            break
-        }
-    }
 
-    if !found {
-        fmt.Printf("❌ Wallet %s not found in keystore\n", fromAddr.Hex())
-        fmt.Printf("   Keystore directory: %s\n", c.node.GetKeystoreDir())
-        fmt.Printf("   Available wallets:\n")
-        for _, acc := range c.node.Keystore().Accounts() {
-            fmt.Printf("   - %s\n", acc.Address.Hex())
-        }
-        return
-    }
 
     // DECRYPT PRIVATE KEY
-    password, err := c.readPassword(fmt.Sprintf("Password for %s: ", fromAddr.Hex()))
+    password, err := c.readPassword(fmt.Sprintf("Password for %s: ", fromAddr.String()))
     if err != nil {
         fmt.Printf("❌ Failed to read password: %v\n", err)
         return
     }
 
-    keyjson, err := os.ReadFile(account.URL.Path)
+    privKey, err := qkeystore.Unlock(fromAddr, password, c.node.GetKeystoreDir())
     if err != nil {
-        fmt.Printf("❌ Failed to read keystore file: %v\n", err)
+        fmt.Printf("❌ Wrong password or failed to unlock keystore: %v\n", err)
         return
     }
 
-    key, err := keystore.DecryptKey(keyjson, password)
+    pubKey, err := quantum.DerivePublicKey(privKey)
     if err != nil {
-        fmt.Printf("❌ Wrong password or corrupted keystore: %v\n", err)
+        fmt.Printf("❌ Failed to derive public key: %v\n", err)
         return
     }
 
@@ -1999,7 +1988,7 @@ txm := tx.NewTransferTx(
 )
 
     // Sign the transaction
-    if err := txm.Sign(key.PrivateKey); err != nil {
+    if err := txm.Sign(privKey, pubKey); err != nil {
         fmt.Printf("❌ Failed to sign transaction: %v\n", err)
         return
     }
@@ -2080,8 +2069,8 @@ txm := tx.NewTransferTx(
     fmt.Printf("\n🎉 TRANSACTION SUCCESSFULLY CREATED!\n")
     fmt.Printf("══════════════════════════════════════════════════════════\n")
     fmt.Printf("   Transaction Hash: %s\n", txHash.Hex())
-    fmt.Printf("   From:            %s\n", fromAddr.Hex())
-    fmt.Printf("   To:              %s\n", toAddr.Hex())
+    fmt.Printf("   From:            %s\n", fromAddr.String())
+    fmt.Printf("   To:              %s\n", toAddr.String())
     fmt.Printf("   Amount:          %s ANTD\n", formatBalance(amount))
     fmt.Printf("   Nonce:           %d\n", txm.Nonce)
     fmt.Printf("   Gas Price:       %s Gwei\n",
@@ -2103,7 +2092,7 @@ txm := tx.NewTransferTx(
     fmt.Printf("\n📋 Next Steps:\n")
     fmt.Printf("   1. Check status:      gettx %s\n", txHash.Hex())
     fmt.Printf("   2. View pool:         txpool\n")
-    fmt.Printf("   3. Check balance:     balance %s\n", fromAddr.Hex())
+    fmt.Printf("   3. Check balance:     balance %s\n", fromAddr.String())
     if replaceMode {
         fmt.Printf("   4. Old tx removed:   cleartx %s\n", replaceTxHash.Hex())
     }
