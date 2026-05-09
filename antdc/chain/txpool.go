@@ -247,6 +247,7 @@ func (p *TxPool) GetSubmitTime(hash common.Hash) (time.Time, bool) {
 	return t, ok
 }
 
+
 func (p *TxPool) addTx(t *tx.Tx) error {
     startTime := time.Now()
     defer func() {
@@ -256,7 +257,7 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     txPoolOperations.WithLabelValues("add").Inc()
 
     // ============================================
-    // Basic validation
+    // Basic validation 
     // ============================================
     if t == nil {
         txValidationErrors.WithLabelValues("nil_tx").Inc()
@@ -289,11 +290,17 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     }
 
     // ============================================
-    // Chain state validation (no pool lock)
+    // Chain state validation 
     // ============================================
     senderAddress := common.BytesToQuantumAddress(sender.Bytes())
     stateNonce := p.chain.State().GetNonce(senderAddress)
     balance := p.chain.State().GetBalance(senderAddress)
+    
+    // Get latest height BEFORE taking the pool lock
+    latestHeight := uint64(0)
+    if latest := p.chain.Latest(); latest != nil && latest.Header != nil {
+        latestHeight = latest.Header.Number.Uint64()
+    }
 
     // Basic size check (doesn't need pool state)
     if len(t.Data) > p.maxTxSize {
@@ -382,19 +389,14 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     }
 
     // ============================================
-    // Add to pool (still holding lock)
+    // PAdd to pool
     // All these operations are O(1) or very fast
     // ============================================
-    latestHeight := uint64(0)
-    if latest := p.chain.Latest(); latest != nil && latest.Header != nil {
-        latestHeight = latest.Header.Number.Uint64()
-    }
-
-    // Add to all the maps
+    // Use the latestHeight we captured BEFORE taking the lock
     p.txs[hash] = t
     p.bySender[sender] = append(senderTxs, t)
     p.submitTime[hash] = time.Now()
-    p.submitHeight[hash] = latestHeight
+    p.submitHeight[hash] = latestHeight  // Now using pre-captured value
 
     // Update nonce tracker
     if t.Nonce > p.nonceTracker[sender] {
@@ -411,7 +413,7 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     p.mu.Unlock()
 
     // ============================================
-    // Logging (no lock needed)
+    // Logging
     // ============================================
     log.Printf("[txpool] + %s | %s | nonce=%d | value=%s | gasPrice=%s",
         hash.Hex()[:10], sender.String()[:10], t.Nonce,
