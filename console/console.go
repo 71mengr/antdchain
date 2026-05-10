@@ -1998,14 +1998,7 @@ func (c *Console) handleSend(parts []string) {
         return
     }
     
-    var addErr error
-    if chainTxPool, ok := txPool.(*chain.TxPool); ok {
-        addErr = chainTxPool.AddTx(txm, c.node.blockchain)
-    } else if genericPool, ok := txPool.(interface{ AddTx(*tx.Tx) error }); ok {
-        addErr = genericPool.AddTx(txm)
-    } else {
-        addErr = fmt.Errorf("unsupported pool type: %T", txPool)
-    }
+    addErr := txPool.AddTx(txm, c.node.blockchain)
 
     if addErr != nil {
         fmt.Printf("❌ Failed to add to transaction pool: %v\n", addErr)
@@ -2015,12 +2008,16 @@ func (c *Console) handleSend(parts []string) {
     fmt.Printf("✅ Transaction added to local mempool\n")
 
     // Broadcast (no locks needed)
-    if c.node.p2pNode != nil {
-        fmt.Printf("📡 Broadcasting to peers...\n")
-        if err := c.node.p2pNode.BroadcastTx(txm); err != nil {
-            fmt.Printf("⚠️  Warning: Broadcast failed: %v\n", err)
+        peerCount := len(c.node.p2pNode.Peers())
+        if peerCount == 0 {
+            fmt.Printf("⚠️  No connected peers; transaction is only in the local mempool\n")
         } else {
-            fmt.Printf("✅ Transaction broadcast to network\n")
+            fmt.Printf("�� Broadcasting to %d connected peer(s)...\n", peerCount)
+            if err := c.node.p2pNode.BroadcastTx(txm); err != nil {
+                fmt.Printf("⚠️  Warning: Broadcast failed: %v\n", err)
+            } else {
+                fmt.Printf("✅ Transaction broadcast to network (%d connected peer(s))\n", peerCount)
+            }
         }
     }
 
