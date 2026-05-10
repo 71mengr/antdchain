@@ -58,8 +58,8 @@ func (bc *Blockchain) GenerateBlockTemplate(rewardAddr common.QuantumAddress) (*
 		return nil, errors.New("no parent block available")
 	}
 
-	// Get confirmed transactions from pool
-	confirmedTxs := bc.txPool.GetConfirmedTxs(bc, bc.MinConfirmations())
+	// Get pending transactions from pool so newly submitted transactions can be mined.
+	confirmedTxs := bc.txPool.GetPending()
 
 	// Calculate total fees and build transactions list
 	totalFees := big.NewInt(0)
@@ -177,7 +177,7 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 	// SAFE TRANSACTION INCLUSION
 	var includedTxs []*tx.Tx
 	if pool := bc.txPool; pool != nil {
-		candidates := pool.GetConfirmedTxs(bc, bc.MinConfirmations())
+		candidates := pool.GetPending()
 
 		// Only include transactions older than 5 seconds → ensures propagation
 		propagationDelay := uint64(5)

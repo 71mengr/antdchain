@@ -564,6 +564,56 @@ func broadcastMinedBlock(p *p2p.Node, blk *block.Block, ms *PosMiningState) {
 	log.Printf("[miner] Failed to broadcast block %d after %d attempts", blk.Header.Number.Uint64(), maxRetries)
 }
 
+func txToMempoolEntry(t *tx.Tx, height uint64, entryTime uint64) *TxEntry {
+	if t == nil {
+		return nil
+	}
+
+	serialized, err := t.Serialize()
+	txSize := uint64(0)
+	if err == nil {
+		txSize = uint64(len(serialized))
+	}
+	if txSize == 0 {
+		txSize = uint64(len(t.Data) + 128)
+	}
+
+	fee := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
+
+	return &TxEntry{
+		Tx:          t,
+		Fee:         fee,
+		ModifiedFee: new(big.Int).Set(fee),
+		Weight:      txSize * 4,
+		SigOpsCost:  1,
+		TxSize:      txSize,
+		Height:      height,
+		Time:        entryTime,
+	}
+}
+
+func currentMempoolEntries(bc *chain.Blockchain, fallback []*TxEntry, height uint64) []*TxEntry {
+	if bc == nil || bc.TxPool() == nil {
+		return fallback
+	}
+
+	pending := bc.TxPool().GetPending()
+	if len(pending) == 0 {
+		return fallback
+	}
+
+	now := uint64(time.Now().Unix())
+	entries := make([]*TxEntry, 0, len(pending))
+	for _, pendingTx := range pending {
+		entry := txToMempoolEntry(pendingTx, height, now)
+		if entry != nil {
+			entries = append(entries, entry)
+		}
+	}
+
+	return entries
+}
+
 func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mempoolTxns []*TxEntry) {
 	ms.mu.RLock()
 	miningInterval := ms.miningInterval
@@ -626,7 +676,9 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 			continue
 		}
 
-		template, err := ms.assembler.CreateNewBlock(ms.minerAddress, mempoolTxns)
+		currentTxns := currentMempoolEntries(bc, mempoolTxns, height)
+
+		template, err := ms.assembler.CreateNewBlock(ms.minerAddress, currentTxns)
 		if err != nil {
 			log.Printf("[miner] Failed to create block template: %v", err)
 			continue
