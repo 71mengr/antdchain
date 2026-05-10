@@ -350,7 +350,7 @@ func (bc *Blockchain) computeBlockFinalStateRoot(view headerMinerBlockView, txs 
 		if tx == nil {
 			continue
 		}
-		txFee := new(big.Int).Mul(tx.GasPrice, big.NewInt(int64(tx.Gas)))
+		txFee := new(big.Int).Mul(tx.GasPrice, big.NewInt(int64(transactionCommittedGas(tx))))
 		totalFees.Add(totalFees, txFee)
 	}
 

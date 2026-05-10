@@ -38,14 +38,18 @@ func (bc *Blockchain) executeBlockTransactions(b *block.Block) (*big.Int, uint64
 		}
 
 		// Execute transaction
-		_, gas, execErr := v.Execute(ctx, transaction)
+		_, _, execErr := v.Execute(ctx, transaction)
 		if execErr != nil {
 			return nil, 0, fmt.Errorf("transaction %d execution error: %w", i, execErr)
 		}
 
-		// Update totals
-		totalGasUsed += gas
-		txFee := new(big.Int).Mul(transaction.GasPrice, big.NewInt(int64(gas)))
+		// Update totals using the block-committed gas amount.
+		// Block headers store GasUsed as the sum of transaction gas limits,
+		// so reward-fee accounting must use the same value that miners used
+		// when computing the header state root.
+		committedGas := transactionCommittedGas(transaction)
+		totalGasUsed += committedGas
+		txFee := new(big.Int).Mul(transaction.GasPrice, big.NewInt(int64(committedGas)))
 		totalFees.Add(totalFees, txFee)
 
 		// Log execution progress for large blocks
@@ -56,6 +60,14 @@ func (bc *Blockchain) executeBlockTransactions(b *block.Block) (*big.Int, uint64
 	}
 
 	return totalFees, totalGasUsed, nil
+}
+
+
+func transactionCommittedGas(t *tx.Tx) uint64 {
+	if t == nil {
+		return 0
+	}
+	return t.Gas
 }
 
 // sortAndValidateTransactions sorts transactions by sender and nonce
