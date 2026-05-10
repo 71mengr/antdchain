@@ -65,10 +65,17 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 	log.Printf("[blockchain] Current chain state: height=%d tip=%s",
 		currentHeight, currentTipHash.Hex()[:12])
 
-	// Reject duplicate by hash
+	// Reject duplicate by hash only when it is already part of the applied chain.
+	// A block can already be present in the database from a prior sync batch or
+	// retry while the in-memory canonical state is still behind it.  In that case
+	// we must still execute it so account balances/nonces advance in order.
 	if bc.HasBlock(blockHash) {
-		log.Printf("[blockchain] Rejecting duplicate block: %s", blockHash.Hex()[:12])
-		return fmt.Errorf("duplicate block %s", blockHash.Hex()[:12])
+		if blockHeight <= currentHeight {
+			log.Printf("[blockchain] Rejecting duplicate block: %s", blockHash.Hex()[:12])
+			return fmt.Errorf("duplicate block %s", blockHash.Hex()[:12])
+		}
+		log.Printf("[blockchain] Processing previously stored future block: height=%d hash=%s current=%d",
+			blockHeight, blockHash.Hex()[:12], currentHeight)
 	}
 
 	// Reject if below current height (stale)
@@ -209,6 +216,24 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 		return bc.reorganizeAtHeight(blockHeight, b)
 	}
 
+	isSyncing := bc.IsSyncing()
+
+	// Never execute a non-contiguous future block against the current state.
+	// The state root for block N must be computed from N-1; validating an ahead
+	// block early can make legitimate transactions look unfunded during sync.
+	if blockHeight > currentHeight+1 {
+		if isSyncing {
+			log.Printf("[blockchain] Sync block ahead: current=%d, new=%d; waiting for missing blocks",
+				currentHeight, blockHeight)
+			return fmt.Errorf("sync block ahead — waiting for missing blocks (current=%d, new=%d)", currentHeight, blockHeight)
+		}
+
+		log.Printf("[blockchain] Block %d is ahead (current %d) — triggering sync",
+			blockHeight, currentHeight)
+		go bc.triggerSyncFromBlock(b)
+		return fmt.Errorf("block ahead — syncing (current=%d, new=%d)", currentHeight, blockHeight)
+	}
+
 	// ==============================================
 	// BLOCK VALIDATION
 	// ==============================================
@@ -216,8 +241,6 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 		log.Printf("[blockchain] Block validation failed: %v", err)
 		return fmt.Errorf("block validation failed: %w", err)
 	}
-
-	isSyncing := bc.IsSyncing()
 
 	// ==============================================
 	// CHAIN EXTENSION LOGIC

@@ -1064,7 +1064,7 @@ func (n *Node) StopAutoRebroadcast() {
 // rebroadcasts transactions older than maxAge
 func (n *Node) rebroadcastStaleTransactions(maxAge time.Duration) {
 	n.mu.RLock()
-	if n.p2pNode == nil {
+	if n.p2pNode == nil || n.PeerCount() == 0 || !n.IsBlockchainFullySynced() {
 		n.mu.RUnlock()
 		return
 	}
@@ -1173,6 +1173,43 @@ func (n *Node) WalletManager() *wallet.WalletManager {
 
 func (n *Node) P2PNode() *p2p.Node {
 	return n.p2pNode
+}
+
+// PeerCount returns the number of currently connected P2P peers.
+func (n *Node) PeerCount() int {
+	if n == nil || n.p2pNode == nil {
+		return 0
+	}
+	return n.p2pNode.GetPeerCount()
+}
+
+// IsBlockchainFullySynced reports whether the local chain is ready for network
+// actions that should only happen after synchronization completes.
+func (n *Node) IsBlockchainFullySynced() bool {
+	return n != nil && n.blockchain != nil && n.blockchain.IsFullySynced()
+}
+
+// NetworkReadyForSubmission validates that this node is connected to peers and
+// fully synced before submitting transactions or starting mining.
+func (n *Node) NetworkReadyForSubmission() error {
+	if n == nil {
+		return errors.New("node is not initialized")
+	}
+	if n.PeerCount() == 0 {
+		return errors.New("no connected peers")
+	}
+	if !n.IsBlockchainFullySynced() {
+		if n.blockchain == nil {
+			return errors.New("blockchain is not initialized")
+		}
+		return fmt.Errorf("blockchain is not fully synced (height=%d target=%d syncing=%v cooldown=%s)",
+			n.blockchain.GetChainHeight(),
+			n.blockchain.GetSyncTarget(),
+			n.blockchain.IsSyncing(),
+			n.blockchain.SyncCooldownRemaining().Truncate(time.Second),
+		)
+	}
+	return nil
 }
 
 func (n *Node) Keystore() *keystore.KeyStore {
@@ -1809,22 +1846,14 @@ func (c *Console) handleSend(parts []string) {
         }
     }()
     
-    // Add timeout channel for debugging
-    done := make(chan bool, 1)
-    go func() {
-        time.Sleep(5 * time.Second)
-        select {
-        case <-done:
-            // Completed normally
-            return
-        default:
-            fmt.Println("\n⚠️  Operation taking too long - dumping goroutines")
-            debug.PrintStack()
-        }
-    }()
-    defer func() { close(done) }()  // Close instead of send to avoid blocking
     if len(parts) < 4 {
         fmt.Println("Usage: send <from> <to> <amount> [nonce|@replace]")
+        return
+    }
+
+    if err := c.node.NetworkReadyForSubmission(); err != nil {
+        fmt.Printf("❌ Cannot send transaction: %v\n", err)
+        fmt.Println("   Connect to at least one peer and wait for blockchain sync to finish.")
         return
     }
 
@@ -2368,8 +2397,13 @@ func (c *Console) handleRegisterStake(parts []string) {
 	fmt.Printf("✅ Stake registered for %s with 1,000,000 ANTD\n", addr.String())
 	fmt.Println("   Funds are locked during staking lock time and cannot be spent.")
 	if c.node.miningState != nil {
-		fmt.Println("✅ Auto-mining")
-		mining.StartPosMining(c.node.blockchain, c.node.miningState, addr, c.node.p2pNode, nil)
+		if err := c.node.NetworkReadyForSubmission(); err != nil {
+			fmt.Printf("⚠️  Auto-mining not started: %v\n", err)
+			fmt.Println("   Connect to at least one peer and wait for blockchain sync to finish, then run 'startmining'.")
+		} else {
+			fmt.Println("✅ Auto-mining")
+			mining.StartPosMining(c.node.blockchain, c.node.miningState, addr, c.node.p2pNode, nil)
+		}
 	}
 }
 
@@ -2419,6 +2453,12 @@ func (c *Console) handleUnlockStake(parts []string) {
 func (c *Console) handleStartMining() {
 	if c.node.miningState == nil {
 		fmt.Println("Error: Mining state not initialized")
+		return
+	}
+
+	if err := c.node.NetworkReadyForSubmission(); err != nil {
+		fmt.Printf("❌ Cannot start mining: %v\n", err)
+		fmt.Println("   Connect to at least one peer and wait for blockchain sync to finish.")
 		return
 	}
 

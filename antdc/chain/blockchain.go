@@ -186,6 +186,17 @@ func (bc *Blockchain) IsSyncing() bool {
 	return bc.syncing.Load()
 }
 
+// IsFullySynced returns true when the chain is not syncing, has reached any
+// advertised sync target, and is outside the post-sync mining cooldown window.
+func (bc *Blockchain) IsFullySynced() bool {
+	if bc == nil || bc.IsSyncing() || bc.SyncCooldownRemaining() > 0 {
+		return false
+	}
+
+	target := bc.GetSyncTarget()
+	return target == 0 || bc.GetChainHeight() >= target
+}
+
 // StartSync enables sync mode with target height
 func (bc *Blockchain) StartSync(target uint64) {
 	bc.syncing.Store(true)

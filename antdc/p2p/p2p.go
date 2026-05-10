@@ -1928,27 +1928,38 @@ func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 		default:
 		}
 
+		var blk *block.Block
+		var err error
+
 		// CHECK FIRST: Do we already have this block?
+		// Future blocks may have been persisted by a previous sync attempt without
+		// being applied to canonical state.  Reuse them instead of skipping, so the
+		// state advances block-by-block and balance checks see the correct parent.
 		if existing := n.chain.GetBlock(height); existing != nil {
-			n.logger.Debugf("Already have block %d, skipping", height)
-			continue // Skip to next block
-		}
-
-		n.logger.Debugf("Fetching block %d/%d", height, targetHeight)
-
-		ctx, cancel := context.WithTimeout(n.ctx, 12*time.Second)
-		blk, err := n.requestBlockWithContext(ctx, peerID, height)
-		cancel()
-
-		if err != nil {
-			n.logger.Warnf("Failed to fetch block %d: %v", height, err)
-			failures++
-			if failures > 10 {
-				return fmt.Errorf("too many failures")
+			if height <= n.currentHeight() {
+				n.logger.Debugf("Already applied block %d, skipping", height)
+				continue // Skip to next block
 			}
-			height-- // retry same block
-			time.Sleep(300 * time.Millisecond)
-			continue
+			n.logger.Debugf("Using stored unapplied block %d", height)
+			blk = existing
+		} else {
+			n.logger.Debugf("Fetching block %d/%d", height, targetHeight)
+
+			ctx, cancel := context.WithTimeout(n.ctx, 12*time.Second)
+			fetched, err := n.requestBlockWithContext(ctx, peerID, height)
+			cancel()
+
+			if err != nil {
+				n.logger.Warnf("Failed to fetch block %d: %v", height, err)
+				failures++
+				if failures > 10 {
+					return fmt.Errorf("too many failures")
+				}
+				height-- // retry same block
+				time.Sleep(300 * time.Millisecond)
+				continue
+			}
+			blk = fetched
 		}
 
 		failures = 0

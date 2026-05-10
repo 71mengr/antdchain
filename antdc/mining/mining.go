@@ -592,6 +592,24 @@ func txToMempoolEntry(t *tx.Tx, height uint64, entryTime uint64) *TxEntry {
 	}
 }
 
+func networkReadyForMining(bc *chain.Blockchain, p2pNode *p2p.Node) error {
+	if p2pNode == nil || p2pNode.GetPeerCount() == 0 {
+		return errors.New("no connected peers")
+	}
+	if bc == nil || !bc.IsFullySynced() {
+		if bc == nil {
+			return errors.New("blockchain is not initialized")
+		}
+		return fmt.Errorf("blockchain is not fully synced (height=%d target=%d syncing=%v cooldown=%s)",
+			bc.GetChainHeight(),
+			bc.GetSyncTarget(),
+			bc.IsSyncing(),
+			bc.SyncCooldownRemaining().Truncate(time.Second),
+		)
+	}
+	return nil
+}
+
 func currentMempoolEntries(bc *chain.Blockchain, fallback []*TxEntry, height uint64) []*TxEntry {
 	if bc == nil || bc.TxPool() == nil {
 		return fallback
@@ -641,6 +659,14 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 
 	for ms.mining {
 		<-ticker.C
+
+		if err := networkReadyForMining(bc, p2pNode); err != nil {
+			if time.Since(lastSyncLog) > LogSyncStatusInterval {
+				log.Printf("[miner] Mining paused: %v", err)
+				lastSyncLog = time.Now()
+			}
+			continue
+		}
 
 		if bc.IsSyncing() {
 			if time.Since(lastSyncLog) > LogSyncStatusInterval {
@@ -777,6 +803,10 @@ func StartPowMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
 	}
 	if !state.enabled {
 		log.Println("[miner] Mining disabled")
+		return
+	}
+	if err := networkReadyForMining(bc, p2pNode); err != nil {
+		log.Printf("[miner] Mining not started: %v", err)
 		return
 	}
 	if state.mining {

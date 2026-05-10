@@ -998,6 +998,9 @@ func runNode(c *cli.Context) error {
 		addr := common.BytesToQuantumAddress(minerWallet.Address().Bytes())
 		if addr == (common.QuantumAddress{}) {
 			logger.Warn("No miner address available!")
+		} else if err := node.NetworkReadyForSubmission(); err != nil {
+			logger.Warnf("Mining not started: %v", err)
+			logger.Warn("Connect to at least one peer and wait for blockchain sync to finish before mining")
 		} else {
 			logger.Infof("Mining to address: %s", addr.Hex())
 
@@ -1016,6 +1019,9 @@ func runNode(c *cli.Context) error {
 		ticker := time.NewTicker(20 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
+			if node.NetworkReadyForSubmission() != nil {
+				continue
+			}
 			if pool := bc.TxPool(); pool != nil {
 				for _, tx := range pool.GetPending() {
 					p2pNode.BroadcastTx(tx)
@@ -1313,6 +1319,9 @@ func (api *EthAPI) SendRawTransaction(raw string) (string, error) {
 	txObj, err := tx.Deserialize(data)
 	if err != nil {
 		return "", err
+	}
+	if err := api.node.NetworkReadyForSubmission(); err != nil {
+		return "", fmt.Errorf("cannot send transaction: %w", err)
 	}
 	if err := api.node.Blockchain().TxPool().AddTx(txObj, api.node.Blockchain()); err != nil {
 		return "", err
