@@ -902,7 +902,7 @@ func runNode(c *cli.Context) error {
 	}
 
 	// Create PoS mining state
-	posMiningState := mining.NewPosMiningState(powEngine)
+	posMiningState := mining.NewPosMiningState(powEngine, bc)
 
 	// Set sync callback
 	posMiningState.SetSyncCallback(func(isSyncing bool) {
@@ -1002,10 +1002,8 @@ func runNode(c *cli.Context) error {
 			logger.Infof("Mining to address: %s", addr.Hex())
 
 			// Start PoS mining
-			go mining.StartPosMining(bc, posMiningState, addr, p2pNode)
-			logger.Info("✓ Proof-of-Stake mining started")
-			logger.Info("  Each staker mines 5 blocks before rotating")
-			logger.Info("  Waiting for your turn to mine...")
+			go mining.StartPosMining(bc, posMiningState, addr, p2pNode, nil)
+			logger.Info("✓ Proof-of-work mining started")
 		}
 	}
 

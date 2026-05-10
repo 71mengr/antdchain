@@ -2370,8 +2370,8 @@ func (c *Console) handleRegisterStake(parts []string) {
 	fmt.Printf("✅ Stake registered for %s with 1,000,000 ANTD\n", addr.String())
 	fmt.Println("   Funds are locked during staking lock time and cannot be spent.")
 	if c.node.miningState != nil {
-		fmt.Println("✅ Auto-starting PoS mining for newly registered staker...")
-		mining.StartPosMining(c.node.blockchain, c.node.miningState, addr, c.node.p2pNode)
+		fmt.Println("✅ Auto-mining")
+		mining.StartPosMining(c.node.blockchain, c.node.miningState, addr, c.node.p2pNode, nil)
 	}
 }
 
@@ -2462,8 +2462,8 @@ func (c *Console) handleStartMining() {
 	}
 
 	fmt.Printf("✅ Starting mining with address: %s\n", minerAddress.String())
-	mining.StartPosMining(c.node.blockchain, c.node.miningState, minerAddress, c.node.p2pNode)
-	fmt.Println("✓ Mining started. Waiting for your turn to mine blocks...")
+	mining.StartPosMining(c.node.blockchain, c.node.miningState, minerAddress, c.node.p2pNode, nil)
+	fmt.Println("✓ Mining started.")
 }
 
 func (c *Console) checkStakerRegistration(addr common.QuantumAddress) bool {
