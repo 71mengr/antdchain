@@ -22,12 +22,12 @@ import (
 
 // Constants for block validation
 const (
-	MaxBlockSize         = 8 * 1024 * 1024 // 8MB maximum block size
-	MaxTransactions      = 10000           // Maximum transactions per block
-	MaxUncles            = 2               // Maximum uncle blocks
-	BlockTimeTarget      = 15              // 15 second target block time
-	FutureBlockThreshold = 30              // Reject blocks more than 30 seconds in future
-	DifficultyAdjustment = 1024            // Difficulty adjustment divisor
+	MaxBlockSize         = 8 * 1024 * 1024            // 8MB maximum block size
+	MaxTransactions      = 10000                      // Maximum transactions per block
+	MaxUncles            = 2                          // Maximum uncle blocks
+	BlockTimeTarget      = pow.TargetBlockTimeSeconds // 3 minute target block time
+	FutureBlockThreshold = 30                         // Reject blocks more than 30 seconds in future
+	DifficultyAdjustment = 1024                       // Difficulty adjustment divisor
 )
 
 var (

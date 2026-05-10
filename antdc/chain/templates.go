@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
+	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/vm"
@@ -146,10 +147,10 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 		return nil, nil, errors.New("no parent block")
 	}
 
-	// Enforce 12-second block time
+	// Enforce the network target block time.
 	currentTime := uint64(time.Now().Unix())
-	if currentTime-parent.Header.Time < 12 {
-		wait := 12 - (currentTime - parent.Header.Time)
+	if currentTime-parent.Header.Time < pow.TargetBlockTimeSeconds {
+		wait := pow.TargetBlockTimeSeconds - (currentTime - parent.Header.Time)
 		log.Printf("[miner] Waiting %d seconds for proper block timing...", wait)
 		time.Sleep(time.Duration(wait) * time.Second)
 		currentTime = uint64(time.Now().Unix())
@@ -277,8 +278,8 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 		Number:     new(big.Int).Add(parent.Header.Number, big.NewInt(1)),
 		GasLimit:   10_000_000,
 		Time:       currentTime,
-		Extra:   extraData,
-		Stakers: bc.blockHeaderStakerRegistrations(),
+		Extra:      extraData,
+		Stakers:    bc.blockHeaderStakerRegistrations(),
 	}
 	header.Difficulty = bc.calculateExpectedDifficultyFromChainState(
 		&block.Block{Header: header},

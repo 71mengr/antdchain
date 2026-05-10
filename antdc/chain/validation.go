@@ -192,15 +192,15 @@ func (bc *Blockchain) validateBasicBlockIntegrity(b *block.Block, parent *block.
 	}
 
 	// Reject blocks with timestamps too far in the future
-	maxFutureTime := uint64(30) // 30 seconds
+	maxFutureTime := uint64(pow.MaxFutureBlockTime)
 	currentTime := uint64(time.Now().Unix())
 	if b.Header.Time > currentTime+maxFutureTime {
 		return fmt.Errorf("block timestamp %d too far in future (current: %d)",
 			b.Header.Time, currentTime)
 	}
 
-	// Minimum block time for PoS (e.g., 2 seconds)
-	minBlockTime := uint64(2)
+	// Enforce the network target block time for PoS.
+	minBlockTime := uint64(pow.TargetBlockTimeSeconds)
 	if b.Header.Time < parent.Header.Time+minBlockTime {
 		return fmt.Errorf("block too fast: %d < %d + %d",
 			b.Header.Time, parent.Header.Time, minBlockTime)
