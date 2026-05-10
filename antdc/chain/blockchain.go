@@ -710,10 +710,11 @@ func (bc *Blockchain) ValidateTransaction(t *tx.Tx) error {
 		return fmt.Errorf("invalid nonce: expected %d, got %d", currentNonce, t.Nonce)
 	}
 
-	balance := bc.state.GetBalance(from)
+	currentHeight := bc.GetChainHeight()
+	balance := bc.spendableBalanceAtHeight(from, currentHeight, nil)
 	totalCost := new(big.Int).Add(t.Value, new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice))
 	if balance.Cmp(totalCost) < 0 {
-		return errors.New("insufficient balance")
+		return errors.New("insufficient spendable balance")
 	}
 
 	return nil

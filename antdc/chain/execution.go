@@ -30,10 +30,15 @@ func (bc *Blockchain) executeBlockTransactions(b *block.Block) (*big.Int, uint64
 
 	totalFees := big.NewInt(0)
 	totalGasUsed := uint64(0)
+	currentHeight := uint64(0)
+	if b != nil && b.Header != nil && b.Header.Number != nil && b.Header.Number.Sign() > 0 {
+		currentHeight = b.Header.Number.Uint64() - 1
+	}
+	pendingIncoming := make(map[common.QuantumAddress]*big.Int)
 
 	for i, transaction := range b.Txs {
 		// Validate transaction before execution
-		if err := bc.validateTransactionForExecution(transaction, i); err != nil {
+		if err := bc.validateTransactionForExecutionAtHeight(transaction, i, currentHeight, pendingIncoming); err != nil {
 			return nil, 0, fmt.Errorf("transaction %d invalid: %w", i, err)
 		}
 
@@ -41,6 +46,17 @@ func (bc *Blockchain) executeBlockTransactions(b *block.Block) (*big.Int, uint64
 		_, _, execErr := v.Execute(ctx, transaction)
 		if execErr != nil {
 			return nil, 0, fmt.Errorf("transaction %d execution error: %w", i, execErr)
+		}
+
+		if transaction.To != nil {
+			to := common.BytesToQuantumAddress(transaction.To.Bytes())
+			from := common.BytesToQuantumAddress(transaction.From.Bytes())
+			if to != from {
+				if pendingIncoming[to] == nil {
+					pendingIncoming[to] = big.NewInt(0)
+				}
+				pendingIncoming[to].Add(pendingIncoming[to], transaction.Value)
+			}
 		}
 
 		// Update totals using the block-committed gas amount.
@@ -61,7 +77,6 @@ func (bc *Blockchain) executeBlockTransactions(b *block.Block) (*big.Int, uint64
 
 	return totalFees, totalGasUsed, nil
 }
-
 
 func transactionCommittedGas(t *tx.Tx) uint64 {
 	if t == nil {
@@ -111,7 +126,7 @@ func (bc *Blockchain) sortAndValidateTransactions(txs []*tx.Tx) ([]*tx.Tx, error
 
 		senderAddress := common.BytesToQuantumAddress(sender.Bytes())
 		currentNonce := bc.state.GetNonce(senderAddress)
-		currentBalance := new(big.Int).Set(bc.state.GetBalance(senderAddress))
+		currentBalance := bc.spendableBalanceAtHeight(senderAddress, bc.GetChainHeight(), nil)
 
 		for txIndex, senderTx := range senderTxs {
 			// Strict contiguous nonce sequence.
@@ -141,6 +156,10 @@ func (bc *Blockchain) sortAndValidateTransactions(txs []*tx.Tx) ([]*tx.Tx, error
 
 // validateTransactionForExecution validates a single transaction
 func (bc *Blockchain) validateTransactionForExecution(t *tx.Tx, index int) error {
+	return bc.validateTransactionForExecutionAtHeight(t, index, bc.GetChainHeight(), nil)
+}
+
+func (bc *Blockchain) validateTransactionForExecutionAtHeight(t *tx.Tx, index int, currentHeight uint64, pendingIncoming map[common.QuantumAddress]*big.Int) error {
 	if t == nil {
 		return fmt.Errorf("transaction %d is nil", index)
 	}
@@ -163,13 +182,13 @@ func (bc *Blockchain) validateTransactionForExecution(t *tx.Tx, index int) error
 	}
 
 	// Balance check
-	balance := bc.state.GetBalance(from)
+	balance := bc.spendableBalanceAtHeight(from, currentHeight, pendingIncoming)
 	totalCost := new(big.Int).Add(
 		t.Value,
 		new(big.Int).Mul(t.GasPrice, big.NewInt(int64(t.Gas))),
 	)
 	if balance.Cmp(totalCost) < 0 {
-		return fmt.Errorf("transaction %d insufficient balance: have %s, need %s",
+		return fmt.Errorf("transaction %d insufficient spendable balance: have %s, need %s",
 			index, formatBalance(balance), formatBalance(totalCost))
 	}
 

@@ -29,7 +29,7 @@ const (
 	DefaultMaxTxSize         = 128 * 1024    // 128KB
 	DefaultMinGasPrice       = 1_000_000_000 // 1 Gwei
 	DefaultMaxFutureNonceGap = 1024
-	DefaultMinConfirmations  = 50
+	DefaultMinConfirmations  = 30
 	DefaultStaleBlockAge     = 1000
 	DefaultTxTTL             = 24 * time.Hour
 	DefaultCleanupInterval   = 2 * time.Minute
@@ -354,10 +354,11 @@ func (p *TxPool) addTx(t *tx.Tx) error {
     // Balance check
     gasCost := new(big.Int).Mul(new(big.Int).SetUint64(t.Gas), t.GasPrice)
     totalCost := new(big.Int).Add(t.Value, gasCost)
-    if balance.Cmp(totalCost) < 0 {
+    spendableBalance := p.chain.spendableBalanceAtHeight(senderAddress, latestHeight, nil)
+    if spendableBalance.Cmp(totalCost) < 0 {
         txValidationErrors.WithLabelValues("insufficient_balance").Inc()
-        return fmt.Errorf("insufficient balance: have %s, need %s",
-            formatBalance(balance), formatBalance(totalCost))
+        return fmt.Errorf("insufficient spendable balance: have %s, need %s (total balance: %s)",
+            formatBalance(spendableBalance), formatBalance(totalCost), formatBalance(balance))
     }
 
     // Nonce range check
