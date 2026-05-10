@@ -278,6 +278,12 @@ func (bc *Blockchain) validateDifficulty(b *block.Block, parent *block.Block) er
 	return nil
 }
 
+// CalculateExpectedDifficultyForBlock returns the deterministic chain-derived difficulty
+// expected for b on top of parent without mutating the PoW engine state.
+func (bc *Blockchain) CalculateExpectedDifficultyForBlock(b *block.Block, parent *block.Block) *big.Int {
+	return bc.calculateExpectedDifficultyFromChainState(b, parent)
+}
+
 func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, parent *block.Block) *big.Int {
 	height := b.Header.Number.Uint64()
 	if parent == nil || parent.Header == nil || parent.Header.Difficulty == nil {

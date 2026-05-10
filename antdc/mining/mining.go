@@ -403,6 +403,7 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 	}
 
 	ba.updateTime(ba.template.Block.Header, prevBlock)
+	ba.template.Block.Header.Difficulty = ba.chainstate.CalculateExpectedDifficultyForBlock(ba.template.Block, prevBlock)
 	stateRoot, err = ba.chainstate.ComputeBlockFinalStateRoot(
 		coinbaseAddr,
 		ba.template.Block.Header.Time,
