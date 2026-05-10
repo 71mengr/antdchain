@@ -309,6 +309,17 @@ type headerMinerBlockView struct {
 	extra     []byte
 }
 
+// ComputeBlockFinalStateRoot computes the committed state root for a mined block
+// using the same transaction execution and reward distribution path as validation.
+func (bc *Blockchain) ComputeBlockFinalStateRoot(miner common.QuantumAddress, blockTime uint64, blockNum uint64, extra []byte, txs []*tx.Tx) (common.Hash, error) {
+	return bc.computeBlockFinalStateRoot(headerMinerBlockView{
+		miner:     miner,
+		blockTime: blockTime,
+		blockNum:  blockNum,
+		extra:     extra,
+	}, txs)
+}
+
 func (bc *Blockchain) computeBlockFinalStateRoot(view headerMinerBlockView, txs []*tx.Tx) (common.Hash, error) {
 	currentState := bc.State()
 	if currentState == nil {

@@ -331,6 +331,19 @@ func (ba *BlockAssembler) createCoinbaseScriptSig() []byte {
 	return script
 }
 
+func (ba *BlockAssembler) blockExtraData() []byte {
+	extraData := []byte("ANTDChain-PoW")
+	if ba.chainstate == nil {
+		return extraData
+	}
+
+	if rotatingKing := ba.chainstate.GetCurrentRotatingKing(); rotatingKing != (common.QuantumAddress{}) {
+		extraData = []byte(fmt.Sprintf("ANTDChain-PoW|rk=%s", rotatingKing.String()))
+	}
+
+	return extraData
+}
+
 // CreateNewBlock creates a new block template
 func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mempoolTxns []*TxEntry) (*BlockTemplate, error) {
 	ba.timeStart = time.Now()
@@ -364,7 +377,7 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 	buildTime := time.Since(ba.timeStart)
 
 	// Create header using NewHeader
-	stateRoot := prevBlock.Header.Root // Use parent's state root as placeholder
+	stateRoot := common.Hash{}
 	txRoot := block.CalculateTxHash(ba.template.Block.Txs)
 
 	header, err := block.NewHeader(
@@ -382,6 +395,7 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 
 	header.Version = 1
 	header.GasUsed = 0
+	header.Extra = ba.blockExtraData()
 	ba.template.Block.Header = header
 
 	if err := ba.template.Block.UpdateHeader(); err != nil {
@@ -389,7 +403,17 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 	}
 
 	ba.updateTime(ba.template.Block.Header, prevBlock)
-
+	stateRoot, err = ba.chainstate.ComputeBlockFinalStateRoot(
+		coinbaseAddr,
+		ba.template.Block.Header.Time,
+		ba.height,
+		ba.template.Block.Header.Extra,
+		ba.template.Block.Txs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute block state root: %w", err)
+	}
+	ba.template.Block.Header.Root = stateRoot
 	ba.template.TotalWeight = ba.blockWeight
 	ba.template.TotalSigOpsCost = ba.blockSigOpsCost
 	ba.template.TotalFees.Set(ba.blockFees)
