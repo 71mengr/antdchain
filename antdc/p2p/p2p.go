@@ -362,12 +362,34 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 	return nil
 }
 
-// directPushBlock sends block directly to recent peers
+// directPushBlock sends block directly to recent peers.
 func (n *Node) directPushBlock(b *block.Block, msg []byte) {
+	count := n.directPushMessage(msg, 15)
+	if count > 0 {
+		n.logger.Debugf("Direct-pushed block %d to %d peers", b.Header.Number.Uint64(), count)
+	}
+}
+
+// directPushTx sends a transaction directly to connected peers in addition to
+// GossipSub. This makes wallet-originated transactions visible to peers even
+// when the GossipSub mesh has not fully formed yet.
+func (n *Node) directPushTx(t *tx.Tx, msg []byte) {
+	count := n.directPushMessage(msg, 15)
+	if count > 0 {
+		n.logger.Debugf("Direct-pushed tx %s to %d peers", t.Hash().Hex()[:10], count)
+	}
+}
+
+// directPushMessage sends a pre-encoded network message over the direct push
+// stream protocol and returns the number of peers that accepted the write.
+func (n *Node) directPushMessage(msg []byte, limit int) int {
+	if n == nil || n.host == nil || n.ctx == nil {
+		return 0
+	}
 	peers := n.host.Network().Peers()
 	count := 0
 	for _, pid := range peers {
-		if count >= 15 {
+		if count >= limit {
 			break
 		}
 		if pid == n.host.ID() {
@@ -389,109 +411,109 @@ func (n *Node) directPushBlock(b *block.Block, msg []byte) {
 		count++
 	}
 
-	if count > 0 {
-		n.logger.Debugf("Direct-pushed block %d to %d peers", b.Header.Number.Uint64(), count)
-	}
+	return count
 }
 
 // BroadcastTx — secure, efficient, spam-resistant transaction broadcast
 func (n *Node) BroadcastTx(t *tx.Tx) error {
-    // Add entry logging
-    n.logger.Debugf("BroadcastTx called for tx %s", t.Hash().Hex()[:10])
-    
-    if t == nil {
-        return errors.New("nil transaction")
-    }
+	if t == nil {
+		return errors.New("nil transaction")
+	}
 
-    if err := t.Validate(); err != nil {
-        return fmt.Errorf("invalid transaction: %w", err)
-    }
-    if valid, err := t.Verify(); err != nil || !valid {
-        return errors.New("invalid signature")
-    }
+	// Add entry logging
+	n.logger.Debugf("BroadcastTx called for tx %s", t.Hash().Hex()[:10])
 
-    hash := t.Hash()
-    n.logger.Debugf("Tx %s validation passed", hash.Hex()[:10])
+	if err := t.Validate(); err != nil {
+		return fmt.Errorf("invalid transaction: %w", err)
+	}
+	if valid, err := t.Verify(); err != nil || !valid {
+		return errors.New("invalid signature")
+	}
 
-    // Check context
-    if n.ctx == nil {
-        n.logger.Error("P2P context is nil")
-        return errors.New("p2p context not initialized")
-    }
-    
-    // Check context not canceled
-    select {
-    case <-n.ctx.Done():
-        n.logger.Errorf("P2P context canceled: %v", n.ctx.Err())
-        return fmt.Errorf("p2p context canceled: %w", n.ctx.Err())
-    default:
-        n.logger.Debug("P2P context is valid")
-    }
+	hash := t.Hash()
+	n.logger.Debugf("Tx %s validation passed", hash.Hex()[:10])
 
-    // Check if we've recently broadcast this transaction
-    n.knownTxsMu.RLock()
-    broadcastTime, recentlyBroadcast := n.knownTxs[hash]
-    n.knownTxsMu.RUnlock()
+	// Check context
+	if n.ctx == nil {
+		n.logger.Error("P2P context is nil")
+		return errors.New("p2p context not initialized")
+	}
 
-    if recentlyBroadcast {
-        elapsed := time.Since(broadcastTime)
-        if elapsed < 30*time.Second { // Only skip if really recent
-            n.logger.Debugf("Already broadcast tx %s within %v, skipping", hash.Hex()[:10], elapsed)
-            return nil
-        }
-    }
+	// Check context not canceled
+	select {
+	case <-n.ctx.Done():
+		n.logger.Errorf("P2P context canceled: %v", n.ctx.Err())
+		return fmt.Errorf("p2p context canceled: %w", n.ctx.Err())
+	default:
+		n.logger.Debug("P2P context is valid")
+	}
 
-    // Check topic
-    if n.topic == nil {
-        n.logger.Error("P2P topic is nil")
-        return errors.New("p2p topic not initialized")
-    }
+	// Check if we've recently broadcast this transaction
+	n.knownTxsMu.RLock()
+	broadcastTime, recentlyBroadcast := n.knownTxs[hash]
+	n.knownTxsMu.RUnlock()
 
-    data, err := json.Marshal(t)
-    if err != nil {
-        n.logger.Errorf("Failed to marshal tx: %v", err)
-        return fmt.Errorf("failed to marshal tx: %w", err)
-    }
+	if recentlyBroadcast {
+		elapsed := time.Since(broadcastTime)
+		if elapsed < 30*time.Second { // Only skip if really recent
+			n.logger.Debugf("Already broadcast tx %s within %v, skipping", hash.Hex()[:10], elapsed)
+			return nil
+		}
+	}
 
-    msg := make([]byte, 1+len(data))
-    msg[0] = msgTypeTx
-    copy(msg[1:], data)
+	// Check topic
+	if n.topic == nil {
+		n.logger.Error("P2P topic is nil")
+		return errors.New("p2p topic not initialized")
+	}
 
-    n.logger.Debugf("Publishing tx %s, msg size=%d bytes", hash.Hex()[:10], len(msg))
-    
-    // Publish with timeout
-    publishDone := make(chan error, 1)
-    go func() {
-        publishDone <- n.topic.Publish(n.ctx, msg)
-    }()
-    
-    select {
-    case err := <-publishDone:
-        if err != nil {
-            n.logger.Errorf("Failed to publish tx: %v", err)
-            return fmt.Errorf("failed to publish tx: %w", err)
-        }
-        n.logger.Infof("Successfully published tx %s", hash.Hex()[:10])
-    case <-time.After(5 * time.Second):
-        n.logger.Errorf("Publish timeout for tx %s", hash.Hex()[:10])
-        return errors.New("publish timeout")
-    }
+	data, err := json.Marshal(t)
+	if err != nil {
+		n.logger.Errorf("Failed to marshal tx: %v", err)
+		return fmt.Errorf("failed to marshal tx: %w", err)
+	}
 
-    // Mark as broadcast
-    n.knownTxsMu.Lock()
-    n.knownTxs[hash] = time.Now()
-    n.knownTxsMu.Unlock()
+	msg := make([]byte, 1+len(data))
+	msg[0] = msgTypeTx
+	copy(msg[1:], data)
 
-    n.logger.Infof("Broadcast tx %s (nonce=%d, value=%s)",
-        hash.Hex()[:10],
-        t.Nonce,
-        t.Value.String(),
-    )
+	n.logger.Debugf("Publishing tx %s, msg size=%d bytes", hash.Hex()[:10], len(msg))
 
-    // Clean up old entries periodically
-    go n.cleanupKnownTxs()
+	// Publish with timeout
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- n.topic.Publish(n.ctx, msg)
+	}()
 
-    return nil
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			n.logger.Errorf("Failed to publish tx: %v", err)
+			return fmt.Errorf("failed to publish tx: %w", err)
+		}
+		n.logger.Infof("Successfully published tx %s", hash.Hex()[:10])
+	case <-time.After(5 * time.Second):
+		n.logger.Errorf("Publish timeout for tx %s", hash.Hex()[:10])
+		return errors.New("publish timeout")
+	}
+
+	// Mark as broadcast
+	n.knownTxsMu.Lock()
+	n.knownTxs[hash] = time.Now()
+	n.knownTxsMu.Unlock()
+
+	go n.directPushTx(t, msg)
+
+	n.logger.Infof("Broadcast tx %s (nonce=%d, value=%s)",
+		hash.Hex()[:10],
+		t.Nonce,
+		t.Value.String(),
+	)
+
+	// Clean up old entries periodically
+	go n.cleanupKnownTxs()
+
+	return nil
 }
 
 // Add cleanup function
@@ -534,6 +556,8 @@ func (n *Node) BroadcastTxForce(t *tx.Tx) error {
 	if err := n.topic.Publish(n.ctx, msg); err != nil {
 		return fmt.Errorf("failed to publish tx: %w", err)
 	}
+
+	go n.directPushTx(t, msg)
 
 	n.knownTxsMu.Lock()
 	n.knownTxs[hash] = time.Now()
@@ -699,53 +723,7 @@ func (n *Node) handleMessages() {
 				continue
 			}
 
-			hash := txObj.Hash()
-
-			// Check if we've recently seen this transaction
-			n.knownTxsMu.RLock()
-			_, recentlySeen := n.knownTxs[hash]
-			n.knownTxsMu.RUnlock()
-
-			if recentlySeen {
-				n.logger.Debugf("Already recently saw tx %s, ignoring", hash.String()[:10])
-				continue
-			}
-
-			n.logger.Infof("Received tx %s from %s (nonce=%d)",
-				hash.String()[:10], msg.GetFrom().String()[:8], txObj.Nonce)
-
-			n.processMu.Lock()
-			err := n.chain.TxPool().AddTransaction(&txObj, n.chain)
-			wasNew := err == nil
-			if err != nil && !strings.Contains(err.Error(), "already in pool") {
-				n.logger.Warnf("Tx rejected: %v", err)
-			}
-			n.processMu.Unlock()
-
-			// Mark as seen before re-broadcasting
-			n.knownTxsMu.Lock()
-			n.knownTxs[hash] = time.Now()
-			// Clean old entries if needed
-			if len(n.knownTxs) > n.knownTxsLimit {
-				for key := range n.knownTxs {
-					delete(n.knownTxs, key)
-					break
-				}
-			}
-			n.knownTxsMu.Unlock()
-
-			// Only re-broadcast if it was new to us
-			if wasNew {
-				go func(tx *tx.Tx) {
-					// Small delay to let the local node fully process it first
-					time.Sleep(50 * time.Millisecond)
-					if err := n.BroadcastTx(tx); err != nil {
-						n.logger.Debugf("Failed to re-broadcast tx %s: %v", tx.Hash().String()[:10], err)
-					} else {
-						n.logger.Debugf("Re-broadcasted tx %s to network", tx.Hash().String()[:10])
-					}
-				}(&txObj)
-			}
+			n.processIncomingTx(&txObj, msg.GetFrom())
 
 		}
 	}
@@ -1132,7 +1110,7 @@ func (n *Node) allowBlockFromPeer(pid peer.ID) bool {
 	return rl.count <= MaxBlocksPerPeerPerSec
 }
 
-// handleDirectPush — direct block push handler
+// handleDirectPush handles direct block and transaction pushes.
 func (n *Node) handleDirectPush(s network.Stream) {
 	defer s.Close()
 
@@ -1141,22 +1119,88 @@ func (n *Node) handleDirectPush(s network.Stream) {
 		return
 	}
 
-	if data[0] != msgTypeBlock {
-		return
-	}
-
-	var blk block.Block
-	if err := json.Unmarshal(data[1:], &blk); err != nil {
-		return
-	}
-
-	go func() {
-		n.processMu.Lock()
-		defer n.processMu.Unlock()
-		if err := n.processBlock(&blk); err != nil && !strings.Contains(err.Error(), "already known") {
-			n.logger.Warnf("Direct block failed: %v", err)
+	switch data[0] {
+	case msgTypeBlock:
+		var blk block.Block
+		if err := json.Unmarshal(data[1:], &blk); err != nil {
+			return
 		}
-	}()
+
+		go func() {
+			n.processMu.Lock()
+			defer n.processMu.Unlock()
+			if err := n.processBlock(&blk); err != nil && !strings.Contains(err.Error(), "already known") {
+				n.logger.Warnf("Direct block failed: %v", err)
+			}
+		}()
+	case msgTypeTx:
+		if !n.allowTxFromPeer(s.Conn().RemotePeer()) {
+			return
+		}
+
+		var txObj tx.Tx
+		if err := json.Unmarshal(data[1:], &txObj); err != nil {
+			return
+		}
+
+		go n.processIncomingTx(&txObj, s.Conn().RemotePeer())
+	}
+}
+
+// processIncomingTx validates, stores, marks, and forwards a transaction received
+// from either GossipSub or the direct push stream.
+func (n *Node) processIncomingTx(txObj *tx.Tx, from peer.ID) {
+	if txObj == nil {
+		return
+	}
+
+	hash := txObj.Hash()
+
+	// Check if we've recently seen this transaction.
+	n.knownTxsMu.RLock()
+	_, recentlySeen := n.knownTxs[hash]
+	n.knownTxsMu.RUnlock()
+
+	if recentlySeen {
+		n.logger.Debugf("Already recently saw tx %s, ignoring", hash.String()[:10])
+		return
+	}
+
+	n.logger.Infof("Received tx %s from %s (nonce=%d)",
+		hash.String()[:10], from.String()[:8], txObj.Nonce)
+
+	n.processMu.Lock()
+	err := n.chain.TxPool().AddTransaction(txObj, n.chain)
+	wasNew := err == nil
+	if err != nil && !strings.Contains(err.Error(), "already in pool") {
+		n.logger.Warnf("Tx rejected: %v", err)
+	}
+	n.processMu.Unlock()
+
+	// Mark as seen after local pool processing. Explicit rebroadcast uses the
+	// force path so this marker prevents loops without suppressing forwarding.
+	n.knownTxsMu.Lock()
+	n.knownTxs[hash] = time.Now()
+	if len(n.knownTxs) > n.knownTxsLimit {
+		for key := range n.knownTxs {
+			delete(n.knownTxs, key)
+			break
+		}
+	}
+	n.knownTxsMu.Unlock()
+
+	// Only re-broadcast if it was new to us. Use the force path because the tx is
+	// now intentionally present in knownTxs to prevent future duplicate handling.
+	if wasNew {
+		go func(tx *tx.Tx) {
+			time.Sleep(50 * time.Millisecond)
+			if err := n.BroadcastTxForce(tx); err != nil {
+				n.logger.Debugf("Failed to re-broadcast tx %s: %v", tx.Hash().String()[:10], err)
+			} else {
+				n.logger.Debugf("Re-broadcasted tx %s to network", tx.Hash().String()[:10])
+			}
+		}(txObj)
+	}
 }
 
 func (n *Node) Peers() []peer.ID {
