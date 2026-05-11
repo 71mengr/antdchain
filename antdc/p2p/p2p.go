@@ -141,6 +141,10 @@ const (
 	MaxTxPerPeerBurst      = 200
 	MaxBlocksPerPeerPerSec = 10
 	DefaultMaxPeers        = 100
+	MaxDirectPushBytes     = 4 << 20
+	MaxConfigStreamBytes   = 64 << 10
+	MaxSyncResponseBytes   = 16 << 20
+	MaxConnsPerPeer        = 3
 )
 
 type Config struct {
@@ -315,6 +319,98 @@ func parseBootstrapPeers(addrs []string, logger *logrus.Logger) []peer.AddrInfo 
 		peers = append(peers, *ai)
 	}
 	return peers
+}
+
+
+func configuredExternalIP() string {
+	for _, envName := range []string{"ANTD_EXTERNAL_IP", "ANTDCHAIN_EXTERNAL_IP"} {
+		if externalIP := strings.TrimSpace(os.Getenv(envName)); externalIP != "" {
+			return externalIP
+		}
+	}
+	return ""
+}
+
+func readLimitedStream(r io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("stream exceeds %d byte limit", maxBytes)
+	}
+	return data, nil
+}
+
+func (n *Node) allowStreamFromPeer(pid peer.ID, streamType string) bool {
+	if n == nil || pid == "" {
+		return false
+	}
+	if n.banManager != nil {
+		if n.banManager.IsBanned(pid) {
+			n.logger.Debugf("Rejecting %s stream from banned peer %s", streamType, pid.String()[:8])
+			return false
+		}
+		if violation := n.banManager.checkRateLimit(pid); violation != nil {
+			violation.Type = "STREAM_" + violation.Type
+			violation.Details = fmt.Sprintf("%s stream rate limit exceeded: %s", streamType, violation.Details)
+			n.banManager.RecordViolation(pid, violation, nil)
+			return false
+		}
+	}
+	return true
+}
+
+func (n *Node) recordPeerViolation(pid peer.ID, violationType string, severity int, details string) {
+	if n == nil || n.banManager == nil || pid == "" {
+		return
+	}
+	n.banManager.RecordViolation(pid, &Violation{
+		Type:      violationType,
+		Severity:  severity,
+		Timestamp: time.Now(),
+		Details:   details,
+	}, nil)
+}
+
+func (n *Node) connectDiscoveredPeer(pi peer.AddrInfo) {
+	if n == nil || n.host == nil || pi.ID == n.host.ID() {
+		return
+	}
+	if n.banManager != nil && n.banManager.IsBanned(pi.ID) {
+		return
+	}
+	if len(n.Peers()) >= n.cfg.MaxPeers {
+		return
+	}
+
+	n.host.Peerstore().AddAddrs(pi.ID, pi.Addrs, peerstore.TempAddrTTL)
+	ctx, cancel := context.WithTimeout(n.ctx, n.cfg.ConnectionTimeout)
+	defer cancel()
+	if err := n.host.Connect(ctx, pi); err != nil {
+		n.logger.Debugf("Failed to connect discovered peer %s: %v", pi.ID.String()[:8], err)
+		return
+	}
+	n.logger.Infof("Connected to discovered peer %s", pi.ID.String()[:8])
+	go n.syncIfBehind(pi.ID)
+}
+
+func (n *Node) handlePeerConnected(_ network.Network, conn network.Conn) {
+	if n == nil || n.host == nil {
+		return
+	}
+	pid := conn.RemotePeer()
+	if pid == "" || pid == n.host.ID() {
+		return
+	}
+	if n.banManager != nil && n.banManager.IsBanned(pid) {
+		_ = n.host.Network().ClosePeer(pid)
+		return
+	}
+	if conns := n.host.Network().ConnsToPeer(pid); len(conns) > MaxConnsPerPeer {
+		n.recordPeerViolation(pid, "CONNECTION_FLOOD", 7, fmt.Sprintf("too many connections: %d", len(conns)))
+		_ = conn.Close()
+	}
 }
 
 // BroadcastBlock — secure, efficient, anti-spam block propagation
@@ -902,6 +998,11 @@ func (n *Node) backfillMissingParents(peerID peer.ID, neededHeight uint64, expec
 // handleStream handles block sync requests
 func (n *Node) handleStream(s network.Stream) {
 	defer s.Close()
+	remotePeer := s.Conn().RemotePeer()
+	if !n.allowStreamFromPeer(remotePeer, "sync") {
+		return
+	}
+	_ = s.SetDeadline(time.Now().Add(10 * time.Second))
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
 	var request uint64
@@ -974,6 +1075,12 @@ func (n *Node) RequestBlockSync(peerID peer.ID, blockNumber uint64) (*block.Bloc
 	if length == 0 {
 		return nil, fmt.Errorf("block %d not found", blockNumber)
 	}
+	if length > MaxSyncResponseBytes {
+		if n.banManager != nil {
+			n.banManager.BanPeer(peerID, "OVERSIZED_SYNC_RESPONSE", fmt.Sprintf("size=%d", length))
+		}
+		return nil, fmt.Errorf("sync response too large: %d bytes", length)
+	}
 	data := make([]byte, length)
 	if _, err := io.ReadFull(rw, data); err != nil {
 		return nil, fmt.Errorf("failed to read block data: %w", err)
@@ -1007,17 +1114,17 @@ type mdnsNotifee struct {
 }
 
 func (m *mdnsNotifee) HandlePeerFound(pi peer.AddrInfo) {
-	m.host.Peerstore().AddAddrs(pi.ID, pi.Addrs, peerstore.TempAddrTTL)
-	if err := m.host.Connect(context.Background(), pi); err != nil {
-		m.logger.Warnf("Failed to connect to mDNS peer %s: %v", pi.ID, err)
+	if m.node == nil {
 		return
 	}
-	m.logger.Infof("Connected to mDNS peer %s", pi.ID)
-	go m.node.syncIfBehind(pi.ID)
+	m.node.connectDiscoveredPeer(pi)
 }
 
 // Global DHT peer discovery
 func (n *Node) startDHTDiscovery() {
+	if n.dht == nil {
+		return
+	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -1029,19 +1136,25 @@ func (n *Node) startDHTDiscovery() {
 		case <-n.ctx.Done():
 			return
 		case <-ticker.C:
+			if len(n.Peers()) >= n.cfg.MaxPeers {
+				continue
+			}
 			ctx, cancel := context.WithTimeout(n.ctx, 15*time.Second)
 			peerChan := n.dht.FindProvidersAsync(ctx, cidRendezvous, n.cfg.MaxPeers)
-			cancel()
 
 			count := 0
 			for p := range peerChan {
+				if len(n.Peers()) >= n.cfg.MaxPeers {
+					break
+				}
 				if p.ID == n.host.ID() || len(p.Addrs) == 0 {
 					continue
 				}
 				n.logger.Infof("DHT discovered peer: %s", p.ID.String()[:8])
-				go n.host.Connect(n.ctx, p)
+				go n.connectDiscoveredPeer(p)
 				count++
 			}
+			cancel()
 			if count == 0 {
 				n.logger.Debug("DHT discovery: no new peers")
 			}
@@ -1051,6 +1164,9 @@ func (n *Node) startDHTDiscovery() {
 
 // Announce ourselves on DHT
 func (n *Node) announceOnDHT() {
+	if n.dht == nil {
+		return
+	}
 	time.Sleep(5 * time.Second)
 	ctx, cancel := context.WithTimeout(n.ctx, 30*time.Second)
 	defer cancel()
@@ -1117,16 +1233,33 @@ func (n *Node) allowBlockFromPeer(pid peer.ID) bool {
 // handleDirectPush handles direct block and transaction pushes.
 func (n *Node) handleDirectPush(s network.Stream) {
 	defer s.Close()
+	remotePeer := s.Conn().RemotePeer()
+	if !n.allowStreamFromPeer(remotePeer, "direct") {
+		return
+	}
+	_ = s.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-	data, err := io.ReadAll(s)
+	data, err := readLimitedStream(s, MaxDirectPushBytes)
 	if err != nil || len(data) < 1 {
+		if err != nil {
+			n.recordPeerViolation(remotePeer, "OVERSIZED_DIRECT_PUSH", 8, err.Error())
+		}
+		return
+	}
+	if !n.CheckPeerBeforeProcessingWithCheckpoints(remotePeer, data[0], data) {
 		return
 	}
 
 	switch data[0] {
 	case msgTypeBlock:
+		if !n.allowBlockFromPeer(remotePeer) {
+			n.recordPeerViolation(remotePeer, "DIRECT_BLOCK_RATE_LIMIT", 6, "direct block rate limit exceeded")
+			return
+		}
+
 		var blk block.Block
 		if err := json.Unmarshal(data[1:], &blk); err != nil {
+			n.recordPeerViolation(remotePeer, "MALFORMED_DIRECT_BLOCK", 9, err.Error())
 			return
 		}
 
@@ -1136,16 +1269,18 @@ func (n *Node) handleDirectPush(s network.Stream) {
 			}
 		}()
 	case msgTypeTx:
-		if !n.allowTxFromPeer(s.Conn().RemotePeer()) {
+		if !n.allowTxFromPeer(remotePeer) {
+			n.recordPeerViolation(remotePeer, "DIRECT_TX_RATE_LIMIT", 5, "direct transaction rate limit exceeded")
 			return
 		}
 
 		var txObj tx.Tx
 		if err := json.Unmarshal(data[1:], &txObj); err != nil {
+			n.recordPeerViolation(remotePeer, "MALFORMED_DIRECT_TX", 9, err.Error())
 			return
 		}
 
-		go n.processIncomingTx(&txObj, s.Conn().RemotePeer())
+		go n.processIncomingTx(&txObj, remotePeer)
 	}
 }
 
@@ -1467,7 +1602,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	}
 
 	// Optional external address announcement. Set ANTD_EXTERNAL_IP when auto-detection is wrong.
-	if externalIP := os.Getenv("129.151.164.202"); externalIP != "" {
+	if externalIP := configuredExternalIP(); externalIP != "" {
 		externalAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", externalIP, cfg.Port))
 		if err != nil {
 			cancel()
@@ -1547,6 +1682,10 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		maxSyncRetries: 3,
 		lastKingList:   []common.QuantumAddress{},
 	}
+
+	// Enable peer protection before accepting streams.
+	node.IntegrateBanManagerWithCheckpoints(nil)
+	h.Network().Notify(&network.NotifyBundle{ConnectedF: node.handlePeerConnected})
 
 	// Set stream handlers
 	h.SetStreamHandler("/antdchain/sync/1.0.0", node.handleStream)
@@ -4319,9 +4458,15 @@ func (n *Node) RequestKingConfiguration(peerID peer.ID) {
 // Handles direct configuration stream requests
 func (n *Node) handleKingConfigStream(s network.Stream) {
 	defer s.Close()
+	remotePeer := s.Conn().RemotePeer()
+	if !n.allowStreamFromPeer(remotePeer, "king-config") {
+		return
+	}
+	_ = s.SetDeadline(time.Now().Add(5 * time.Second))
 
-	data, err := io.ReadAll(s)
+	_, err := readLimitedStream(s, MaxConfigStreamBytes)
 	if err != nil {
+		n.recordPeerViolation(remotePeer, "OVERSIZED_CONFIG_STREAM", 7, err.Error())
 		n.logger.Debugf("Failed to read config stream: %v", err)
 		return
 	}

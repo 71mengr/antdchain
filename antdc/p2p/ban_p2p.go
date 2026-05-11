@@ -942,18 +942,27 @@ func (bm *BanManager) GetBanStats() map[string]interface{} {
 
 // IntegrateBanManager adds ban checking to the existing node with checkpoint support
 func (n *Node) IntegrateBanManagerWithCheckpoints(cp *checkpoints.Checkpoints) {
-	// Create ban manager with checkpoint support
 	banConfig := DefaultBanConfig()
+	if n.banManager != nil {
+		n.banManager.mu.Lock()
+		n.banManager.checkpoints = cp
+		n.banManager.mu.Unlock()
+		n.logger.WithFields(logrus.Fields{
+			"checkpointProtection": cp != nil,
+			"autoBan":              n.banManager.config.EnableAutoBan,
+			"checkpointWeight":     n.banManager.config.CheckpointWeight,
+		}).Info("✅ P2P Ban Manager checkpoint protection updated")
+		return
+	}
+
 	n.banManager = NewBanManager(n, banConfig, cp)
-	
-	// Start ban manager
 	n.banManager.Start()
-	
+
 	n.logger.WithFields(logrus.Fields{
-		"checkpointProtection": true,
+		"checkpointProtection": cp != nil,
 		"autoBan":              banConfig.EnableAutoBan,
 		"checkpointWeight":     banConfig.CheckpointWeight,
-	}).Info("✅ P2P Ban Manager with Checkpoint Protection integrated")
+	}).Info("✅ P2P Ban Manager with DoS Protection integrated")
 }
 
 // CheckPeerBeforeProcessingWithCheckpoints enhanced version with checkpoint verification
