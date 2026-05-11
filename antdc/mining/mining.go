@@ -5,6 +5,7 @@
 package mining
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -535,6 +536,41 @@ func generateBlockSignature(miner common.QuantumAddress, parentHash common.Hash,
 	return quantum.Sign(privateKey, msgHash.Bytes())
 }
 
+func mineBlockProofOfWork(ctx context.Context, engine *pow.PoW, header *block.Header) error {
+	if engine == nil {
+		return errors.New("PoW engine not initialized")
+	}
+	if header == nil {
+		return errors.New("block header is nil")
+	}
+
+	difficulty := big.NewInt(pow.MinDifficulty)
+	if header.Difficulty != nil {
+		difficulty = new(big.Int).Set(header.Difficulty)
+	}
+
+	powHeader := &pow.BlockHeader{
+		ParentHash: header.ParentHash,
+		Coinbase:   header.Coinbase,
+		Root:       header.Root,
+		TxHash:     header.TxHash,
+		Number:     header.Number.Uint64(),
+		Difficulty: difficulty,
+		Time:       header.Time,
+		Extra:      append([]byte(nil), header.Extra...),
+		Nonce:      [8]byte(header.Nonce),
+		MixDigest:  header.MixDigest,
+	}
+
+	if err := engine.MineBlock(ctx, powHeader); err != nil {
+		return err
+	}
+
+	header.Nonce = block.BlockNonce(powHeader.Nonce)
+	header.MixDigest = powHeader.MixDigest
+	return nil
+}
+
 func broadcastMinedBlock(p *p2p.Node, blk *block.Block, ms *PosMiningState) {
 	if p == nil || blk == nil {
 		return
@@ -593,9 +629,7 @@ func txToMempoolEntry(t *tx.Tx, height uint64, entryTime uint64) *TxEntry {
 }
 
 func networkReadyForMining(bc *chain.Blockchain, p2pNode *p2p.Node) error {
-	if p2pNode == nil || p2pNode.GetPeerCount() == 0 {
-		return errors.New("no connected peers")
-	}
+	_ = p2pNode
 	if bc == nil || !bc.IsFullySynced() {
 		if bc == nil {
 			return errors.New("blockchain is not initialized")
@@ -755,6 +789,17 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 			sigMarker := []byte("|SIG|")
 			blk.Header.Extra = append(blk.Header.Extra, sigMarker...)
 			blk.Header.Extra = append(blk.Header.Extra, signature...)
+		}
+
+		if err := mineBlockProofOfWork(context.Background(), ms.powEngine, blk.Header); err != nil {
+			log.Printf("[miner] Proof-of-work failed for block %d: %v", height, err)
+			continue
+		}
+
+		currentTip = bc.Latest()
+		if currentTip == nil || currentTip.Hash() != parent.Hash() {
+			log.Printf("[miner] Tip changed while mining block %d; discarding candidate", height)
+			continue
 		}
 
 		if err := bc.AddBlock(blk); err != nil {

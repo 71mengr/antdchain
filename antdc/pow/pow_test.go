@@ -5,6 +5,7 @@
 package pow
 
 import (
+	"context"
 	"math/big"
 	"testing"
 
@@ -67,4 +68,35 @@ func TestGetNextMinerIgnoresLocalPenaltyState(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, minerA, minerB)
+}
+
+func TestAnyMinerCanMineAndVerifyBlock(t *testing.T) {
+	t.Parallel()
+
+	engine := NewPoW()
+	miners := []common.QuantumAddress{
+		common.BytesToQuantumAddress([]byte("miner-one")),
+		common.BytesToQuantumAddress([]byte("miner-two")),
+		common.BytesToQuantumAddress([]byte("miner-three")),
+	}
+
+	for i, miner := range miners {
+		eligible, err := engine.VerifyMinerEligibility(miner, common.Hash{}, uint64(i+1), 1)
+		require.NoError(t, err)
+		assert.True(t, eligible)
+
+		header := &BlockHeader{
+			ParentHash: common.BytesToHash([]byte("parent")),
+			Coinbase:   miner,
+			Root:       common.BytesToHash([]byte("root")),
+			TxHash:     common.BytesToHash([]byte("txs")),
+			Number:     uint64(i + 1),
+			Difficulty: big.NewInt(MinDifficulty),
+			Time:       uint64(i + 1),
+			Extra:      []byte("ANTDChain-PoW"),
+		}
+
+		require.NoError(t, engine.MineBlock(context.Background(), header))
+		assert.True(t, engine.Verify(header))
+	}
 }

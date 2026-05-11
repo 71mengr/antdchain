@@ -74,6 +74,12 @@ func (bc *Blockchain) validateAndExecuteBlock(b *block.Block, parent *block.Bloc
 		return fmt.Errorf("difficulty validation failed: %w", err)
 	}
 
+	// PROOF-OF-WORK VALIDATION
+	if err := bc.validateProofOfWork(b); err != nil {
+		validationFailures.WithLabelValues("proof_of_work").Inc()
+		return fmt.Errorf("proof-of-work validation failed: %w", err)
+	}
+
 	// TRANSACTION ROOT VERIFICATION
 	if err := bc.validateTransactionRoot(b); err != nil {
 		validationFailures.WithLabelValues("transaction_root").Inc()
@@ -334,6 +340,29 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 
 	_ = ratio // ratio derivation intentionally retained for debugging parity with prior implementation
 	return pow.CalculateDifficultyFromWindow(expected, height, window)
+}
+
+// validateProofOfWork verifies the block nonce/mix digest satisfy the header difficulty.
+func (bc *Blockchain) validateProofOfWork(b *block.Block) error {
+	if bc.pow == nil {
+		return errors.New("PoW engine not initialized")
+	}
+	if b == nil || b.Header == nil {
+		return errors.New("block or header is nil")
+	}
+
+	powHeader, err := powHeaderFromBlockHeader(b.Header)
+	if err != nil {
+		return err
+	}
+	if !bc.pow.Verify(powHeader) {
+		return fmt.Errorf("invalid proof-of-work: nonce=0x%s mixdigest=%s difficulty=%s",
+			b.Header.Nonce.String(),
+			b.Header.MixDigest.Hex(),
+			powHeader.Difficulty.String(),
+		)
+	}
+	return nil
 }
 
 // validateTransactionRoot verifies the transaction Merkle root

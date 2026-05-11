@@ -998,9 +998,13 @@ func runNode(c *cli.Context) error {
 		addr := common.BytesToQuantumAddress(minerWallet.Address().Bytes())
 		if addr == (common.QuantumAddress{}) {
 			logger.Warn("No miner address available!")
-		} else if err := node.NetworkReadyForSubmission(); err != nil {
-			logger.Warnf("Mining not started: %v", err)
-			logger.Warn("Connect to at least one peer and wait for blockchain sync to finish before mining")
+		} else if !node.IsBlockchainFullySynced() {
+			logger.Warnf("Mining not started: blockchain is not fully synced (height=%d target=%d syncing=%v cooldown=%s)",
+				bc.GetChainHeight(),
+				bc.GetSyncTarget(),
+				bc.IsSyncing(),
+				bc.SyncCooldownRemaining().Truncate(time.Second),
+			)
 		} else {
 			logger.Infof("Mining to address: %s", addr.Hex())
 

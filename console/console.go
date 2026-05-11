@@ -2456,9 +2456,14 @@ func (c *Console) handleStartMining() {
 		return
 	}
 
-	if err := c.node.NetworkReadyForSubmission(); err != nil {
-		fmt.Printf("❌ Cannot start mining: %v\n", err)
-		fmt.Println("   Connect to at least one peer and wait for blockchain sync to finish.")
+	if !c.node.IsBlockchainFullySynced() {
+		bc := c.node.blockchain
+		fmt.Printf("❌ Cannot start mining: blockchain is not fully synced (height=%d target=%d syncing=%v cooldown=%s)\n",
+			bc.GetChainHeight(),
+			bc.GetSyncTarget(),
+			bc.IsSyncing(),
+			bc.SyncCooldownRemaining().Truncate(time.Second),
+		)
 		return
 	}
 

@@ -25,27 +25,73 @@ import (
 
 // BlockTemplate represents a mining template
 type BlockTemplate struct {
-	Height         uint64                   `json:"height"`
-	PrevHash       string                   `json:"previousblockhash"`
-	CoinbaseValue  string                   `json:"coinbasevalue"`
-	Target         string                   `json:"target"`
-	CurTime        uint64                   `json:"curtime"`
-	Transactions   []map[string]interface{} `json:"transactions"`
-	Version        uint32                   `json:"version"`
-	Bits           string                   `json:"bits"`
-	Mintime        uint64                   `json:"mintime"`
-	Mutable        []string                 `json:"mutable"`
-	NonceRange     string                   `json:"noncerange"`
-	SigOpLimit     int                      `json:"sigoplimit"`
-	SizeLimit      int                      `json:"sizelimit"`
-	WeightLimit    int                      `json:"weightlimit"`
-	LongPollID     string                   `json:"longpollid"`
-	DefaultWitness string                   `json:"default_witness_commitment"`
-	Capabilities   []string                 `json:"capabilities"`
-	Rules          []string                 `json:"rules"`
-	VBAvailable    map[string]int           `json:"vbavailable"`
-	VBRequired     int                      `json:"vbrequired"`
-	CoinbaseAux    map[string]string        `json:"coinbaseaux"`
+	Height           uint64                   `json:"height"`
+	PrevHash         string                   `json:"previousblockhash"`
+	CoinbaseValue    string                   `json:"coinbasevalue"`
+	Target           string                   `json:"target"`
+	CurTime          uint64                   `json:"curtime"`
+	Transactions     []map[string]interface{} `json:"transactions"`
+	Version          uint32                   `json:"version"`
+	Bits             string                   `json:"bits"`
+	Mintime          uint64                   `json:"mintime"`
+	Mutable          []string                 `json:"mutable"`
+	NonceRange       string                   `json:"noncerange"`
+	SigOpLimit       int                      `json:"sigoplimit"`
+	SizeLimit        int                      `json:"sizelimit"`
+	WeightLimit      int                      `json:"weightlimit"`
+	LongPollID       string                   `json:"longpollid"`
+	DefaultWitness   string                   `json:"default_witness_commitment"`
+	Capabilities     []string                 `json:"capabilities"`
+	Rules            []string                 `json:"rules"`
+	VBAvailable      map[string]int           `json:"vbavailable"`
+	VBRequired       int                      `json:"vbrequired"`
+	CoinbaseAux      map[string]string        `json:"coinbaseaux"`
+	Miner            string                   `json:"miner"`
+	StateRoot        string                   `json:"stateroot"`
+	TransactionsRoot string                   `json:"transactionsroot"`
+	Difficulty       string                   `json:"difficulty"`
+	GasLimit         uint64                   `json:"gaslimit"`
+	GasUsed          uint64                   `json:"gasused"`
+	ExtraData        string                   `json:"extradata"`
+	Nonce            string                   `json:"nonce"`
+	MixDigest        string                   `json:"mixdigest"`
+	MixHash          string                   `json:"mixHash"`
+}
+
+func powHeaderFromBlockHeader(header *block.Header) (*pow.BlockHeader, error) {
+	if header == nil {
+		return nil, errors.New("block header is nil")
+	}
+	if header.Number == nil {
+		return nil, errors.New("block header number is nil")
+	}
+
+	difficulty := big.NewInt(pow.MinDifficulty)
+	if header.Difficulty != nil {
+		difficulty = new(big.Int).Set(header.Difficulty)
+	}
+
+	return &pow.BlockHeader{
+		ParentHash: header.ParentHash,
+		Coinbase:   header.Coinbase,
+		Root:       header.Root,
+		TxHash:     header.TxHash,
+		Number:     header.Number.Uint64(),
+		Difficulty: difficulty,
+		Time:       header.Time,
+		Extra:      append([]byte(nil), header.Extra...),
+		Nonce:      [8]byte(header.Nonce),
+		MixDigest:  header.MixDigest,
+	}, nil
+}
+
+func targetHexForDifficulty(difficulty *big.Int) string {
+	if difficulty == nil || difficulty.Sign() <= 0 {
+		difficulty = big.NewInt(pow.MinDifficulty)
+	}
+	maxTarget := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
+	target := new(big.Int).Div(maxTarget, difficulty)
+	return fmt.Sprintf("%064x", target)
 }
 
 // GenerateBlockTemplate generates a block template for mining
@@ -96,38 +142,76 @@ func (bc *Blockchain) GenerateBlockTemplate(rewardAddr common.QuantumAddress) (*
 	}
 	coinbaseValue := new(big.Int).Add(blockReward, totalFees)
 
-	// Get current PoW target
-	target := bc.pow.GetTarget()
-	targetHex := fmt.Sprintf("%064x", target)
-
-	// Convert difficulty to compact format (Bitcoin-style bits)
-	compact := diffToCompact(bc.Pow().GetDifficulty())
-
 	now := uint64(time.Now().Unix())
 	parentHeight := parent.Header.Number.Uint64()
+	height := parentHeight + 1
+	txRoot := CalcTxRoot(confirmedTxs)
+	extraData := []byte("ANTDChain-PoW")
+	if bc.rotatingKingManager != nil {
+		if rotatingKing := bc.rotatingKingManager.GetCurrentKing(); rotatingKing != (common.QuantumAddress{}) {
+			extraData = []byte(fmt.Sprintf("ANTDChain-PoW|rk=%s", rotatingKing.String()))
+		}
+	}
+
+	header := &block.Header{
+		ParentHash: parent.Hash(),
+		Coinbase:   rewardAddr,
+		Root:       common.Hash{},
+		TxHash:     txRoot,
+		Number:     new(big.Int).SetUint64(height),
+		GasLimit:   parent.Header.GasLimit,
+		GasUsed:    0,
+		Time:       now,
+		Extra:      extraData,
+	}
+	header.Difficulty = bc.calculateExpectedDifficultyFromChainState(&block.Block{Header: header}, parent)
+	if header.GasLimit == 0 {
+		header.GasLimit = 10_000_000
+	}
+	if root, err := bc.ComputeBlockFinalStateRoot(rewardAddr, now, height, extraData, confirmedTxs); err == nil {
+		header.Root = root
+	} else {
+		log.Printf("[template] failed to compute template state root: %v", err)
+	}
+	if err := applyProtocolHeaderFields(header); err != nil {
+		return nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
+	}
+
+	// Convert difficulty to compact format (Bitcoin-style bits)
+	compact := diffToCompact(header.Difficulty)
 
 	return &BlockTemplate{
-		Height:         parentHeight + 1,
-		PrevHash:       parent.Hash().String(),
-		CoinbaseValue:  coinbaseValue.String(),
-		Target:         targetHex,
-		CurTime:        now,
-		Transactions:   transactions,
-		Version:        536870912, // Bitcoin-compatible version
-		Bits:           fmt.Sprintf("%08x", compact),
-		Mintime:        now - 7200, // 2 hours ago
-		Mutable:        []string{"time", "transactions", "prevblock"},
-		NonceRange:     "00000000ffffffff",
-		SigOpLimit:     80000,
-		SizeLimit:      4000000,
-		WeightLimit:    4000000,
-		LongPollID:     parent.Hash().String() + fmt.Sprintf("%d", len(transactions)),
-		DefaultWitness: "",
-		Capabilities:   []string{"proposal"},
-		Rules:          []string{},
-		VBAvailable:    map[string]int{},
-		VBRequired:     0,
-		CoinbaseAux:    map[string]string{},
+		Height:           height,
+		PrevHash:         parent.Hash().String(),
+		CoinbaseValue:    coinbaseValue.String(),
+		Target:           targetHexForDifficulty(header.Difficulty),
+		CurTime:          now,
+		Transactions:     transactions,
+		Version:          536870912, // Bitcoin-compatible version
+		Bits:             fmt.Sprintf("%08x", compact),
+		Mintime:          now - 7200, // 2 hours ago
+		Mutable:          []string{"time", "transactions", "prevblock", "nonce"},
+		NonceRange:       "0000000000000000ffffffffffffffff",
+		SigOpLimit:       80000,
+		SizeLimit:        4000000,
+		WeightLimit:      4000000,
+		LongPollID:       parent.Hash().String() + fmt.Sprintf("%d", len(transactions)),
+		DefaultWitness:   "",
+		Capabilities:     []string{"proposal", "pow", "mixdigest"},
+		Rules:            []string{},
+		VBAvailable:      map[string]int{},
+		VBRequired:       0,
+		CoinbaseAux:      map[string]string{},
+		Miner:            rewardAddr.String(),
+		StateRoot:        header.Root.Hex(),
+		TransactionsRoot: header.TxHash.Hex(),
+		Difficulty:       header.Difficulty.String(),
+		GasLimit:         header.GasLimit,
+		GasUsed:          header.GasUsed,
+		ExtraData:        hex.EncodeToString(header.Extra),
+		Nonce:            "0x" + header.Nonce.String(),
+		MixDigest:        header.MixDigest.Hex(),
+		MixHash:          header.MixDigest.Hex(),
 	}, nil
 }
 

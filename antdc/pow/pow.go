@@ -105,8 +105,15 @@ func (p *PoW) SetDifficulty(diff *big.Int) {
 func (p *PoW) GetTarget() *big.Int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	return targetForDifficulty(p.difficulty)
+}
+
+func targetForDifficulty(difficulty *big.Int) *big.Int {
+	if difficulty == nil || difficulty.Sign() <= 0 {
+		difficulty = big.NewInt(MinDifficulty)
+	}
 	maxTarget := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
-	return new(big.Int).Div(maxTarget, p.difficulty)
+	return new(big.Int).Div(maxTarget, difficulty)
 }
 
 // CalculateExpectedDifficulty predicts the next difficulty without mutating engine state.
@@ -209,7 +216,10 @@ func computeAdjustedDifficulty(current *big.Int, height uint64, blockTimes []uin
 // It modifies the header's Nonce and MixDigest upon success.
 // The context allows cancellation when a new block arrives.
 func (p *PoW) MineBlock(ctx context.Context, header *BlockHeader) error {
-	target := p.GetTarget()
+	if header == nil {
+		return errors.New("block header is nil")
+	}
+	target := targetForDifficulty(header.Difficulty)
 	serialized := header.SerializeForMining()
 	noncePos := len(serialized) - 8
 
@@ -233,9 +243,15 @@ func (p *PoW) MineBlock(ctx context.Context, header *BlockHeader) error {
 
 // Verify checks whether the block's Proof‑of‑Work is valid.
 func (p *PoW) Verify(header *BlockHeader) bool {
-	target := p.GetTarget()
+	if header == nil {
+		return false
+	}
+	target := targetForDifficulty(header.Difficulty)
 	serialized := header.SerializeForMining()
 	hash := common.ComputeHash(serialized)
+	if hash != header.MixDigest {
+		return false
+	}
 	return hashToBig(&hash).Cmp(target) < 0
 }
 
@@ -343,7 +359,11 @@ func (h *BlockHeader) SerializeForMining() []byte {
 	binary.BigEndian.PutUint64(num, h.Number)
 	buf = append(buf, num...)
 
-	diffBytes := h.Difficulty.Bytes()
+	difficulty := h.Difficulty
+	if difficulty == nil || difficulty.Sign() <= 0 {
+		difficulty = big.NewInt(MinDifficulty)
+	}
+	diffBytes := difficulty.Bytes()
 	padDiff := make([]byte, 32)
 	copy(padDiff[32-len(diffBytes):], diffBytes)
 	buf = append(buf, padDiff...)
