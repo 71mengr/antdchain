@@ -26,7 +26,7 @@ func TestCalculateExpectedDifficultyBootstrapHeight(t *testing.T) {
 
 	diff := engine.CalculateExpectedDifficulty(1, 1000, 1012)
 
-	assert.Equal(t, big.NewInt(1_000_000), diff)
+	assert.Equal(t, big.NewInt(BaseDifficulty), diff)
 }
 
 func TestAutoRegisterIfEligible(t *testing.T) {
@@ -34,9 +34,12 @@ func TestAutoRegisterIfEligible(t *testing.T) {
 	addr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
 	require.NoError(t, err)
 
-	engine.AutoRegisterIfEligible(addr, new(big.Int).Set(MinStakeAmount), nil)
+	engine.AutoRegisterIfEligible(addr, big.NewInt(0), nil)
 
-	assert.True(t, engine.IsKing(addr))
+	eligible, err := engine.VerifyMinerEligibility(addr, common.Hash{}, 1, 0)
+	require.NoError(t, err)
+	assert.True(t, eligible)
+	assert.False(t, engine.IsKing(addr))
 }
 
 func TestGetNextMinerIgnoresLocalPenaltyState(t *testing.T) {
@@ -47,8 +50,8 @@ func TestGetNextMinerIgnoresLocalPenaltyState(t *testing.T) {
 	addr2 := common.BytesToQuantumAddress([]byte("validator-2"))
 	parent := common.BytesToHash([]byte("genesis"))
 
-	stake1 := new(big.Int).Set(MinStakeAmount)
-	stake2 := new(big.Int).Mul(MinStakeAmount, big.NewInt(2))
+	stake1 := big.NewInt(0)
+	stake2 := big.NewInt(0)
 
 	engineA.AutoRegisterIfEligible(addr1, stake1, nil)
 	engineA.AutoRegisterIfEligible(addr2, stake2, nil)
@@ -57,7 +60,6 @@ func TestGetNextMinerIgnoresLocalPenaltyState(t *testing.T) {
 
 	// Introduce local-only state drift on engineB.
 	engineB.RecordMissedBlock(addr1)
-	engineB.SetPriorityMiner(addr1, 50)
 
 	minerA, err := engineA.GetNextMiner(parent, 1)
 	require.NoError(t, err)
