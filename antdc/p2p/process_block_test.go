@@ -5,6 +5,7 @@
 package p2p
 
 import (
+	"context"
 	"errors"
 	"io"
 	"math/big"
@@ -17,6 +18,8 @@ import (
 	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/common"
+	libp2p "github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/sirupsen/logrus"
 )
 
@@ -46,6 +49,80 @@ func TestProcessBlockDefersSameHeightForkToChainForkChoice(t *testing.T) {
 
 	if chain.addedBlock != competitor {
 		t.Fatalf("expected same-height fork to be passed to chain.AddBlock")
+	}
+}
+
+func TestTwoNodesFindHeightAndBlock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	parent := testP2PBlock(0, common.Hash{}, common.BytesToQuantumAddress([]byte("genesis-miner")), 1778464375)
+	blk := testP2PBlock(1, parent.Hash(), common.BytesToQuantumAddress([]byte("sync-miner")), 1778464376)
+
+	servingChain := &processBlockForkChoiceChain{
+		latest: blk,
+		blocksByHeight: map[uint64]*block.Block{
+			0: parent,
+			1: blk,
+		},
+		knownHashes: map[common.Hash]bool{
+			parent.Hash(): true,
+			blk.Hash():    true,
+		},
+	}
+	requestingChain := &processBlockForkChoiceChain{
+		latest: parent,
+		blocksByHeight: map[uint64]*block.Block{
+			0: parent,
+		},
+		knownHashes: map[common.Hash]bool{
+			parent.Hash(): true,
+		},
+	}
+
+	servingHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create serving host: %v", err)
+	}
+	defer servingHost.Close()
+
+	requestingHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create requesting host: %v", err)
+	}
+	defer requestingHost.Close()
+
+	servingNode := &Node{host: servingHost, chain: servingChain, logger: logger, ctx: ctx}
+	requestingNode := &Node{host: requestingHost, chain: requestingChain, logger: logger, ctx: ctx}
+	servingHost.SetStreamHandler("/antdchain/sync/1.0.0", servingNode.handleStream)
+
+	servingInfo := peer.AddrInfo{ID: servingHost.ID(), Addrs: servingHost.Addrs()}
+	if err := requestingHost.Connect(ctx, servingInfo); err != nil {
+		t.Fatalf("connect requesting node to serving node: %v", err)
+	}
+
+	height, err := requestingNode.GetPeerHeight(servingHost.ID())
+	if err != nil {
+		t.Fatalf("get peer height: %v", err)
+	}
+	if height != 1 {
+		t.Fatalf("expected peer height 1, got %d", height)
+	}
+
+	found, err := requestingNode.RequestBlockSync(servingHost.ID(), 1)
+	if err != nil {
+		t.Fatalf("request block: %v", err)
+	}
+	if found.Hash() != blk.Hash() {
+		t.Fatalf("expected requested block hash %s, got %s", blk.Hash(), found.Hash())
+	}
+
+	missing, err := requestingNode.RequestBlockSync(servingHost.ID(), 2)
+	if err == nil {
+		t.Fatalf("expected missing block request to fail, got block %v", missing)
 	}
 }
 

@@ -927,10 +927,12 @@ func (n *Node) handleStream(s network.Stream) {
 		_ = rw.Flush()
 		return
 	}
-	if err := n.chain.Checkpoints().ValidateBlock(request, blk.Hash()); err != nil {
-		_ = binary.Write(rw, binary.BigEndian, uint32(0))
-		_ = rw.Flush()
-		return
+	if checkpoints := n.chain.Checkpoints(); checkpoints != nil {
+		if err := checkpoints.ValidateBlock(request, blk.Hash()); err != nil {
+			_ = binary.Write(rw, binary.BigEndian, uint32(0))
+			_ = rw.Flush()
+			return
+		}
 	}
 	data, _ := json.Marshal(blk)
 	_ = binary.Write(rw, binary.BigEndian, uint32(len(data)))
@@ -978,11 +980,13 @@ func (n *Node) RequestBlockSync(peerID peer.ID, blockNumber uint64) (*block.Bloc
 	if err := json.Unmarshal(data, &blk); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal block: %w", err)
 	}
-	if err := n.chain.Checkpoints().ValidateBlock(blockNumber, blk.Hash()); err != nil {
-		if n.banManager != nil {
-			n.banManager.BanPeer(peerID, "CHECKPOINT_SYNC_MISMATCH", err.Error())
+	if checkpoints := n.chain.Checkpoints(); checkpoints != nil {
+		if err := checkpoints.ValidateBlock(blockNumber, blk.Hash()); err != nil {
+			if n.banManager != nil {
+				n.banManager.BanPeer(peerID, "CHECKPOINT_SYNC_MISMATCH", err.Error())
+			}
+			return nil, fmt.Errorf("checkpoint validation failed for block %d: %w", blockNumber, err)
 		}
-		return nil, fmt.Errorf("checkpoint validation failed for block %d: %w", blockNumber, err)
 	}
 	return &blk, nil
 }
