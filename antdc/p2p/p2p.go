@@ -699,14 +699,12 @@ func (n *Node) handleMessages() {
 				go n.forceSync()
 			}
 
-			n.processMu.Lock()
 			if err := n.processBlock(&blk); err != nil {
 				if !strings.Contains(err.Error(), "already known") &&
 					!strings.Contains(err.Error(), "parent") {
 					n.logger.Warnf("Block %d rejected: %v", blk.Header.Number.Uint64(), err)
 				}
 			}
-			n.processMu.Unlock()
 
 		case msgTypeTx:
 			if len(msg.Data) < 2 {
@@ -1127,8 +1125,6 @@ func (n *Node) handleDirectPush(s network.Stream) {
 		}
 
 		go func() {
-			n.processMu.Lock()
-			defer n.processMu.Unlock()
 			if err := n.processBlock(&blk); err != nil && !strings.Contains(err.Error(), "already known") {
 				n.logger.Warnf("Direct block failed: %v", err)
 			}
@@ -2231,9 +2227,13 @@ func (n *Node) processBlock(blk *block.Block) error {
 		if existing.Hash() == hash {
 			return nil // Duplicate
 		}
-		n.logger.Warnf("REJECTING FORK: Different block at height %d (ours: %s, theirs: %s)",
+
+		n.logger.Warnf("Same-height fork at height %d (ours: %s, theirs: %s); deferring to chain fork-choice",
 			num, existing.Hash().String()[:8], hash.String()[:8])
-		return fmt.Errorf("fork block rejected at height %d", num)
+		if err := n.chain.AddBlock(blk); err != nil {
+			return fmt.Errorf("fork block rejected at height %d: %w", num, err)
+		}
+		return nil
 	}
 
 	// BLOCK IS IN CHAIN BUT NOT DIRECT EXTENSION (gap during sync)
