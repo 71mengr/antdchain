@@ -14,11 +14,8 @@ import (
 	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
-	"github.com/antdaza/antdchain/antdc/chain/db"
 	"github.com/antdaza/antdchain/antdc/checkpoints"
 	"github.com/antdaza/antdchain/common"
-	"github.com/cockroachdb/pebble"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // AddBlock adds a new block to the blockchain with proper fork handling
@@ -588,98 +585,43 @@ func (bc *Blockchain) ProcessSyncBatch(blocks []*block.Block) error {
 		return nil
 	}
 
-	// Sort blocks by height
+	// Sort blocks by height so state is executed from parent to child.
 	sort.Slice(blocks, func(i, j int) bool {
+		if blocks[i] == nil || blocks[i].Header == nil {
+			return false
+		}
+		if blocks[j] == nil || blocks[j].Header == nil {
+			return true
+		}
 		return blocks[i].Header.Number.Uint64() < blocks[j].Header.Number.Uint64()
 	})
 
-	// Validate blocks in order
 	for i, blk := range blocks {
+		if blk == nil || blk.Header == nil {
+			return fmt.Errorf("nil block at sync batch index %d", i)
+		}
+
 		blockHeight := blk.Header.Number.Uint64()
-
-		// Skip checkpoint validation during sync
-		// We just want to get the chain data
-
-		// Validate parent exists
 		if blockHeight > 0 {
 			var parentBlock *block.Block
 			if i == 0 {
-				// First block in batch
 				parentBlock = bc.GetBlock(blockHeight - 1)
 			} else {
-				// Previous block in batch
 				parentBlock = blocks[i-1]
 			}
 
-			if parentBlock == nil {
+			if parentBlock == nil || parentBlock.Header == nil {
 				return fmt.Errorf("missing parent for block %d", blockHeight)
 			}
-
-			// Quick validation only during sync
 			if blk.Header.ParentHash != parentBlock.Hash() {
 				return fmt.Errorf("parent hash mismatch for block %d", blockHeight)
 			}
 		}
-	}
 
-	// Use batch for database writes during sync
-	batch := bc.db.DB().NewBatch()
-	defer batch.Close()
-
-	for _, block := range blocks {
-		blockHeight := block.Header.Number.Uint64()
-		blockHash := block.Hash()
-
-		// Write block to batch using RLP encoding
-		blockData, err := rlp.EncodeToBytes(block)
-		if err != nil {
-			return fmt.Errorf("failed to encode block %d: %w", blockHeight, err)
-		}
-
-		batch.Set(db.BlockByHashKey(blockHash), blockData, pebble.Sync)
-
-		// Write header using RLP encoding
-		headerData, err := rlp.EncodeToBytes(block.Header)
-		if err != nil {
-			return fmt.Errorf("failed to encode header for block %d: %w", blockHeight, err)
-		}
-		batch.Set(db.HeaderByNumberKey(blockHeight), headerData, pebble.Sync)
-		batch.Set(db.HeaderByHashKey(blockHash), headerData, pebble.Sync)
-
-		// Update canonical pointer
-		batch.Set(db.CanonicalHashKey(blockHeight), blockHash[:], pebble.Sync)
-	}
-
-	// Commit batch to database
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return fmt.Errorf("failed to commit sync batch: %w", err)
-	}
-
-	// Update head block hash after batch commit
-	if len(blocks) > 0 {
-		latestBlock := blocks[len(blocks)-1]
-		if err := bc.db.WriteHeadBlockHash(latestBlock.Hash()); err != nil {
-			log.Printf("[blockchain] Warning: failed to update head block hash after batch sync: %v", err)
+		if err := bc.AddBlock(blk); err != nil {
+			return fmt.Errorf("failed to apply sync batch block %d: %w", blockHeight, err)
 		}
 	}
-
-	// Update cache and latest pointer
-	bc.stateMu.Lock()
-	for _, block := range blocks {
-		blockHeight := block.Header.Number.Uint64()
-		blockHash := block.Hash()
-
-		bc.cacheMu.Lock()
-		bc.blockByNumberCache.Add(blockHeight, block)
-		bc.blockByHashCache.Add(blockHash, block)
-		bc.cacheMu.Unlock()
-	}
-
-	// Update latest block pointer
-	latestBlock := blocks[len(blocks)-1]
-	bc.latest.Store(latestBlock)
-	bc.lastCanonicalHeight.Store(latestBlock.Header.Number.Uint64())
-	bc.stateMu.Unlock()
 
 	log.Printf("[blockchain] Processed sync batch of %d blocks", len(blocks))
 	return nil
