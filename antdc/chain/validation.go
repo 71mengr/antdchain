@@ -156,19 +156,22 @@ func (bc *Blockchain) validateAndExecuteBlock(b *block.Block, parent *block.Bloc
 		return fmt.Errorf("reward distribution failed: %w", err)
 	}
 
-	// ROTATING KING UPDATES
-	if err := bc.processRotatingKingForBlock(b, distribution); err != nil {
-		rotatingKingUpdateFailures.Inc()
-		log.Printf("[blockchain] Warning: rotating king update failed: %v", err)
-		// Continue block validation even if rotating king update fails
-		// This is a non-critical failure that shouldn't reject the block
-	}
-
 	finalRoot := bc.state.Root()
 	if b.Header.Root != finalRoot {
 		validationFailures.WithLabelValues("state_root_mismatch").Inc()
 		return fmt.Errorf("state root mismatch: header=%s final=%s",
 			b.Header.Root.Hex(), finalRoot.Hex())
+	}
+
+	// ROTATING KING UPDATES
+	// These updates are consensus-adjacent metadata and may persist manager state.
+	// Verify the committed account state before running them so metadata writes
+	// cannot make an otherwise valid block fail its state-root check.
+	if err := bc.processRotatingKingForBlock(b, distribution); err != nil {
+		rotatingKingUpdateFailures.Inc()
+		log.Printf("[blockchain] Warning: rotating king update failed: %v", err)
+		// Continue block validation even if rotating king update fails
+		// This is a non-critical failure that shouldn't reject the block
 	}
 
 	// DIFFICULTY ADJUSTMENT (update engine state)
