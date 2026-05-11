@@ -29,6 +29,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	libp2pnoise "github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	"github.com/multiformats/go-multiaddr"
@@ -139,6 +140,7 @@ const (
 	MaxTxPerPeerPerSecond  = 50
 	MaxTxPerPeerBurst      = 200
 	MaxBlocksPerPeerPerSec = 10
+	DefaultMaxPeers        = 100
 )
 
 type Config struct {
@@ -164,7 +166,7 @@ func DefaultConfig() Config {
 		EnableMDNS:        true,
 		EnableDHT:         true,
 		EnableNATService:  true,
-		MaxPeers:          50,
+		MaxPeers:          DefaultMaxPeers,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
 		LogLevel:          defaultP2PLogLevel(),
@@ -1028,7 +1030,7 @@ func (n *Node) startDHTDiscovery() {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(n.ctx, 15*time.Second)
-			peerChan := n.dht.FindProvidersAsync(ctx, cidRendezvous, 50)
+			peerChan := n.dht.FindProvidersAsync(ctx, cidRendezvous, n.cfg.MaxPeers)
 			cancel()
 
 			count := 0
@@ -1222,7 +1224,18 @@ func (n *Node) currentHeight() uint64 {
 }
 
 func (n *Node) connectToBootstrap(bootstrap []string) int {
-	count := 0
+	if len(bootstrap) == 0 {
+		return 0
+	}
+
+	availableSlots := n.cfg.MaxPeers - len(n.Peers())
+	if availableSlots <= 0 {
+		n.logger.Debugf("Skipping bootstrap connections: max peers reached (%d/%d)", len(n.Peers()), n.cfg.MaxPeers)
+		return 0
+	}
+
+	peerInfos := make([]peer.AddrInfo, 0, len(bootstrap))
+	seen := make(map[peer.ID]struct{}, len(bootstrap))
 	for _, addrStr := range bootstrap {
 		maddr, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
@@ -1234,19 +1247,48 @@ func (n *Node) connectToBootstrap(bootstrap []string) int {
 			n.logger.Warnf("Failed to parse bootstrap address %s: %v", addrStr, err)
 			continue
 		}
-
-		n.host.Peerstore().AddAddrs(ai.ID, ai.Addrs, peerstore.PermanentAddrTTL)
-
-		ctx, cancel := context.WithTimeout(n.ctx, n.cfg.ConnectionTimeout)
-		defer cancel()
-
-		if err := n.host.Connect(ctx, *ai); err != nil {
-			n.logger.Warnf("Failed to connect to bootstrap %s: %v", ai.ID.String()[:8], err)
+		if ai.ID == n.host.ID() {
 			continue
 		}
+		if _, ok := seen[ai.ID]; ok {
+			continue
+		}
+		seen[ai.ID] = struct{}{}
+		n.host.Peerstore().AddAddrs(ai.ID, ai.Addrs, peerstore.PermanentAddrTTL)
+		peerInfos = append(peerInfos, *ai)
+	}
 
-		n.logger.Infof("Connected to bootstrap node %s", ai.ID.String()[:8])
-		go n.syncIfBehind(ai.ID)
+	if len(peerInfos) > availableSlots {
+		peerInfos = peerInfos[:availableSlots]
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan peer.ID, len(peerInfos))
+	for _, ai := range peerInfos {
+		ai := ai
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			ctx, cancel := context.WithTimeout(n.ctx, n.cfg.ConnectionTimeout)
+			defer cancel()
+
+			if err := n.host.Connect(ctx, ai); err != nil {
+				n.logger.Warnf("Failed to connect to bootstrap %s: %v", ai.ID.String()[:8], err)
+				return
+			}
+
+			n.logger.Infof("Connected to bootstrap node %s", ai.ID.String()[:8])
+			go n.syncIfBehind(ai.ID)
+			results <- ai.ID
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	count := 0
+	for range results {
 		count++
 	}
 	return count
@@ -1325,7 +1367,7 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 		EnableMDNS:        true,
 		EnableDHT:         true,
 		EnableNATService:  true,
-		MaxPeers:          50,
+		MaxPeers:          DefaultMaxPeers,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
 		LogLevel:          defaultP2PLogLevel(),
@@ -1337,6 +1379,15 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 // NewNodeWithConfig is the new configurable version
 func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	cfg.BootstrapPeers = ResolveBootstrapPeers(cfg.BootstrapPeers)
+	if cfg.MaxPeers <= 0 {
+		cfg.MaxPeers = DefaultMaxPeers
+	}
+	if cfg.MinPeers < 0 {
+		cfg.MinPeers = 0
+	}
+	if cfg.MinPeers > cfg.MaxPeers {
+		cfg.MinPeers = cfg.MaxPeers
+	}
 
 	var ctx context.Context
 	var cancel context.CancelFunc
@@ -1397,6 +1448,13 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		libp2p.Security(libp2pnoise.ID, libp2pnoise.New),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 	}
+
+	connectionManager, err := connmgr.NewConnManager(cfg.MinPeers, cfg.MaxPeers)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+	opts = append(opts, libp2p.ConnectionManager(connectionManager))
 
 	// NAT options for public reachability when running behind routers/firewalls.
 	if cfg.EnableNATService {

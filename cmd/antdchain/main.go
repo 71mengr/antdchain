@@ -144,7 +144,7 @@ func (ws *WebServer) handleIndex(w http.ResponseWriter, r *http.Request) {
             <div class="card">
                 <h2>Node Status</h2>
                 <p>Version: 2.0.0</p>
-                <p>Consensus: Proof-of-Stake</p>
+                <p>Consensus: Proof-of-Work</p>
                 <p class="status">● Online</p>
                 <p><a href="/status">Detailed Status</a> | <a href="/blocks">Block Explorer</a> | <a href="/health">Health Check</a></p>
             </div>
@@ -357,7 +357,7 @@ func main() {
 
 	app := &cli.App{
 		Name:    "antdchain",
-		Usage:   "ANTDChain — Proof-of-Stake L1 blockchain",
+		Usage:   "ANTDChain — Proof-of-Work L1 blockchain",
 		Version: "v2.0.0 — 2025",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "data-dir", Value: defaultDir, Usage: "Data directory"},
@@ -365,7 +365,8 @@ func main() {
 			&cli.IntFlag{Name: "rpc-port", Value: 8089, Usage: "JSON-RPC port"},
 			&cli.IntFlag{Name: "web-port", Value: 8090, Usage: "Web interface port"},
 			&cli.IntFlag{Name: "p2p-port", Value: 3000, Usage: "P2P port"},
-			&cli.StringFlag{Name: "bootstrap", Value: strings.Join(p2p.DefaultBootstrapPeers, ","), Usage: "Bootstrap nodes"},
+			&cli.StringFlag{Name: "bootstrap", Value: strings.Join(p2p.DefaultBootstrapPeers, ","), Usage: "Comma-separated bootstrap node multiaddrs"},
+			&cli.IntFlag{Name: "max-peers", Value: p2p.DefaultMaxPeers, Usage: "Maximum P2P peer connections"},
 			&cli.BoolFlag{Name: "startmining", Usage: "Start PoS mining"},
 			&cli.BoolFlag{Name: "console", Usage: "Open console"},
 			&cli.BoolFlag{Name: "no-web", Usage: "Disable web interface"},
@@ -640,6 +641,10 @@ func runNode(c *cli.Context) error {
 	webPort := c.Int("web-port")
 	p2pPort := c.Int("p2p-port")
 	bootstrap := c.String("bootstrap")
+	maxPeers := c.Int("max-peers")
+	if maxPeers <= 0 {
+		maxPeers = p2p.DefaultMaxPeers
+	}
 	startMining := c.Bool("startmining")
 	openConsole := c.Bool("console")
 	noWeb := c.Bool("no-web")
@@ -806,7 +811,7 @@ func runNode(c *cli.Context) error {
 		EnableMDNS:        true,
 		EnableDHT:         true,
 		EnableNATService:  true,
-		MaxPeers:          50,
+		MaxPeers:          maxPeers,
 		MinPeers:          1,
 		ConnectionTimeout: 30 * time.Second,
 		LogOutput:         consoleLogOutput,
@@ -891,7 +896,7 @@ func runNode(c *cli.Context) error {
 	// ==============================================
 	// INITIALIZE PoS MINING SYSTEM
 	// ==============================================
-	logger.Info("Initializing Proof-of-Stake mining system...")
+	logger.Info("Initializing Proof-of-work mining system...")
 
 	// Create the PoS engine
 	// Reuse the blockchain PoW engine so mining and validation share the same state.
@@ -947,7 +952,7 @@ func runNode(c *cli.Context) error {
 		logger.Infof("Genesis auto-staking complete: %d validator(s) active", registeredCount)
 	}
 
-	logger.Info("✓ Proof-of-Stake system ready")
+	logger.Info("✓ Proof-of-Work system ready")
 
 	// ==============================================
 	// CREATE CONSOLE NODE
@@ -1172,6 +1177,7 @@ func runNode(c *cli.Context) error {
 	}
 	logger.Infof("   • JSON-RPC API:       http://0.0.0.0:%d/rpc", rpcPort)
 	logger.Infof("   • P2P Port:           %d", p2pPort)
+	logger.Infof("   • Max P2P Peers:      %d", maxPeers)
 	logger.Infof("   • Mining:             %v", startMining)
 	logger.Infof("   • Consensus:          Proof-of-work")
 	if minerWallet != nil {
