@@ -106,27 +106,42 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 			return nil, fmt.Errorf("failed to read head block %s: %w", headHash.String(), err)
 		}
 		if latest == nil {
-			log.Printf("[blockchain] Head block not found, will create genesis")
+			log.Printf("[blockchain] Head block not found, searching for persisted chain tip")
 			headHash = common.Hash{}
 		} else {
 			// Quick continuity check (only parent of tip)
 			if err := verifyTipContinuity(chainDb, latest); err != nil {
 				log.Printf("[blockchain] Tip continuity error: %v", err)
-				// Try to find valid tip
-				repairedTip, err := findValidChainTipFast(chainDb)
-				if err != nil || repairedTip == nil {
-					chainDb.Close()
-					return nil, fmt.Errorf("chain tip invalid and no valid alternative found: %w", err)
-				}
-				latest = repairedTip
-				log.Printf("[blockchain] Using alternative tip: height=%d, hash=%s",
-					latest.Header.Number.Uint64(), latest.Hash().String())
+				latest = nil
+				headHash = common.Hash{}
 			}
 		}
 	}
 
+	if recoveredTip, err := findValidChainTipFast(chainDb); err == nil && recoveredTip != nil {
+		recoveredHeight := recoveredTip.Header.Number.Uint64()
+		loadedHeight := uint64(0)
+		if latest != nil {
+			loadedHeight = latest.Header.Number.Uint64()
+		}
+		if latest == nil || recoveredHeight > loadedHeight {
+			latest = recoveredTip
+			headHash = recoveredTip.Hash()
+			if err := chainDb.WriteCanonicalHash(recoveredHeight, headHash); err != nil {
+				chainDb.Close()
+				return nil, fmt.Errorf("failed to repair canonical height: %w", err)
+			}
+			if err := chainDb.WriteHeadBlockHash(headHash); err != nil {
+				chainDb.Close()
+				return nil, fmt.Errorf("failed to repair head block hash: %w", err)
+			}
+			log.Printf("[blockchain] Recovered chain tip: height=%d, hash=%s",
+				recoveredHeight, headHash.String())
+		}
+	}
+
 	// Check if we need to create genesis
-	if headHash == (common.Hash{}) {
+	if latest == nil {
 		log.Printf("[blockchain] No chain found in database, creating genesis...")
 
 		genesis, err := EnsureGenesisBlock(statePath, miner)
@@ -526,57 +541,130 @@ func verifyTipContinuity(chainDb *db.ChainDB, tip *block.Block) error {
 func findValidChainTipFast(chainDb *db.ChainDB) (*block.Block, error) {
 	log.Printf("[chaindb] Searching for valid chain tip...")
 
-	// Method 1: Try last canonical height from database
-	data, closer, err := chainDb.DB().Get([]byte("lastCanonicalHeight"))
+	// Method 1: Try the durable latest-height key used by accepted blocks.
+	data, closer, err := chainDb.DB().Get(lastCanonicalHeightKey())
 	if err == nil && len(data) == 8 {
-		defer closer.Close()
 		height := binary.BigEndian.Uint64(data)
-		hash, _ := chainDb.GetCanonicalHash(height)
-		if hash != (common.Hash{}) {
-			blk, _ := chainDb.ReadBlockByHash(hash)
-			if blk != nil && verifyTipContinuity(chainDb, blk) == nil {
-				log.Printf("[chaindb] Found tip via last height key: height=%d", height)
-				return blk, nil
-			}
+		closer.Close()
+		if blk := validCanonicalBlockAt(chainDb, height); blk != nil {
+			log.Printf("[chaindb] Found tip via last height key: height=%d", height)
+			return blk, nil
 		}
+	} else if closer != nil {
+		closer.Close()
 	}
 
-	// Method 2: Try genesis
-	genesisHash, _ := chainDb.GetCanonicalHash(0)
-	if genesisHash != (common.Hash{}) {
-		genesis, _ := chainDb.ReadBlockByHash(genesisHash)
-		if genesis != nil {
-			log.Printf("[chaindb] Using genesis as fallback tip")
-			return genesis, nil
-		}
+	// Method 2: Scan canonical height mappings from highest to lowest. This
+	// recovers databases where the head hash was stale but canonical mappings
+	// for later blocks were already flushed.
+	if blk, err := findHighestCanonicalBlock(chainDb); err == nil && blk != nil {
+		log.Printf("[chaindb] Found tip via canonical scan: height=%d", blk.Header.Number.Uint64())
+		return blk, nil
 	}
 
-	// Method 3: Scan for highest block with valid parent (limited scan)
-	maxHeight := uint64(0)
-	var bestHash common.Hash
-
-	// Only scan recent heights for performance
-	for height := uint64(1000); height > 0; height-- {
-		hash, _ := chainDb.GetCanonicalHash(height)
-		if hash != (common.Hash{}) {
-			blk, _ := chainDb.ReadBlockByHash(hash)
-			if blk != nil && verifyTipContinuity(chainDb, blk) == nil {
-				maxHeight = height
-				bestHash = hash
-				break
-			}
+	// Method 3: Scan headers written by older migration paths that persisted
+	// blocks and headers but did not write canonical mappings. Repair the
+	// canonical mappings while walking the contiguous header chain.
+	if blk, err := findHighestHeaderBlock(chainDb); err == nil && blk != nil {
+		if err := repairCanonicalHashesFromHeaders(chainDb, blk.Header.Number.Uint64()); err != nil {
+			log.Printf("[chaindb] Warning: failed to repair canonical hashes: %v", err)
 		}
+		log.Printf("[chaindb] Found tip via header scan: height=%d", blk.Header.Number.Uint64())
+		return blk, nil
 	}
 
-	if bestHash != (common.Hash{}) {
-		blk, _ := chainDb.ReadBlockByHash(bestHash)
-		if blk != nil {
-			log.Printf("[chaindb] Found valid tip at height %d via limited scan", maxHeight)
+	// Method 4: Try genesis as the final fallback. Keep this after the scans so
+	// a stale genesis head cannot hide persisted higher blocks on restart.
+	if genesis := validCanonicalBlockAt(chainDb, 0); genesis != nil {
+		log.Printf("[chaindb] Using genesis as fallback tip")
+		return genesis, nil
+	}
+
+	return nil, errors.New("no valid chain tip found")
+}
+
+func validCanonicalBlockAt(chainDb *db.ChainDB, height uint64) *block.Block {
+	hash, _ := chainDb.GetCanonicalHash(height)
+	if hash == (common.Hash{}) {
+		return nil
+	}
+	blk, _ := chainDb.ReadBlockByHash(hash)
+	if blk != nil && verifyTipContinuity(chainDb, blk) == nil {
+		return blk
+	}
+	return nil
+}
+
+func findHighestCanonicalBlock(chainDb *db.ChainDB) (*block.Block, error) {
+	lower := db.CanonicalHashKey(0)[:1]
+	upper := []byte{lower[0] + 1}
+
+	iter, err := chainDb.DB().NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for ok := iter.Last(); ok; ok = iter.Prev() {
+		key := iter.Key()
+		if len(key) != 9 {
+			continue
+		}
+		height := binary.BigEndian.Uint64(key[1:])
+		if blk := validCanonicalBlockAt(chainDb, height); blk != nil {
 			return blk, nil
 		}
 	}
 
-	return nil, errors.New("no valid chain tip found")
+	return nil, nil
+}
+
+func findHighestHeaderBlock(chainDb *db.ChainDB) (*block.Block, error) {
+	lower := db.HeaderByNumberKey(0)[:1]
+	upper := []byte{lower[0] + 1}
+
+	iter, err := chainDb.DB().NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for ok := iter.Last(); ok; ok = iter.Prev() {
+		key := iter.Key()
+		if len(key) != 9 {
+			continue
+		}
+		height := binary.BigEndian.Uint64(key[1:])
+		header, err := chainDb.ReadHeaderByNumber(height)
+		if err != nil || header == nil {
+			continue
+		}
+		blk, err := chainDb.ReadBlockByHash(header.Hash())
+		if err != nil || blk == nil {
+			continue
+		}
+		if verifyTipContinuity(chainDb, blk) == nil {
+			return blk, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func repairCanonicalHashesFromHeaders(chainDb *db.ChainDB, tipHeight uint64) error {
+	for height := uint64(0); height <= tipHeight; height++ {
+		header, err := chainDb.ReadHeaderByNumber(height)
+		if err != nil {
+			return fmt.Errorf("failed to read header %d: %w", height, err)
+		}
+		if header == nil {
+			return fmt.Errorf("missing header %d", height)
+		}
+		if err := chainDb.WriteCanonicalHash(height, header.Hash()); err != nil {
+			return fmt.Errorf("failed to write canonical hash %d: %w", height, err)
+		}
+	}
+	return nil
 }
 
 // rebuildStateFromHeight rebuilds state from specific height (on-demand, not auto-called)
@@ -780,6 +868,7 @@ func migrateLegacyJSONBlocksToDB(chainDb *db.ChainDB, statePath string) (int, er
 	}
 
 	migrated := 0
+	var highestBlock *block.Block
 	for _, file := range files {
 		if !file.IsDir() && len(file.Name()) > 5 && file.Name()[len(file.Name())-5:] == ".json" {
 			filePath := filepath.Join(blocksDir, file.Name())
@@ -817,6 +906,16 @@ func migrateLegacyJSONBlocksToDB(chainDb *db.ChainDB, statePath string) (int, er
 				continue
 			}
 
+			blockHeight := legacyBlock.Header.Number.Uint64()
+			blockHash := blk.Hash()
+			if err := chainDb.WriteCanonicalHash(blockHeight, blockHash); err != nil {
+				log.Printf("[migration] Warning: Failed to mark block %d canonical: %v", blockHeight, err)
+				continue
+			}
+			if highestBlock == nil || blockHeight > highestBlock.Header.Number.Uint64() {
+				highestBlock = blk
+			}
+
 			migrated++
 
 			// Log progress
@@ -827,6 +926,16 @@ func migrateLegacyJSONBlocksToDB(chainDb *db.ChainDB, statePath string) (int, er
 	}
 
 	if migrated > 0 {
+		if highestBlock != nil {
+			highestHeight := highestBlock.Header.Number.Uint64()
+			highestHash := highestBlock.Hash()
+			if err := chainDb.WriteCanonicalHash(highestHeight, highestHash); err != nil {
+				return migrated, fmt.Errorf("failed to update migrated canonical height: %w", err)
+			}
+			if err := chainDb.WriteHeadBlockHash(highestHash); err != nil {
+				return migrated, fmt.Errorf("failed to update migrated head block hash: %w", err)
+			}
+		}
 		log.Printf("[migration] Completed: Migrated %d legacy blocks to database", migrated)
 	}
 
