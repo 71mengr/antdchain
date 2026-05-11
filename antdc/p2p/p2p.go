@@ -4503,7 +4503,7 @@ func (n *Node) handleKingConfigStream(s network.Stream) {
 		"height": n.currentHeight(),
 	}
 
-	data, err = json.Marshal(response)
+	data, err := json.Marshal(response)
 	if err != nil {
 		return
 	}
