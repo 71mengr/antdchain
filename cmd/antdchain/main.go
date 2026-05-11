@@ -1169,15 +1169,14 @@ func runNode(c *cli.Context) error {
 	logger.Infof("   • JSON-RPC API:       http://0.0.0.0:%d/rpc", rpcPort)
 	logger.Infof("   • P2P Port:           %d", p2pPort)
 	logger.Infof("   • Mining:             %v", startMining)
-	logger.Infof("   • Consensus:          Proof-of-Stake")
+	logger.Infof("   • Consensus:          Proof-of-work")
 	if minerWallet != nil {
 		logger.Infof("   • Miner Address:      %s", minerWallet.Address().String())
 	}
 	genesisStakers := getGenesisStakers()
 	logger.Infof("   • Chain Height:       %d", bc.GetChainHeight())
 	logger.Infof("   • Genesis Stakers:    %d", len(genesisStakers))
-	logger.Infof("   • Min Stake:          1,000,000 ANTD")
-	logger.Infof("   • Block Time:         12 seconds")
+	logger.Infof("   • Block Time:         %d seconds", pow.TargetBlockTimeSeconds)
 
 	// ==============================================
 	// WAIT FOR SHUTDOWN SIGNAL

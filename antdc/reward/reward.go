@@ -17,22 +17,22 @@ import (
 
 // Constants
 var (
-	eligibilityThreshold = new(big.Int).Mul(big.NewInt(100_000), big.NewInt(1e18))   // 100k ANTD for rotating king bonus
-	initialBlockReward   = new(big.Int).Mul(big.NewInt(200), big.NewInt(1e18))       // 200 ANTD initial block reward
-	minStakeForPoS       = new(big.Int).Mul(big.NewInt(1_000_000), big.NewInt(1e18)) // 1M ANTD for auto-staking
-	genesisPremine      = new(big.Int).Mul(big.NewInt(60_000_000), big.NewInt(1e18)) // 60M ANTD premined at genesis
+	eligibilityThreshold = new(big.Int).Mul(big.NewInt(100_000), big.NewInt(1e18))    // 100k ANTD for rotating king bonus
+	initialBlockReward   = new(big.Int).Mul(big.NewInt(200), big.NewInt(1e18))        // 200 ANTD initial block reward
+	minStakeForPoS       = new(big.Int).Mul(big.NewInt(1_000_000), big.NewInt(1e18))  // 1M ANTD for auto-staking
+	genesisPremine       = new(big.Int).Mul(big.NewInt(60_000_000), big.NewInt(1e18)) // 60M ANTD premined at genesis
 
-	// Halving parameters for 12-second blocks
-	secondsPerBlock  = uint64(12)                   // 12-second block time
-	blocksPerMinute  = uint64(60 / secondsPerBlock) // 5 blocks per minute
-	blocksPerHour    = blocksPerMinute * 60         // 300 blocks per hour
-	blocksPerDay     = blocksPerHour * 24           // 7,200 blocks per day
-	blocksPerWeek    = blocksPerDay * 7             // 50,400 blocks per week
-	blocksPerMonth   = blocksPerDay * 30            // 216,000 blocks per month (approx)
-	blocksPerYear    = blocksPerDay * 365           // 2,628,000 blocks per year
-	blocksPerHalving = blocksPerYear * 4            // 10,512,000 blocks per 4 years
-	genesisTimestamp = int64(1763731821)            // Dec 1, 2025, 00:00:00 UTC
-	maxHalvings      = uint64(64)                   // Maximum number of halvings
+	// Halving parameters derived from the network target block time.
+	secondsPerBlock  = uint64(pow.TargetBlockTimeSeconds)
+	blocksPerMinute  = float64(60) / float64(secondsPerBlock)
+	blocksPerHour    = uint64(60*60) / secondsPerBlock
+	blocksPerDay     = uint64(24*60*60) / secondsPerBlock
+	blocksPerWeek    = blocksPerDay * 7
+	blocksPerMonth   = blocksPerDay * 30 // approximate
+	blocksPerYear    = blocksPerDay * 365
+	blocksPerHalving = blocksPerYear * 4
+	genesisTimestamp = int64(1763731821) // Dec 1, 2025, 00:00:00 UTC
+	maxHalvings      = uint64(64)        // Maximum number of halvings
 )
 
 // Calculate current block reward with halving
@@ -99,7 +99,7 @@ func GetNextHalvingInfo(blockNumber uint64) map[string]interface{} {
 	nextHalvingBlock := (currentHalvingPeriod + 1) * blocksPerHalving
 	blocksUntilHalving := nextHalvingBlock - blockNumber
 
-	// Calculate estimated time until next halving (12-second blocks)
+	// Calculate estimated time until next halving from the target block time
 	secondsUntilHalving := blocksUntilHalving * secondsPerBlock
 	daysUntilHalving := secondsUntilHalving / (24 * 60 * 60)
 	yearsUntilHalving := float64(daysUntilHalving) / 365.0

@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	BlockTimeTarget                  = 12 // seconds per block
+	BlockTimeTarget                  = 3 * 60 // seconds per block
 	TargetBlockTimeSeconds           = BlockTimeTarget
 	DifficultyAdjustment             = 100       // blocks between retargets
 	MaxDifficulty                    = 1_000_000 // arbitrary cap
