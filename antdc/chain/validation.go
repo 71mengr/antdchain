@@ -92,6 +92,27 @@ func (bc *Blockchain) validateAndExecuteBlock(b *block.Block, parent *block.Bloc
 		return fmt.Errorf("block signature invalid: %w", err)
 	}
 
+	// STATE ROOT PRECHECK
+	// Compute the post-block root on an isolated state clone before mutating the
+	// canonical state. If a peer sends a block with a bad root, rejecting it here
+	// prevents the failed validation path from poisoning local balances/nonces and
+	// causing later valid blocks to fail with cascading root mismatches.
+	expectedRoot, err := bc.computeBlockFinalStateRoot(headerMinerBlockView{
+		miner:     b.Header.Coinbase,
+		blockTime: b.Header.Time,
+		blockNum:  b.Header.Number.Uint64(),
+		extra:     b.Header.Extra,
+	}, b.Txs)
+	if err != nil {
+		validationFailures.WithLabelValues("state_root_precheck").Inc()
+		return fmt.Errorf("state root precheck failed: %w", err)
+	}
+	if b.Header.Root != expectedRoot {
+		validationFailures.WithLabelValues("state_root_mismatch").Inc()
+		return fmt.Errorf("state root mismatch: header=%s final=%s",
+			b.Header.Root.Hex(), expectedRoot.Hex())
+	}
+
 	// STATE EXECUTION (TRANSACTION PROCESSING)
 	var totalFees *big.Int
 	var gasUsed uint64

@@ -31,6 +31,13 @@ func (m *blockExtraAwareRotatingKingManager) IsEligible(height uint64) bool {
 	return m.forcedKing != (common.QuantumAddress{})
 }
 
+type simulatedRotatingKingManager struct {
+	reward.RotatingKingManager
+}
+
+func (m *simulatedRotatingKingManager) RecordRewardDistribution(king common.QuantumAddress, rewardAmount *big.Int, blockHeight uint64) {
+}
+
 func rotatingKingFromBlockExtra(extra []byte) (common.QuantumAddress, bool) {
 	s := string(extra)
 	for _, part := range strings.Split(s, "|") {

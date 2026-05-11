@@ -451,6 +451,9 @@ func (bc *Blockchain) computeBlockFinalStateRoot(view headerMinerBlockView, txs 
 	}
 
 	rkManager := bc.resolveRotatingKingManagerForBlock(simBlock)
+	if rkManager != nil {
+		rkManager = &simulatedRotatingKingManager{RotatingKingManager: rkManager}
+	}
 	if _, err := bc.rewardDistributor.DistributeRewards(
 		snapshotState,
 		view.miner,
