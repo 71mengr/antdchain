@@ -7,6 +7,7 @@ import "strings"
 var DefaultBootstrapPeers = []string{
 	"/ip4/129.151.164.202/tcp/3000/p2p/12D3KooWPqCk91U2fMTef8rio91hngtC3XoS9p3tVKjJqeMp2PLi",
         "/ip4/192.168.75.210/tcp/3000/p2p/12D3KooWQftuGtxb6btk2mk2R617swaLiYhNVF9W1sotRCGd5UvW",
+        "/ip4/129.151.164.223/tcp/3000/p2p/12D3KooWNJDkF196Qck24Esth4aVA1JiJg5Gg18WFhKaSXbHsDas",
 }
 
 // ResolveBootstrapPeers merges configured peers with default peers,
