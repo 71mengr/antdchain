@@ -397,6 +397,9 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 	header.Version = 1
 	header.GasUsed = 0
 	header.Extra = ba.blockExtraData()
+	if err := chain.ApplyProtocolHeaderFields(header); err != nil {
+		return nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
+	}
 	ba.template.Block.Header = header
 
 	if err := ba.template.Block.UpdateHeader(); err != nil {

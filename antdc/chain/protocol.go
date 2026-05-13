@@ -73,6 +73,11 @@ func protocolMainKingAddress() (common.QuantumAddress, error) {
 }
 
 func applyProtocolHeaderFields(header *block.Header) error {
+	return ApplyProtocolHeaderFields(header)
+}
+
+// ApplyProtocolHeaderFields stamps consensus protocol metadata onto a block header.
+func ApplyProtocolHeaderFields(header *block.Header) error {
 	if header == nil || header.Number == nil {
 		return nil
 	}
