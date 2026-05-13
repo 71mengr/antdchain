@@ -28,6 +28,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	libp2pnoise "github.com/libp2p/go-libp2p/p2p/security/noise"
@@ -156,6 +157,7 @@ const (
 	MaxConfigStreamBytes   = 64 << 10
 	MaxSyncResponseBytes   = 16 << 20
 	MaxConnsPerPeer        = 3
+	DefaultNetworkNamespace = "antdchain"
 )
 
 type Config struct {
@@ -168,6 +170,7 @@ type Config struct {
 	MaxPeers          int           // Maximum number of connected peers
 	MinPeers          int           // Minimum peers before discovery
 	ConnectionTimeout time.Duration // Timeout for connections
+	NetworkNamespace string        // Namespace for protocols, topics, and discovery
 	LogLevel          string        // Log level
 	LogOutput         io.Writer     // Optional writer for logs
 	Context           context.Context
@@ -184,6 +187,7 @@ func DefaultConfig() Config {
 		MaxPeers:          DefaultMaxPeers,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
+		NetworkNamespace: DefaultNetworkNamespace,
 		LogLevel:          defaultP2PLogLevel(),
 	}
 }
@@ -196,6 +200,40 @@ func defaultP2PLogLevel() string {
 	}
 
 	return "error"
+}
+
+
+func normalizeNetworkNamespace(namespace string) string {
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		return DefaultNetworkNamespace
+	}
+
+	namespace = strings.ToLower(namespace)
+	re := regexp.MustCompile(`[^a-z0-9-]+`)
+	namespace = re.ReplaceAllString(namespace, "-")
+	namespace = strings.Trim(namespace, "-")
+	if namespace == "" {
+		return DefaultNetworkNamespace
+	}
+
+	return namespace
+}
+
+func (n *Node) protocolID(name string) protocol.ID {
+	return protocol.ID(fmt.Sprintf("/%s/%s/1.0.0", normalizeNetworkNamespace(n.cfg.NetworkNamespace), name))
+}
+
+func namespacedValue(namespace, suffix string) string {
+	return normalizeNetworkNamespace(namespace) + suffix
+}
+
+func (n *Node) topicName(suffix string) string {
+	return namespacedValue(n.cfg.NetworkNamespace, suffix)
+}
+
+func (n *Node) dhtRendezvous() string {
+	return namespacedValue(n.cfg.NetworkNamespace, "-mainnet-v1")
 }
 
 type orphanBlockEntry struct {
@@ -617,7 +655,7 @@ func (n *Node) directPushMessage(msg []byte, limit int) int {
 		}
 
 		ctx, cancel := context.WithTimeout(n.ctx, 3*time.Second)
-		s, err := n.host.NewStream(ctx, pid, "/antdchain/direct/1.0.0")
+		s, err := n.host.NewStream(ctx, pid, n.protocolID("direct"))
 		cancel()
 		if err != nil {
 			continue
@@ -995,7 +1033,7 @@ func (n *Node) triggerSyncWithPeers() {
 func (n *Node) GetPeerHeight(pid peer.ID) (uint64, error) {
 	n.syncMu.Lock()
 	defer n.syncMu.Unlock()
-	s, err := n.host.NewStream(n.ctx, pid, "/antdchain/sync/1.0.0")
+	s, err := n.host.NewStream(n.ctx, pid, n.protocolID("sync"))
 	if err != nil {
 		return 0, fmt.Errorf("failed to open stream to %s: %w", pid, err)
 	}
@@ -1176,7 +1214,7 @@ func (n *Node) RequestBlockSync(peerID peer.ID, blockNumber uint64) (*block.Bloc
 	ctx, cancel := context.WithTimeout(n.ctx, 10*time.Second) // 10 second timeout
 	defer cancel()
 
-	s, err := n.host.NewStream(ctx, peerID, "/antdchain/sync/1.0.0")
+	s, err := n.host.NewStream(ctx, peerID, n.protocolID("sync"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stream to %s: %w", peerID, err)
 	}
@@ -1226,7 +1264,7 @@ func (n *Node) RequestBlockSync(peerID peer.ID, blockNumber uint64) (*block.Bloc
 
 // startMDNSDiscovery starts mDNS discovery
 func (n *Node) startMDNSDiscovery() error {
-	svc := mdns.NewMdnsService(n.host, "antdchain-mdns", &mdnsNotifee{host: n.host, logger: n.logger, node: n})
+	svc := mdns.NewMdnsService(n.host, n.topicName("-mdns"), &mdnsNotifee{host: n.host, logger: n.logger, node: n})
 	return svc.Start()
 }
 
@@ -1252,7 +1290,7 @@ func (n *Node) startDHTDiscovery() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	rendezvous := "antdchain-mainnet-v1"
+	rendezvous := n.dhtRendezvous()
 	cidRendezvous := cid.NewCidV1(cid.Raw, []byte(rendezvous))
 
 	for {
@@ -1295,7 +1333,7 @@ func (n *Node) announceOnDHT() {
 	ctx, cancel := context.WithTimeout(n.ctx, 30*time.Second)
 	defer cancel()
 
-	rendezvous := "antdchain-mainnet-v1"
+	rendezvous := n.dhtRendezvous()
 	cidRendezvous := cid.NewCidV1(cid.Raw, []byte(rendezvous))
 	n.logger.Infof("Announcing on DHT: %s", rendezvous)
 
@@ -1631,6 +1669,7 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 		MaxPeers:          DefaultMaxPeers,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
+		NetworkNamespace: DefaultNetworkNamespace,
 		LogLevel:          defaultP2PLogLevel(),
 	}
 
@@ -1640,6 +1679,7 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 // NewNodeWithConfig is the new configurable version
 func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	cfg.BootstrapPeers = ResolveBootstrapPeers(cfg.BootstrapPeers)
+	cfg.NetworkNamespace = normalizeNetworkNamespace(cfg.NetworkNamespace)
 	if cfg.MaxPeers <= 0 {
 		cfg.MaxPeers = DefaultMaxPeers
 	}
@@ -1758,7 +1798,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	if cfg.EnableDHT {
 		dht, err = kd.New(ctx, h,
 			kd.Mode(kd.ModeAutoServer),
-			kd.ProtocolPrefix("/antdchain/kad/1.0.0"),
+			kd.ProtocolPrefix(protocol.ID(fmt.Sprintf("/%s/kad/1.0.0", cfg.NetworkNamespace))),
 			kd.BootstrapPeers(parseBootstrapPeers(cfg.BootstrapPeers, logger)...),
 		)
 		if err != nil {
@@ -1816,9 +1856,9 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	h.Network().Notify(&network.NotifyBundle{ConnectedF: node.handlePeerConnected})
 
 	// Set stream handlers
-	h.SetStreamHandler("/antdchain/sync/1.0.0", node.handleStream)
-	h.SetStreamHandler("/antdchain/direct/1.0.0", node.handleDirectPush)
-	h.SetStreamHandler("/antdchain/king-config/1.0.0", node.handleKingConfigStream)
+	h.SetStreamHandler(node.protocolID("sync"), node.handleStream)
+	h.SetStreamHandler(node.protocolID("direct"), node.handleDirectPush)
+	h.SetStreamHandler(node.protocolID("king-config"), node.handleKingConfigStream)
 
 	// Initialize GossipSub
 	ps, err := pubsub.NewGossipSub(ctx, h)
@@ -1829,7 +1869,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	}
 
 	// Join topics.
-	dbSyncTopic, err := ps.Join("antdchain-db-sync-v1")
+	dbSyncTopic, err := ps.Join(node.topicName("-db-sync-v1"))
 	if err != nil {
 		h.Close()
 		cancel()
@@ -1841,7 +1881,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		cancel()
 		return nil, fmt.Errorf("failed to subscribe to db sync topic: %w", err)
 	}
-	topic, err := ps.Join("antdchain-blocks-txs-v1")
+	topic, err := ps.Join(node.topicName("-blocks-txs-v1"))
 	if err != nil {
 		h.Close()
 		cancel()
@@ -1853,7 +1893,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		cancel()
 		return nil, fmt.Errorf("failed to subscribe to main pubsub topic: %w", err)
 	}
-	kingTopic, err := ps.Join("antdchain-king-rotations-v1")
+	kingTopic, err := ps.Join(node.topicName("-king-rotations-v1"))
 	if err != nil {
 		h.Close()
 		cancel()
@@ -1935,7 +1975,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 
 	// Initialize checkpoints system
 	checkpointsPath := filepath.Join(cfg.DataDir, "checkpoints.json")
-	genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+	genesisHash := common.HexToHash("0x860ed1a1e026261b452d2bbe908edf8297b02107912331c4c91e2f757ae9e164")
 	cp, err := checkpoints.NewCheckpoints(cfg.DataDir, checkpointsPath, genesisHash)
 	if err != nil {
 		node.logger.Warnf("Failed to initialize checkpoints: %v", err)
@@ -2056,7 +2096,7 @@ func (n *Node) quickFindDivergence(peerID peer.ID, maxHeight uint64) (uint64, er
 
 // Fetches a block from a peer with a timeout context
 func (n *Node) requestBlockWithContext(ctx context.Context, peerID peer.ID, blockNumber uint64) (*block.Block, error) {
-	s, err := n.host.NewStream(ctx, peerID, "/antdchain/sync/1.0.0")
+	s, err := n.host.NewStream(ctx, peerID, n.protocolID("sync"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stream to %s: %w", peerID, err)
 	}
@@ -4259,7 +4299,7 @@ func (n *Node) sendKingConfigDirect(peerID peer.ID, config rotatingking.Rotating
 	ctx, cancel := context.WithTimeout(n.ctx, 5*time.Second)
 	defer cancel()
 
-	s, err := n.host.NewStream(ctx, peerID, "/antdchain/king-config/1.0.0")
+	s, err := n.host.NewStream(ctx, peerID, n.protocolID("king-config"))
 	if err != nil {
 		n.logger.Debugf("Failed to open config stream to %s: %v", peerID.String()[:8], err)
 		return

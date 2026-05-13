@@ -182,7 +182,7 @@ var CheckpointCommands = &cli.Command{
 				}
 
 				// Get actual genesis hash
-				genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+				genesisHash := common.HexToHash("0x860ed1a1e026261b452d2bbe908edf8297b02107912331c4c91e2f757ae9e164")
 
 				err := checkpoints.CreateSampleConfig(configPath, genesisHash)
 				if err != nil {
@@ -207,7 +207,7 @@ var CheckpointCommands = &cli.Command{
 				checkpointDir := filepath.Join(dataDir, "checkpoints")
 				configPath := filepath.Join(dataDir, "checkpoints.json")
 
-				genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+				genesisHash := common.HexToHash("0x860ed1a1e026261b452d2bbe908edf8297b02107912331c4c91e2f757ae9e164")
 
 				cp, err := checkpoints.NewCheckpoints(checkpointDir, configPath, genesisHash)
 				if err != nil {
@@ -255,7 +255,7 @@ var CheckpointCommands = &cli.Command{
 				checkpointDir := filepath.Join(dataDir, "checkpoints")
 				configPath := filepath.Join(dataDir, "checkpoints.json")
 
-				genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+				genesisHash := common.HexToHash("0x860ed1a1e026261b452d2bbe908edf8297b02107912331c4c91e2f757ae9e164")
 
 				cp, err := checkpoints.NewCheckpoints(checkpointDir, configPath, genesisHash)
 				if err != nil {
@@ -352,6 +352,34 @@ func getDefaultDataDir() string {
 	}
 }
 
+func sanitizeNodeName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "node"
+	}
+
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+
+	cleaned := strings.Trim(b.String(), "-")
+	if cleaned == "" {
+		return "node"
+	}
+
+	return cleaned
+}
+
 func main() {
 	defaultDir := getDefaultDataDir()
 
@@ -361,12 +389,17 @@ func main() {
 		Version: "v2.0.0 — 2025",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "data-dir", Value: defaultDir, Usage: "Data directory"},
+			&cli.StringFlag{Name: "node-name", Usage: "Optional local node name; uses a separate data directory under the default data directory when --data-dir is not set"},
 			&cli.StringFlag{Name: "keystore-dir", Usage: "Optional keystore directory (use different paths when running multiple nodes on one machine)"},
 			&cli.IntFlag{Name: "rpc-port", Value: 8089, Usage: "JSON-RPC port"},
 			&cli.IntFlag{Name: "web-port", Value: 8090, Usage: "Web interface port"},
 			&cli.IntFlag{Name: "p2p-port", Value: 3000, Usage: "P2P port"},
 			&cli.StringFlag{Name: "bootstrap", Value: strings.Join(p2p.DefaultBootstrapPeers, ","), Usage: "Comma-separated bootstrap node multiaddrs"},
+			&cli.StringFlag{Name: "network-namespace", Value: p2p.DefaultNetworkNamespace, Usage: "P2P namespace for protocols, pubsub topics, mDNS, and DHT discovery; use different values to isolate nodes on the same server"},
 			&cli.IntFlag{Name: "max-peers", Value: p2p.DefaultMaxPeers, Usage: "Maximum P2P peer connections"},
+			&cli.BoolFlag{Name: "mdns", Value: true, Usage: "Enable local mDNS peer discovery"},
+			&cli.BoolFlag{Name: "dht", Value: true, Usage: "Enable DHT peer discovery"},
+			&cli.BoolFlag{Name: "nat", Value: true, Usage: "Enable NAT traversal services"},
 			&cli.BoolFlag{Name: "startmining", Usage: "Start PoS mining"},
 			&cli.BoolFlag{Name: "console", Usage: "Open console"},
 			&cli.BoolFlag{Name: "no-web", Usage: "Disable web interface"},
@@ -636,6 +669,10 @@ func acquireDataDirLock(dataDir string) (*os.File, error) {
 func runNode(c *cli.Context) error {
 	// Parse flags
 	dataDir := c.String("data-dir")
+	nodeName := strings.TrimSpace(c.String("node-name"))
+	if nodeName != "" && !c.IsSet("data-dir") {
+		dataDir = filepath.Join(dataDir, sanitizeNodeName(nodeName))
+	}
 	keystoreDir := c.String("keystore-dir")
 	rpcPort := c.Int("rpc-port")
 	webPort := c.Int("web-port")
@@ -651,6 +688,10 @@ func runNode(c *cli.Context) error {
 	rpcUser := c.String("rpcuser")
 	rpcPass := c.String("rpcpassword")
 	authDisabled := c.Bool("rpcauthdisabled")
+	networkNamespace := c.String("network-namespace")
+	if networkNamespace == "" && nodeName != "" {
+		networkNamespace = p2p.DefaultNetworkNamespace
+	}
 
 	// Setup logger
 	logger := logrus.New()
@@ -825,12 +866,13 @@ func runNode(c *cli.Context) error {
 		DataDir:           dataDir,
 		Port:              p2pPort,
 		BootstrapPeers:    bootNodes,
-		EnableMDNS:        true,
-		EnableDHT:         true,
-		EnableNATService:  true,
+		EnableMDNS:        c.Bool("mdns"),
+		EnableDHT:         c.Bool("dht"),
+		EnableNATService:  c.Bool("nat"),
 		MaxPeers:          maxPeers,
 		MinPeers:          1,
 		ConnectionTimeout: 30 * time.Second,
+		NetworkNamespace:  networkNamespace,
 		LogOutput:         consoleLogOutput,
 	}
 
@@ -1198,6 +1240,7 @@ func runNode(c *cli.Context) error {
 	logger.Infof("   • JSON-RPC API:       http://0.0.0.0:%d/rpc", rpcPort)
 	logger.Infof("   • P2P Port:           %d", p2pPort)
 	logger.Infof("   • Max P2P Peers:      %d", maxPeers)
+	logger.Infof("   • P2P Namespace:      %s", networkNamespace)
 	logger.Infof("   • Mining:             %v", startMining)
 	logger.Infof("   • Consensus:          Proof-of-work")
 	if minerWallet != nil {

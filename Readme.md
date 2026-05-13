@@ -124,6 +124,21 @@ antdchain-data/
 - **JSON-RPC**: 8089 (default)
 - **Web Interface**: 8090 (default)
 
+#### Running Multiple Nodes on One Server
+Each node must use its own data directory and ports so its chain data, wallet files, locks, RPC server, web server, and P2P listener stay separate. Use `--node-name` to automatically place a node under a separate default data directory, and choose unique ports for every local node.
+
+```bash
+./antdchain --node-name node-a --p2p-port 3000 --rpc-port 8089 --web-port 8090
+./antdchain --node-name node-b --p2p-port 3001 --rpc-port 8091 --web-port 8092
+```
+
+If two local nodes should not discover, gossip, or sync with each other, give them different `--network-namespace` values. The namespace is applied to libp2p protocols, pubsub topics, mDNS, and DHT discovery.
+
+```bash
+./antdchain --node-name mainnet --network-namespace antdchain --p2p-port 3000 --rpc-port 8089 --web-port 8090
+./antdchain --node-name lab --network-namespace antdchain-lab --p2p-port 3001 --rpc-port 8091 --web-port 8092
+```
+
 ## 🔌 **API Reference**
 
 ### JSON-RPC Endpoints
