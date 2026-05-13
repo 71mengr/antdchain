@@ -685,6 +685,23 @@ func runNode(c *cli.Context) error {
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	shutdownCh := make(chan struct{})
+	var shutdownOnce sync.Once
+	requestShutdown := func() {
+		shutdownOnce.Do(func() {
+			close(shutdownCh)
+		})
+	}
+
+	go func() {
+		select {
+		case <-sigChan:
+			requestShutdown()
+		case <-shutdownCh:
+		}
+	}()
 
 	// ==============================================
 	// INITIALIZE WALLET MANAGER
@@ -887,7 +904,7 @@ func runNode(c *cli.Context) error {
 			case <-ticker.C:
 				logger.Debug("🔄 Running periodic configuration check")
 				triggerConfigurationSync(bc, p2pNode, logger)
-			case <-sigChan:
+			case <-shutdownCh:
 				return
 			}
 		}
@@ -1164,7 +1181,10 @@ func runNode(c *cli.Context) error {
 	// ==============================================
 	if openConsole {
 		logger.Info("Starting console...")
-		go console.NewConsole(node).Start()
+		go func() {
+			console.NewConsole(node).Start()
+			requestShutdown()
+		}()
 	}
 
 	// ==============================================
@@ -1191,7 +1211,7 @@ func runNode(c *cli.Context) error {
 	// ==============================================
 	// WAIT FOR SHUTDOWN SIGNAL
 	// ==============================================
-	<-sigChan
+	<-shutdownCh
 	logger.Info("Shutting down ANTDChain node...")
 
 	// Allow in-flight sync to finish so the last received block is persisted.

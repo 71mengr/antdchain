@@ -101,7 +101,7 @@ go build -o antdchain ./cmd/antdchain
 ./antdchain --startmining --miner-address YOUR_ADDRESS
 
 # Connect to testnet
-./antdchain --bootstrap "/ip4/1.2.3.4/tcp/3000/p2p/12D3KooW..."
+./antdchain --bootstrap "/ip6/2001:db8::100/tcp/3000/p2p/12D3KooW..."
 
 # Open console interface
 ./antdchain --console
@@ -269,7 +269,7 @@ curl -X POST http://localhost:8089/rpc \
 ### P2P Configuration
 ```bash
 # Custom bootstrap nodes
-./antdchain --bootstrap "/ip4/1.2.3.4/tcp/3000/p2p/...,/ip4/5.6.7.8/tcp/3000/p2p/..."
+./antdchain --bootstrap "/ip6/2001:db8::100/tcp/3000/p2p/...,/ip6/2001:db8::101/tcp/3000/p2p/..."
 
 # Disable discovery
 ./antdchain --no-mdns --no-dht
