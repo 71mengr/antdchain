@@ -137,6 +137,16 @@ type rateLimiter struct {
 	resetTime time.Time
 }
 
+type minedBlockCandidate struct {
+	Block      *block.Block
+	Source     string
+	ReceivedAt time.Time
+}
+
+type minedBlockProposalValidator interface {
+	ValidateMinedBlockProposal(*block.Block) error
+}
+
 const (
 	MaxTxPerPeerPerSecond  = 50
 	MaxTxPerPeerBurst      = 200
@@ -254,6 +264,9 @@ type Node struct {
 
 	lastKingList   []common.QuantumAddress
 	lastKingListMu sync.RWMutex
+
+	minedBlockMu         sync.RWMutex
+	minedBlockCandidates map[uint64]map[common.Hash]minedBlockCandidate
 }
 
 func (n *Node) IsSynced() bool {
@@ -446,6 +459,68 @@ func (n *Node) GossipSubReady() error {
 	return nil
 }
 
+func (n *Node) rememberMinedBlockCandidate(b *block.Block, source string) {
+	if n == nil || b == nil || b.Header == nil || b.Header.Number == nil {
+		return
+	}
+
+	height := b.Header.Number.Uint64()
+	hash := b.Hash()
+	if source == "" {
+		source = "unknown"
+	}
+
+	n.minedBlockMu.Lock()
+	if n.minedBlockCandidates == nil {
+		n.minedBlockCandidates = make(map[uint64]map[common.Hash]minedBlockCandidate)
+	}
+	if n.minedBlockCandidates[height] == nil {
+		n.minedBlockCandidates[height] = make(map[common.Hash]minedBlockCandidate)
+	}
+
+	_, existed := n.minedBlockCandidates[height][hash]
+	n.minedBlockCandidates[height][hash] = minedBlockCandidate{
+		Block:      b,
+		Source:     source,
+		ReceivedAt: time.Now(),
+	}
+	candidateCount := len(n.minedBlockCandidates[height])
+	for candidateHeight, candidates := range n.minedBlockCandidates {
+		if candidateHeight+128 < height {
+			delete(n.minedBlockCandidates, candidateHeight)
+			continue
+		}
+		if len(candidates) == 0 {
+			delete(n.minedBlockCandidates, candidateHeight)
+		}
+	}
+	n.minedBlockMu.Unlock()
+
+	if !existed && candidateCount > 1 && n.logger != nil {
+		n.logger.Infof("P2P is tracking %d mined block candidates at height %d; fork-choice will compare protocol-valid blocks before acceptance", candidateCount, height)
+	}
+}
+
+func (n *Node) minedBlockCandidateCount(height uint64) int {
+	if n == nil {
+		return 0
+	}
+	n.minedBlockMu.RLock()
+	defer n.minedBlockMu.RUnlock()
+	return len(n.minedBlockCandidates[height])
+}
+
+func (n *Node) validateMinedBlockProposal(b *block.Block) error {
+	validator, ok := n.chain.(minedBlockProposalValidator)
+	if !ok || validator == nil {
+		return nil
+	}
+	if err := validator.ValidateMinedBlockProposal(b); err != nil {
+		return fmt.Errorf("mined block proposal failed network protocol validation: %w", err)
+	}
+	return nil
+}
+
 // BroadcastBlock — secure, efficient, anti-spam block propagation
 func (n *Node) BroadcastBlock(b *block.Block) error {
 	if n == nil {
@@ -466,6 +541,8 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 	if b.Hash() != b.Header.Hash() { // ← Fixed: use .Hash() not .ComputeHash()
 		return errors.New("invalid block: hash mismatch")
 	}
+
+	n.rememberMinedBlockCandidate(b, "local-miner")
 
 	// Validate checkpoint
 	checkpointManager := n.chain.Checkpoints()
@@ -833,6 +910,8 @@ func (n *Node) handleMessages() {
 
 			n.logger.Infof("Received block %d | hash=%s | from=%s",
 				blk.Header.Number.Uint64(), blk.Hash().String()[:12], msg.GetFrom().String()[:8])
+
+			n.rememberMinedBlockCandidate(&blk, msg.GetFrom().String())
 
 			// If we're at height 0 and receive any block, force sync
 			currentHeight := n.currentHeight()
@@ -1308,6 +1387,8 @@ func (n *Node) handleDirectPush(s network.Stream) {
 			return
 		}
 
+		n.rememberMinedBlockCandidate(&blk, remotePeer.String())
+
 		go func() {
 			if err := n.processBlock(&blk); err != nil && !strings.Contains(err.Error(), "already known") {
 				n.logger.Warnf("Direct block failed: %v", err)
@@ -1710,6 +1791,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		cfg:             cfg,
 		knownTxs:        make(map[common.Hash]time.Time),
 		knownTxsLimit:   10000,
+		minedBlockCandidates: make(map[uint64]map[common.Hash]minedBlockCandidate),
 		orphanPool:      make(map[common.Hash]orphanBlockEntry),
 		dbSyncRequests:  make(map[string]*DBSyncRequest),
 		dbSyncResponses: make(map[string]*DBSyncResponse),
@@ -2569,6 +2651,9 @@ func (n *Node) processBlock(blk *block.Block) error {
 
 	// FAST PATH: Direct chain extension
 	if blk.Header.ParentHash == expectedParent && num == currentHeight+1 {
+		if err := n.validateMinedBlockProposal(blk); err != nil {
+			return err
+		}
 		if err := n.validateProtocolCandidate(blk, tip); err != nil {
 			n.rememberOrphanBlock(blk, fmt.Sprintf("protocol rejection: %v", err))
 			return err
@@ -2644,8 +2729,11 @@ func (n *Node) processBlock(blk *block.Block) error {
 			return nil
 		}
 
-		n.logger.Warnf("Same-height fork at height %d selected remote protocol block %s over local %s",
-			num, hash.String()[:8], existing.Hash().String()[:8])
+		n.logger.Warnf("Same-height fork at height %d (ours: %s, theirs: %s); comparing %d known mined candidates before chain fork-choice",
+			num, existing.Hash().String()[:8], hash.String()[:8], n.minedBlockCandidateCount(num))
+		if err := n.validateMinedBlockProposal(blk); err != nil {
+			return err
+		}
 		if err := n.chain.AddBlock(blk); err != nil {
 			n.rememberOrphanBlock(blk, fmt.Sprintf("selected fork rejected: %v", err))
 			return fmt.Errorf("fork block rejected at height %d: %w", num, err)
@@ -2670,6 +2758,9 @@ func (n *Node) processBlock(blk *block.Block) error {
 		}
 
 		// Valid sync block
+		if err := n.validateMinedBlockProposal(blk); err != nil {
+			return err
+		}
 		err := n.chain.AddBlock(blk)
 		if err != nil {
 			if strings.Contains(err.Error(), "already") ||

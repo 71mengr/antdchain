@@ -56,6 +56,43 @@ func TestProcessBlockDefersSameHeightForkToChainForkChoice(t *testing.T) {
 	}
 }
 
+func TestProcessBlockRejectsProtocolInvalidSameHeightFork(t *testing.T) {
+	parentHash := common.BytesToHash([]byte("parent"))
+	existing := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("existing-miner")), 1778464378)
+	competitor := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("fork-miner")), 1778464376)
+	protocolErr := errors.New("bad protocol fields")
+
+	chain := &processBlockForkChoiceChain{
+		latest: existing,
+		blocksByHeight: map[uint64]*block.Block{
+			6: existing,
+		},
+		knownHashes: map[common.Hash]bool{
+			parentHash:      true,
+			existing.Hash(): true,
+		},
+		proposalErr: protocolErr,
+	}
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	node := &Node{chain: chain, logger: logger}
+	err := node.processBlock(competitor)
+	if err == nil {
+		t.Fatalf("expected processBlock to reject protocol-invalid fork")
+	}
+	if !errors.Is(err, protocolErr) {
+		t.Fatalf("expected protocol error %v, got %v", protocolErr, err)
+	}
+	if chain.addedBlock != nil {
+		t.Fatalf("protocol-invalid same-height fork was passed to AddBlock")
+	}
+	if chain.proposalChecks != 1 {
+		t.Fatalf("expected one proposal validation, got %d", chain.proposalChecks)
+	}
+}
+
 func TestProcessBlockOrphansProtocolLoser(t *testing.T) {
 	parent := testP2PBlock(7, common.BytesToHash([]byte("grandparent-2")), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464375)
 	parentHash := parent.Hash()
@@ -264,7 +301,9 @@ type processBlockForkChoiceChain struct {
 	blocksByHeight map[uint64]*block.Block
 	knownHashes    map[common.Hash]bool
 	addedBlock     *block.Block
-	addErr         error
+        addErr         error
+	proposalErr    error
+	proposalChecks int
 	syncing        bool
 	syncTarget     uint64
 }
@@ -280,6 +319,13 @@ func (c *processBlockForkChoiceChain) GetParentHash(uint64) (common.Hash, error)
 }
 func (c *processBlockForkChoiceChain) Pow() *pow.PoW                         { return nil }
 func (c *processBlockForkChoiceChain) Checkpoints() *checkpoints.Checkpoints { return nil }
+func (c *processBlockForkChoiceChain) ValidateMinedBlockProposal(*block.Block) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.proposalChecks++
+	return c.proposalErr
+}
+
 func (c *processBlockForkChoiceChain) AddBlock(b *block.Block) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

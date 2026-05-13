@@ -436,3 +436,48 @@ func (bc *Blockchain) validateBlockForSync(b *block.Block, parent *block.Block) 
 
 	return nil
 }
+
+// ValidateMinedBlockProposal performs non-mutating consensus checks for a mined
+// block received by P2P before it is offered to AddBlock. State-transition checks
+// still happen in AddBlock; this preflight keeps invalid mining output from
+// entering fork-choice comparison.
+func (bc *Blockchain) ValidateMinedBlockProposal(b *block.Block) error {
+	if b == nil || b.Header == nil {
+		return errors.New("nil block or header")
+	}
+	if b.Header.Number == nil {
+		return errors.New("nil block number")
+	}
+	if b.Header.Number.Sign() == 0 {
+		return validateProtocolHeader(b.Header)
+	}
+
+	parent, err := bc.GetBlockByHash(b.Header.ParentHash)
+	if err != nil || parent == nil {
+		return fmt.Errorf("parent block not found for mined proposal: %s", b.Header.ParentHash.Hex())
+	}
+
+	if err := validateProtocolHeader(b.Header); err != nil {
+		return fmt.Errorf("protocol header validation failed: %w", err)
+	}
+	if err := bc.validateBasicBlockIntegrity(b, parent); err != nil {
+		return err
+	}
+	if err := bc.validateBlockHash(b); err != nil {
+		return err
+	}
+	if err := bc.validateDifficulty(b, parent); err != nil {
+		return err
+	}
+	if err := bc.validateProofOfWork(b); err != nil {
+		return err
+	}
+	if err := bc.validateTransactionRoot(b); err != nil {
+		return err
+	}
+	if err := bc.validateBlockSignature(b); err != nil {
+		return err
+	}
+
+	return nil
+}
