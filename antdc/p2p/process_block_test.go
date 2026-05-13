@@ -9,7 +9,9 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
 	"github.com/antdaza/antdchain/antdc/checkpoints"
@@ -126,6 +128,80 @@ func TestTwoNodesFindHeightAndBlock(t *testing.T) {
 	}
 }
 
+func TestTriggerImmediateSyncDoesNotPreMarkSyncing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	genesis := testP2PBlock(0, common.Hash{}, common.BytesToQuantumAddress([]byte("genesis-miner")), 1778464375)
+	parent := testP2PBlock(1, genesis.Hash(), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464376)
+	blk := testP2PBlock(2, parent.Hash(), common.BytesToQuantumAddress([]byte("sync-miner")), 1778464377)
+
+	servingChain := &processBlockForkChoiceChain{
+		latest: blk,
+		blocksByHeight: map[uint64]*block.Block{
+			0: genesis,
+			1: parent,
+			2: blk,
+		},
+		knownHashes: map[common.Hash]bool{
+			genesis.Hash(): true,
+			parent.Hash():  true,
+			blk.Hash():     true,
+		},
+	}
+	requestingChain := &processBlockForkChoiceChain{
+		latest: parent,
+		blocksByHeight: map[uint64]*block.Block{
+			0: genesis,
+			1: parent,
+		},
+		knownHashes: map[common.Hash]bool{
+			genesis.Hash(): true,
+			parent.Hash():  true,
+		},
+	}
+
+	servingHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create serving host: %v", err)
+	}
+	defer servingHost.Close()
+
+	requestingHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create requesting host: %v", err)
+	}
+	defer requestingHost.Close()
+
+	servingNode := &Node{host: servingHost, chain: servingChain, logger: logger, ctx: ctx}
+	requestingNode := &Node{host: requestingHost, chain: requestingChain, logger: logger, ctx: ctx}
+	servingHost.SetStreamHandler("/antdchain/sync/1.0.0", servingNode.handleStream)
+
+	servingInfo := peer.AddrInfo{ID: servingHost.ID(), Addrs: servingHost.Addrs()}
+	if err := requestingHost.Connect(ctx, servingInfo); err != nil {
+		t.Fatalf("connect requesting node to serving node: %v", err)
+	}
+
+	requestingNode.triggerImmediateSync()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if latest := requestingChain.Latest(); latest != nil && latest.Header.Number.Uint64() == 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	latest := requestingChain.Latest()
+	if latest == nil {
+		t.Fatal("expected requesting chain to sync block 2, latest block is nil")
+	}
+	t.Fatalf("expected requesting chain to sync block 2, got height %d", latest.Header.Number.Uint64())
+}
+
 func testP2PBlock(height uint64, parentHash common.Hash, miner common.QuantumAddress, timestamp uint64) *block.Block {
 	return &block.Block{
 		Header: &block.Header{
@@ -141,21 +217,30 @@ func testP2PBlock(height uint64, parentHash common.Hash, miner common.QuantumAdd
 }
 
 type processBlockForkChoiceChain struct {
+	mu             sync.Mutex
 	latest         *block.Block
 	blocksByHeight map[uint64]*block.Block
 	knownHashes    map[common.Hash]bool
 	addedBlock     *block.Block
 	addErr         error
+	syncing        bool
+	syncTarget     uint64
 }
 
-func (c *processBlockForkChoiceChain) Latest() *block.Block { return c.latest }
-func (c *processBlockForkChoiceChain) State() *state.State  { return nil }
+func (c *processBlockForkChoiceChain) Latest() *block.Block {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.latest
+}
+func (c *processBlockForkChoiceChain) State() *state.State { return nil }
 func (c *processBlockForkChoiceChain) GetParentHash(uint64) (common.Hash, error) {
 	return common.Hash{}, nil
 }
 func (c *processBlockForkChoiceChain) Pow() *pow.PoW                         { return nil }
 func (c *processBlockForkChoiceChain) Checkpoints() *checkpoints.Checkpoints { return nil }
 func (c *processBlockForkChoiceChain) AddBlock(b *block.Block) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.addedBlock = b
 	if c.addErr != nil {
 		return c.addErr
@@ -163,22 +248,50 @@ func (c *processBlockForkChoiceChain) AddBlock(b *block.Block) error {
 	if b == nil {
 		return errors.New("nil block")
 	}
+	if c.blocksByHeight == nil {
+		c.blocksByHeight = make(map[uint64]*block.Block)
+	}
+	if c.knownHashes == nil {
+		c.knownHashes = make(map[common.Hash]bool)
+	}
+	c.latest = b
+	c.blocksByHeight[b.Header.Number.Uint64()] = b
+	c.knownHashes[b.Hash()] = true
 	return nil
 }
 func (c *processBlockForkChoiceChain) GetBlock(height uint64) *block.Block {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.blocksByHeight[height]
 }
 func (c *processBlockForkChoiceChain) GetBlockByHash(common.Hash) (*block.Block, error) {
 	return nil, nil
 }
-func (c *processBlockForkChoiceChain) TruncateTo(uint64) error                            { return nil }
-func (c *processBlockForkChoiceChain) TxPool() TxPool                                     { return nil }
-func (c *processBlockForkChoiceChain) ValidateTransaction(*tx.Tx) error                   { return nil }
-func (c *processBlockForkChoiceChain) IsSyncing() bool                                    { return false }
-func (c *processBlockForkChoiceChain) StartSync(uint64)                                   {}
-func (c *processBlockForkChoiceChain) StopSync()                                          {}
+func (c *processBlockForkChoiceChain) TruncateTo(uint64) error          { return nil }
+func (c *processBlockForkChoiceChain) TxPool() TxPool                   { return nil }
+func (c *processBlockForkChoiceChain) ValidateTransaction(*tx.Tx) error { return nil }
+func (c *processBlockForkChoiceChain) IsSyncing() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.syncing
+}
+func (c *processBlockForkChoiceChain) StartSync(target uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.syncing = true
+	c.syncTarget = target
+}
+func (c *processBlockForkChoiceChain) StopSync() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.syncing = false
+}
 func (c *processBlockForkChoiceChain) GetRotatingKingManager() reward.RotatingKingManager { return nil }
 func (c *processBlockForkChoiceChain) ShouldSyncDatabase() bool                           { return false }
 func (c *processBlockForkChoiceChain) MarkDatabaseSynced(uint64)                          {}
 func (c *processBlockForkChoiceChain) GetDatabaseSyncHeight() uint64                      { return 0 }
-func (c *processBlockForkChoiceChain) HasBlock(hash common.Hash) bool                     { return c.knownHashes[hash] }
+func (c *processBlockForkChoiceChain) HasBlock(hash common.Hash) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.knownHashes[hash]
+}

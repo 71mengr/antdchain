@@ -2076,7 +2076,6 @@ func (n *Node) PeriodicSyncCheck() {
 				if peerHeight > localHeight+5 { // If behind by more than 5 blocks
 					n.logger.Warnf("Periodic check: behind peer %s by %d blocks → triggering sync",
 						pid.String()[:12], peerHeight-localHeight)
-					n.chain.StartSync(peerHeight)
 					go n.syncIfBehind(pid)
 					break // Only trigger with one peer
 				}
@@ -2104,7 +2103,6 @@ func (n *Node) triggerSync() {
 			if height > localHeight {
 				n.logger.Infof("Triggering sync with peer %s (height: %d)",
 					pid.String()[:12], height)
-				n.chain.StartSync(height)
 				n.syncIfBehind(pid)
 			}
 		}(pid)
@@ -2748,7 +2746,6 @@ func (n *Node) triggerImmediateSync() {
 		if height > localHeight {
 			n.logger.Warnf("IMMEDIATE SYNC TRIGGERED: Peer %s height=%d, our height=%d",
 				pid.String()[:12], height, localHeight)
-			n.chain.StartSync(height)
 			go n.syncIfBehind(pid)
 			break // Sync with first peer that's ahead
 		}
