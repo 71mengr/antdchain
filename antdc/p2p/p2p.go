@@ -1916,6 +1916,17 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 
 	logger.Info("GossipSub initialized (main + king rotation topics)")
 
+	// Initialize checkpoints system before the node begins syncing.
+	checkpointsPath := filepath.Join(cfg.DataDir, "checkpoints.json")
+	genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+	cp, err := checkpoints.NewCheckpoints(cfg.DataDir, checkpointsPath, genesisHash)
+	if err != nil {
+		node.Stop()
+		return nil, fmt.Errorf("failed to initialize checkpoints: %w", err)
+	}
+	node.IntegrateBanManagerWithCheckpoints(cp)
+	node.logger.Infof("Checkpoints initialized with genesis hash: %s", genesisHash.String())
+
 	// Connect to bootstrap peers
 	if len(cfg.BootstrapPeers) > 0 {
 		connected := node.connectToBootstrap(cfg.BootstrapPeers)
@@ -1972,17 +1983,6 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		node.logger.Info("🚀 Broadcasting initial king configuration")
 		node.BroadcastCurrentKingConfig()
 	})
-
-	// Initialize checkpoints system
-	checkpointsPath := filepath.Join(cfg.DataDir, "checkpoints.json")
-	genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
-	cp, err := checkpoints.NewCheckpoints(cfg.DataDir, checkpointsPath, genesisHash)
-	if err != nil {
-		node.logger.Warnf("Failed to initialize checkpoints: %v", err)
-	} else {
-		node.IntegrateBanManagerWithCheckpoints(cp)
-		node.logger.Infof("Checkpoints initialized with genesis hash: %s", genesisHash.String())
-	}
 
 	return node, nil
 }
