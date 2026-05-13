@@ -199,17 +199,20 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 	}
 
 	// Fast fork pre-check for same-height competitors.
-	// Avoid mutating state for losing fork candidates.
+	// Same-height forks are only allowed to replace the local tip when they add
+	// strictly more chain work. Equal-work alternatives are retained by their
+	// sender until one side extends; this prevents nodes from reorganizing just
+	// because a peer gossiped a lower hash at the same height.
 	if blockHeight == currentHeight && currentTip != nil && currentTipHash != blockHash {
 		log.Printf("[blockchain] Fork detected at height %d: current=%s, new=%s",
 			blockHeight, currentTipHash.Hex()[:12], blockHash.Hex()[:12])
 
 		if !isBetterBlockCandidate(b, currentTip) {
-			log.Printf("[blockchain] Fork rejected: current block is better or equal by fork-choice")
+			log.Printf("[blockchain] Fork rejected: current block has equal or greater work")
 			return fmt.Errorf("fork block rejected by fork-choice rule")
 		}
 
-		log.Printf("[blockchain] Reorg candidate accepted by fork-choice rule")
+		log.Printf("[blockchain] Reorg candidate accepted: replacement has greater work")
 		return bc.reorganizeAtHeight(blockHeight, b)
 	}
 
@@ -957,13 +960,8 @@ func isBetterBlockCandidate(newBlock, currentBlock *block.Block) bool {
 		currentDifficulty.Set(currentBlock.Header.Difficulty)
 	}
 
-	if newDifficulty.Cmp(currentDifficulty) > 0 {
-		return true
-	}
-	if newDifficulty.Cmp(currentDifficulty) < 0 {
-		return false
-	}
-
-	// Deterministic tie-breaker: lower block hash wins.
-	return newBlock.Hash().Hex() < currentBlock.Hash().Hex()
+	// A same-height fork is only better if it contributes strictly more work.
+	// Equal-work forks are not resolved with a hash tie-breaker because that
+	// causes unnecessary reorgs across healthy peers that mined competing tips.
+	return newDifficulty.Cmp(currentDifficulty) > 0
 }

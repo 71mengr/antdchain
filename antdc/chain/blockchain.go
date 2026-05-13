@@ -874,7 +874,7 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 		return 0, fmt.Errorf("reorg depth exceeds limit")
 	}
 
-	// Apply fork choice rule (heaviest chain + deterministic hash tie-breaker)
+	// Apply fork choice rule (strictly heaviest chain)
 	if reorgRequired {
 		// Calculate total difficulty/weight for both chains
 		oldChainWeight, err := bc.calculateChainWeight(currentTip, ancestorHeight)
@@ -887,20 +887,13 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 			return 0, fmt.Errorf("failed to calculate new chain weight: %w", err)
 		}
 
-		// Fork choice: prefer heavier chain, tie-break by lower tip hash
-		if newChainWeight.Cmp(oldChainWeight) < 0 {
-			log.Printf("[blockchain] InsertChain: new chain weight %s < old chain weight %s",
+		// Fork choice: prefer only a strictly heavier chain. Equal-work forks are
+		// left untouched until one branch gains more work, avoiding avoidable
+		// network-induced reorganizations between peers at the same height.
+		if newChainWeight.Cmp(oldChainWeight) <= 0 {
+			log.Printf("[blockchain] InsertChain: new chain weight %s <= old chain weight %s",
 				newChainWeight.String(), oldChainWeight.String())
-			return 0, fmt.Errorf("new chain has lower weight")
-		}
-
-		if newChainWeight.Cmp(oldChainWeight) == 0 {
-			// Equal weight, use deterministic hash tie-breaker
-			if lastBlock.Hash().Hex() >= currentTip.Hash().Hex() {
-				log.Printf("[blockchain] InsertChain: equal weight, but new tip hash is not better (%s >= %s)",
-					lastBlock.Hash().Hex()[:12], currentTip.Hash().Hex()[:12])
-				return 0, fmt.Errorf("new chain not better by hash tie-breaker")
-			}
+			return 0, fmt.Errorf("new chain is not heavier")
 		}
 
 		// Perform reorg
@@ -981,9 +974,9 @@ func (bc *Blockchain) calculateChainWeight(tip *block.Block, fromHeight uint64) 
 	current := tip
 
 	for current != nil && current.Header.Number.Uint64() > fromHeight {
-		// For PoS, weight could be based on validator stakes
-		// For now, use block number as weight (simpler)
-		weight.Add(weight, current.Header.Number)
+		if current.Header.Difficulty != nil {
+			weight.Add(weight, current.Header.Difficulty)
+		}
 
 		// Move to parent
 		if current.Header.Number.Uint64() == fromHeight+1 {
