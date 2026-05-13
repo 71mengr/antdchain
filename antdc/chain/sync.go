@@ -5,6 +5,7 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -199,20 +200,19 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 	}
 
 	// Fast fork pre-check for same-height competitors.
-	// Same-height forks are only allowed to replace the local tip when they add
-	// strictly more chain work. Equal-work alternatives are retained by their
-	// sender until one side extends; this prevents nodes from reorganizing just
-	// because a peer gossiped a lower hash at the same height.
+	// Same-height forks replace the local tip only when they win the deterministic
+	// fork-choice rule, which first compares work and then applies protocol
+	// tie-breakers so peers converge on one canonical block.
 	if blockHeight == currentHeight && currentTip != nil && currentTipHash != blockHash {
 		log.Printf("[blockchain] Fork detected at height %d: current=%s, new=%s",
 			blockHeight, currentTipHash.Hex()[:12], blockHash.Hex()[:12])
 
 		if !isBetterBlockCandidate(b, currentTip) {
-			log.Printf("[blockchain] Fork rejected: current block has equal or greater work")
+			log.Printf("[blockchain] Fork rejected: current block wins fork-choice rule")
 			return fmt.Errorf("fork block rejected by fork-choice rule")
 		}
 
-		log.Printf("[blockchain] Reorg candidate accepted: replacement has greater work")
+		log.Printf("[blockchain] Reorg candidate accepted: replacement wins fork-choice rule")
 		return bc.reorganizeAtHeight(blockHeight, b)
 	}
 
@@ -967,8 +967,18 @@ func isBetterBlockCandidate(newBlock, currentBlock *block.Block) bool {
 		currentDifficulty.Set(currentBlock.Header.Difficulty)
 	}
 
-	// A same-height fork is only better if it contributes strictly more work.
-	// Equal-work forks are not resolved with a hash tie-breaker because that
-	// causes unnecessary reorgs across healthy peers that mined competing tips.
-	return newDifficulty.Cmp(currentDifficulty) > 0
+	if cmp := newDifficulty.Cmp(currentDifficulty); cmp != 0 {
+		return cmp > 0
+	}
+
+	// Equal-work same-height forks still need a deterministic winner so peers
+	// converge when multiple miners produce competing blocks at the same height.
+	// Match the P2P protocol selection: earlier timestamp wins, then lower hash.
+	if newBlock.Header.Time != currentBlock.Header.Time {
+		return newBlock.Header.Time < currentBlock.Header.Time
+	}
+
+	newHash := newBlock.Hash()
+	currentHash := currentBlock.Hash()
+	return bytes.Compare(newHash[:], currentHash[:]) < 0
 }

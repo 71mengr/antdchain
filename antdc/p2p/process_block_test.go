@@ -57,7 +57,8 @@ func TestProcessBlockDefersSameHeightForkToChainForkChoice(t *testing.T) {
 }
 
 func TestProcessBlockRejectsProtocolInvalidSameHeightFork(t *testing.T) {
-	parentHash := common.BytesToHash([]byte("parent"))
+	parent := testP2PBlock(5, common.BytesToHash([]byte("grandparent-invalid")), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464375)
+	parentHash := parent.Hash()
 	existing := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("existing-miner")), 1778464378)
 	competitor := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("fork-miner")), 1778464376)
 	protocolErr := errors.New("bad protocol fields")
@@ -65,6 +66,7 @@ func TestProcessBlockRejectsProtocolInvalidSameHeightFork(t *testing.T) {
 	chain := &processBlockForkChoiceChain{
 		latest: existing,
 		blocksByHeight: map[uint64]*block.Block{
+			5: parent,
 			6: existing,
 		},
 		knownHashes: map[common.Hash]bool{
@@ -106,7 +108,7 @@ func TestProcessBlockOrphansProtocolLoser(t *testing.T) {
 			8: winner,
 		},
 		knownHashes: map[common.Hash]bool{
-			parentHash:     true,
+			parentHash:    true,
 			winner.Hash(): true,
 		},
 	}
@@ -301,7 +303,7 @@ type processBlockForkChoiceChain struct {
 	blocksByHeight map[uint64]*block.Block
 	knownHashes    map[common.Hash]bool
 	addedBlock     *block.Block
-        addErr         error
+	addErr         error
 	proposalErr    error
 	proposalChecks int
 	syncing        bool
