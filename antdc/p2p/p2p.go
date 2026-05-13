@@ -195,6 +195,7 @@ type Node struct {
 	chain     Chain
 	logger    *logrus.Logger
 	mu        sync.RWMutex
+	publishMu sync.RWMutex
 	processMu sync.Mutex
 	syncMu    sync.Mutex
 	// orphanPool     map[common.Hash]*block.Block
@@ -413,10 +414,44 @@ func (n *Node) handlePeerConnected(_ network.Network, conn network.Conn) {
 	}
 }
 
+func (n *Node) GossipSubReady() error {
+	if n == nil {
+		return errors.New("p2p node not initialized")
+	}
+	if n.ctx == nil {
+		return errors.New("p2p context not initialized")
+	}
+	select {
+	case <-n.ctx.Done():
+		return fmt.Errorf("p2p context canceled: %w", n.ctx.Err())
+	default:
+	}
+	if n.pubsub == nil {
+		return errors.New("p2p pubsub not initialized")
+	}
+	if n.topic == nil {
+		return errors.New("p2p topic not initialized")
+	}
+	if n.sub == nil {
+		return errors.New("p2p subscription not initialized")
+	}
+	return nil
+}
+
 // BroadcastBlock — secure, efficient, anti-spam block propagation
 func (n *Node) BroadcastBlock(b *block.Block) error {
+	if n == nil {
+		return errors.New("p2p node not initialized")
+	}
 	if b == nil || b.Header == nil {
 		return errors.New("nil block or header")
+	}
+
+	n.publishMu.RLock()
+	defer n.publishMu.RUnlock()
+
+	if err := n.GossipSubReady(); err != nil {
+		return err
 	}
 
 	// Validate block hash
@@ -444,7 +479,9 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 	msg[0] = msgTypeBlock
 	copy(msg[1:], data)
 
-	if err := n.topic.Publish(n.ctx, msg); err != nil {
+	publishCtx, cancel := context.WithTimeout(n.ctx, 5*time.Second)
+	defer cancel()
+	if err := n.topic.Publish(publishCtx, msg); err != nil {
 		return fmt.Errorf("gossipsub publish failed: %w", err)
 	}
 
@@ -1700,13 +1737,43 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		return nil, fmt.Errorf("failed to create pubsub: %w", err)
 	}
 
-	// Join topics (abbreviated – same as original)
-	dbSyncTopic, _ := ps.Join("antdchain-db-sync-v1")
-	dbSub, _ := dbSyncTopic.Subscribe()
-	topic, _ := ps.Join("antdchain-blocks-txs-v1")
-	sub, _ := topic.Subscribe()
-	kingTopic, _ := ps.Join("antdchain-king-rotations-v1")
-	kingSub, _ := kingTopic.Subscribe()
+	// Join topics.
+	dbSyncTopic, err := ps.Join("antdchain-db-sync-v1")
+	if err != nil {
+		h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to join db sync topic: %w", err)
+	}
+	dbSub, err := dbSyncTopic.Subscribe()
+	if err != nil {
+		h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to subscribe to db sync topic: %w", err)
+	}
+	topic, err := ps.Join("antdchain-blocks-txs-v1")
+	if err != nil {
+		h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to join main pubsub topic: %w", err)
+	}
+	sub, err := topic.Subscribe()
+	if err != nil {
+		h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to subscribe to main pubsub topic: %w", err)
+	}
+	kingTopic, err := ps.Join("antdchain-king-rotations-v1")
+	if err != nil {
+		h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to join king rotation topic: %w", err)
+	}
+	kingSub, err := kingTopic.Subscribe()
+	if err != nil {
+		h.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to subscribe to king rotation topic: %w", err)
+	}
 
 	node.pubsub = ps
 	node.topic = topic
@@ -1792,6 +1859,8 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 func (n *Node) Stop() {
 	n.logger.Info("Stopping P2P node...")
 
+	n.publishMu.Lock()
+	defer n.publishMu.Unlock()
 	// Cancel context first
 	if n.cancel != nil {
 		n.cancel()

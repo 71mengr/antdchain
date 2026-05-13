@@ -584,6 +584,11 @@ func broadcastMinedBlock(p *p2p.Node, blk *block.Block, ms *PosMiningState) {
 
 	for i := 0; i < maxRetries; i++ {
 		if err := p.BroadcastBlock(blk); err != nil {
+			if errors.Is(err, context.Canceled) {
+				miningBroadcastFailures.Inc()
+				log.Printf("[miner] Broadcast skipped for block %d: P2P context canceled", blk.Header.Number.Uint64())
+				return
+			}
 			log.Printf("[miner] Broadcast attempt %d/%d failed: %v", i+1, maxRetries, err)
 			time.Sleep(backoff)
 			backoff *= 2
@@ -629,7 +634,11 @@ func txToMempoolEntry(t *tx.Tx, height uint64, entryTime uint64) *TxEntry {
 }
 
 func networkReadyForMining(bc *chain.Blockchain, p2pNode *p2p.Node) error {
-	_ = p2pNode
+	if p2pNode != nil {
+		if err := p2pNode.GossipSubReady(); err != nil {
+			return fmt.Errorf("p2p gossipsub is not ready: %w", err)
+		}
+	}
 	if bc == nil || !bc.IsFullySynced() {
 		if bc == nil {
 			return errors.New("blockchain is not initialized")
