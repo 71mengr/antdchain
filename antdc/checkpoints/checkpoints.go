@@ -198,6 +198,7 @@ type Checkpoints struct {
         sortedHeights []uint64
         logger        *logrus.Logger
         dataDir       string
+        configPath    string
         config        *LocalConfig
         keyPair       *SSHKeyPair
         trustedKeys   map[string]ssh.PublicKey
@@ -228,6 +229,7 @@ func NewCheckpoints(dataDir string, configPath string, actualGenesisHash common.
         checkpoints: make(map[uint64]*Checkpoint),
         logger:      logger,
         dataDir:     dataDir,
+        configPath:  configPath,
         trustedKeys: make(map[string]ssh.PublicKey),
         httpClient: &http.Client{
             Timeout: 30 * time.Second,
@@ -245,6 +247,10 @@ func NewCheckpoints(dataDir string, configPath string, actualGenesisHash common.
     // Ensure data directory exists
     if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
         return nil, fmt.Errorf("failed to create checkpoint data directory: %w", err)
+    }
+
+    if cp.configPath == "" {
+        cp.configPath = filepath.Join(dataDir, "checkpoints.json")
     }
 
     // Load or create configuration
@@ -431,7 +437,7 @@ func (c *Checkpoints) loadConfig(configPath string) error {
             }
             
             // Try to load the newly created config
-            data, err = os.ReadFile(defaultPath)
+            data, err = os.ReadFile(c.configPath)
             if err != nil {
                 return fmt.Errorf("failed to read newly created config: %w", err)
             }
@@ -459,7 +465,13 @@ func (c *Checkpoints) loadConfig(configPath string) error {
 }
 
 func (c *Checkpoints) saveConfig() error {
-        configPath := filepath.Join(c.dataDir, "checkpoints.json")
+        configPath := c.configPath
+        if configPath == "" {
+                configPath = filepath.Join(c.dataDir, "checkpoints.json")
+        }
+        if err := os.MkdirAll(filepath.Dir(configPath), os.ModePerm); err != nil {
+                return err
+        }
         data, err := json.MarshalIndent(c.config, "", "  ")
         if err != nil {
                 return err

@@ -744,6 +744,13 @@ func (bc *Blockchain) createCheckpointFromBlock(b *block.Block) error {
 	}
 
 	blockHash := b.Hash()
+	if canonicalBlock := bc.GetBlock(blockHeight); canonicalBlock != nil {
+		canonicalHash := canonicalBlock.Hash()
+		if canonicalHash != blockHash {
+			return fmt.Errorf("checkpoint block at height %d is not canonical: canonical %s, candidate %s",
+				blockHeight, canonicalHash.Hex(), blockHash.Hex())
+		}
+	}
 
 	// Get rotating king address
 	var rotatingKing common.QuantumAddress
