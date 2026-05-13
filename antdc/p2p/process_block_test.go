@@ -135,6 +135,46 @@ func TestProcessBlockOrphansProtocolLoser(t *testing.T) {
 	}
 }
 
+func TestProcessBlockDefersMissingParentOrphanAndTriggersSync(t *testing.T) {
+	genesis := testP2PBlock(0, common.Hash{}, common.BytesToQuantumAddress([]byte("genesis-miner")), 1778464375)
+	parent := testP2PBlock(1, genesis.Hash(), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464376)
+	missingParent := testP2PBlock(2, parent.Hash(), common.BytesToQuantumAddress([]byte("missing-parent-miner")), 1778464377)
+	orphan := testP2PBlock(3, missingParent.Hash(), common.BytesToQuantumAddress([]byte("orphan-miner")), 1778464378)
+
+	chain := &processBlockForkChoiceChain{
+		latest: parent,
+		blocksByHeight: map[uint64]*block.Block{
+			0: genesis,
+			1: parent,
+		},
+		knownHashes: map[common.Hash]bool{
+			genesis.Hash(): true,
+			parent.Hash():  true,
+		},
+	}
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	node := &Node{chain: chain, logger: logger}
+	if err := node.processBlock(orphan); err != nil {
+		t.Fatalf("expected missing-parent orphan to be deferred without error, got %v", err)
+	}
+	if chain.addedBlock != nil {
+		t.Fatalf("missing-parent orphan was passed to AddBlock")
+	}
+	if !chain.syncing || chain.syncTarget != 3 {
+		t.Fatalf("expected sync target 3 after orphan ahead of tip, syncing=%v target=%d", chain.syncing, chain.syncTarget)
+	}
+
+	node.orphanPoolMu.Lock()
+	_, ok := node.orphanPool[orphan.Hash()]
+	node.orphanPoolMu.Unlock()
+	if !ok {
+		t.Fatalf("expected missing-parent block to be stored in orphan pool")
+	}
+}
+
 func TestTwoNodesFindHeightAndBlock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

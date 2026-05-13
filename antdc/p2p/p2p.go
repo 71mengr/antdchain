@@ -2728,7 +2728,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 	// ORPHAN CHECK: Parent not in chain
 	if !n.chain.HasBlock(blk.Header.ParentHash) {
 		n.rememberOrphanBlock(blk, "missing parent")
-		n.logger.Warnf("REJECTING ORPHAN: Block %d (parent %s not found)",
+		n.logger.Warnf("Deferred orphan block %d (parent %s not found)",
 			num, blk.Header.ParentHash.String()[:8])
 
 		// Any announced block ahead of our tip means the network has at least
@@ -2741,8 +2741,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 			n.triggerSyncToHeight(num)
 		}
 
-		return fmt.Errorf("orphan block rejected: parent %s not found",
-			blk.Header.ParentHash.String()[:8])
+		return nil
 	}
 
 	// BLOCK EXISTS AT SAME HEIGHT (fork)
