@@ -27,7 +27,16 @@ func TestCalculateExpectedDifficultyBootstrapHeight(t *testing.T) {
 
 	diff := engine.CalculateExpectedDifficulty(1, 1000, 1012)
 
-	assert.Equal(t, big.NewInt(BaseDifficulty), diff)
+	assert.Equal(t, big.NewInt(BaseDifficulty*4), diff)
+}
+
+func TestCalculateDifficultyMovesEveryBlock(t *testing.T) {
+	difficulty := big.NewInt(BaseDifficulty)
+	for height := uint64(1); height <= 5; height++ {
+		next := CalculateDifficultyFromWindow(difficulty, height, []uint64{BlockTimeTarget})
+		assert.NotEqual(t, 0, next.Cmp(difficulty), "height %d reused the parent difficulty", height)
+		difficulty = next
+	}
 }
 
 func TestAutoRegisterIfEligible(t *testing.T) {

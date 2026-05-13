@@ -134,6 +134,8 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
 }
 
 // CalculateDifficultyFromWindow calculates difficulty from a base difficulty and observed block times.
+// The returned difficulty moves for every non-genesis height so consecutive
+// blocks never inherit an unchanged constant difficulty.
 func CalculateDifficultyFromWindow(baseDifficulty *big.Int, height uint64, blockTimes []uint64) *big.Int {
 	if baseDifficulty == nil {
 		baseDifficulty = big.NewInt(MinDifficulty)
@@ -179,8 +181,8 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 }
 
 func computeAdjustedDifficulty(current *big.Int, height uint64, blockTimes []uint64) *big.Int {
-	if height%uint64(DifficultyAdjustment) != 0 || len(blockTimes) == 0 {
-		return current
+	if height == 0 || len(blockTimes) == 0 {
+		return clampDifficulty(current)
 	}
 
 	var total uint64
@@ -200,14 +202,39 @@ func computeAdjustedDifficulty(current *big.Int, height uint64, blockTimes []uin
 	newDiff.Mul(newDiff, big.NewFloat(ratio))
 	adjusted := new(big.Int)
 	newDiff.Int(adjusted)
+	adjusted = clampDifficulty(adjusted)
 
-	if adjusted.Cmp(big.NewInt(MinDifficulty)) < 0 {
+	return ensureDifficultyMoves(current, adjusted, avg)
+}
+
+func clampDifficulty(diff *big.Int) *big.Int {
+	if diff == nil || diff.Cmp(big.NewInt(MinDifficulty)) < 0 {
 		return big.NewInt(MinDifficulty)
 	}
-	if adjusted.Cmp(big.NewInt(MaxDifficulty)) > 0 {
+	if diff.Cmp(big.NewInt(MaxDifficulty)) > 0 {
 		return big.NewInt(MaxDifficulty)
 	}
-	return adjusted
+	return new(big.Int).Set(diff)
+}
+
+func ensureDifficultyMoves(current, adjusted *big.Int, avg float64) *big.Int {
+	current = clampDifficulty(current)
+	adjusted = clampDifficulty(adjusted)
+	if adjusted.Cmp(current) != 0 {
+		return adjusted
+	}
+
+	if avg <= float64(BlockTimeTarget) || current.Cmp(big.NewInt(MinDifficulty)) <= 0 {
+		if current.Cmp(big.NewInt(MaxDifficulty)) < 0 {
+			return new(big.Int).Add(current, big.NewInt(1))
+		}
+		return new(big.Int).Sub(current, big.NewInt(1))
+	}
+
+	if current.Cmp(big.NewInt(MinDifficulty)) > 0 {
+		return new(big.Int).Sub(current, big.NewInt(1))
+	}
+	return new(big.Int).Add(current, big.NewInt(1))
 }
 
 // ── Mining & Verification ──────────────────────────────────────────────────
