@@ -2666,16 +2666,10 @@ func (n *Node) processBlock(blk *block.Block) error {
 
 			// Trigger rotating king database sync for this block
 			go n.syncRotatingKingForBlock(num)
+			go n.syncDatabaseForNewBlock(num, blk.Hash())
 
 			// Also check if we need to sync configuration
 			go n.checkAndSyncKingConfig()
-			return nil
-		}
-
-		if err == nil {
-			n.logger.Infof("Added block %d via gossip (direct extension)", num)
-			go n.syncDatabaseForNewBlock(num, blk.Hash())
-
 			return nil
 		}
 
@@ -2697,11 +2691,14 @@ func (n *Node) processBlock(blk *block.Block) error {
 		n.logger.Warnf("REJECTING ORPHAN: Block %d (parent %s not found)",
 			num, blk.Header.ParentHash.String()[:8])
 
-		// If this orphan is far ahead, we might need to sync
-		if num > currentHeight+10 {
+		// Any announced block ahead of our tip means the network has at least
+		// one block we are missing. Trigger sync immediately instead of waiting
+		// for the periodic peer-height check; this is especially important while
+		// the local miner is busy on an obsolete parent.
+		if num > currentHeight {
 			n.logger.Warnf("Orphan block %d is %d blocks ahead - triggering sync",
 				num, num-currentHeight)
-			go n.triggerSync()
+			n.triggerSyncToHeight(num)
 		}
 
 		return fmt.Errorf("orphan block rejected: parent %s not found",
@@ -2792,6 +2789,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 	if num > currentHeight+1 {
 		n.logger.Warnf("Block %d ahead of us (we're at %d) but not in sync mode",
 			num, currentHeight)
+		n.triggerSyncToHeight(num)
 		return fmt.Errorf("block ahead but not syncing")
 	}
 
@@ -2804,6 +2802,58 @@ func (n *Node) processBlock(blk *block.Block) error {
 	// Should not reach here
 	n.logger.Warnf("Unexpected block processing state: height=%d, hash=%s", num, hash.String()[:8])
 	return fmt.Errorf("unexpected block state")
+}
+
+func (n *Node) triggerSyncToHeight(targetHeight uint64) {
+	if n == nil || n.chain == nil {
+		return
+	}
+
+	localHeight := n.currentHeight()
+	if targetHeight <= localHeight {
+		return
+	}
+	if n.chain.IsSyncing() {
+		return
+	}
+
+	if n.host == nil {
+		n.chain.StartSync(targetHeight)
+		return
+	}
+
+	peers := n.Peers()
+	if len(peers) == 0 {
+		n.logger.Warnf("No peers available for sync to announced height %d", targetHeight)
+		return
+	}
+
+	go func() {
+		bestPeer := peer.ID("")
+		bestHeight := uint64(0)
+		for _, pid := range peers {
+			height, err := n.GetPeerHeight(pid)
+			if err != nil {
+				n.logger.Debugf("Cannot get height from peer %s while syncing to announced block %d: %v",
+					pid.String()[:12], targetHeight, err)
+				continue
+			}
+			if height >= targetHeight && height > bestHeight {
+				bestPeer = pid
+				bestHeight = height
+			}
+		}
+
+		if bestPeer == "" {
+			n.logger.Warnf("No peer reported announced height %d yet; falling back to regular sync", targetHeight)
+			n.triggerSync()
+			return
+		}
+
+		n.logger.Warnf("SYNC TRIGGERED BY ANNOUNCED BLOCK: peer %s height=%d, our height=%d, announced=%d",
+			bestPeer.String()[:12], bestHeight, n.currentHeight(), targetHeight)
+		n.syncIfBehind(bestPeer)
+	}()
 }
 
 func (n *Node) syncIfBehind(pid peer.ID) {
