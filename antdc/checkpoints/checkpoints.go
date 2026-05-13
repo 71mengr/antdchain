@@ -1348,7 +1348,7 @@ func CreateSampleConfig(outputPath string, actualGenesisHash common.Hash) error 
             minerAddr = common.QuantumAddress{}
         }
 
-        kingAddr, err := common.ParseQuantumAddress("0x59910bc89803bD090C298db4C7457075d830094a")
+        kingAddr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
         if err != nil {
             kingAddr = common.QuantumAddress{}
         }

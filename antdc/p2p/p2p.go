@@ -1975,7 +1975,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 
 	// Initialize checkpoints system
 	checkpointsPath := filepath.Join(cfg.DataDir, "checkpoints.json")
-	genesisHash := common.HexToHash("0x860ed1a1e026261b452d2bbe908edf8297b02107912331c4c91e2f757ae9e164")
+	genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
 	cp, err := checkpoints.NewCheckpoints(cfg.DataDir, checkpointsPath, genesisHash)
 	if err != nil {
 		node.logger.Warnf("Failed to initialize checkpoints: %v", err)
