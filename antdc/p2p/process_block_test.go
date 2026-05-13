@@ -26,13 +26,15 @@ import (
 )
 
 func TestProcessBlockDefersSameHeightForkToChainForkChoice(t *testing.T) {
-	parentHash := common.BytesToHash([]byte("parent"))
+	parent := testP2PBlock(5, common.BytesToHash([]byte("grandparent")), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464375)
+	parentHash := parent.Hash()
 	existing := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("existing-miner")), 1778464378)
 	competitor := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("fork-miner")), 1778464376)
 
 	chain := &processBlockForkChoiceChain{
 		latest: existing,
 		blocksByHeight: map[uint64]*block.Block{
+			5: parent,
 			6: existing,
 		},
 		knownHashes: map[common.Hash]bool{
@@ -51,6 +53,46 @@ func TestProcessBlockDefersSameHeightForkToChainForkChoice(t *testing.T) {
 
 	if chain.addedBlock != competitor {
 		t.Fatalf("expected same-height fork to be passed to chain.AddBlock")
+	}
+}
+
+func TestProcessBlockOrphansProtocolLoser(t *testing.T) {
+	parent := testP2PBlock(7, common.BytesToHash([]byte("grandparent-2")), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464375)
+	parentHash := parent.Hash()
+	winner := testP2PBlock(8, parentHash, common.BytesToQuantumAddress([]byte("winner-miner")), 1778464376)
+	loser := testP2PBlock(8, parentHash, common.BytesToQuantumAddress([]byte("loser-miner")), 1778464380)
+
+	chain := &processBlockForkChoiceChain{
+		latest: winner,
+		blocksByHeight: map[uint64]*block.Block{
+			7: parent,
+			8: winner,
+		},
+		knownHashes: map[common.Hash]bool{
+			parentHash:     true,
+			winner.Hash(): true,
+		},
+	}
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	node := &Node{chain: chain, logger: logger}
+	if err := node.processBlock(loser); err != nil {
+		t.Fatalf("processBlock returned error: %v", err)
+	}
+	if chain.addedBlock != nil {
+		t.Fatalf("expected protocol loser to stay out of AddBlock")
+	}
+
+	node.orphanPoolMu.Lock()
+	entry, ok := node.orphanPool[loser.Hash()]
+	node.orphanPoolMu.Unlock()
+	if !ok {
+		t.Fatalf("expected losing block to be stored in orphan pool")
+	}
+	if time.Until(entry.expiresAt) <= 0 || time.Until(entry.expiresAt) > orphanBlockTTL {
+		t.Fatalf("expected orphan expiry within %s, got %s", orphanBlockTTL, time.Until(entry.expiresAt))
 	}
 }
 

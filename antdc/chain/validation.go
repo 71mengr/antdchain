@@ -323,14 +323,9 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 		return bc.pow.CalculateExpectedDifficulty(height, parent.Header.Time, b.Header.Time)
 	}
 
-	expected := new(big.Int).Set(parent.Header.Difficulty)
-	if height%uint64(pow.DifficultyAdjustment) != 0 {
-		return expected
-	}
-
 	window := make([]uint64, 0, pow.DifficultyAdjustment)
 	curr := parent
-	for len(window) < pow.DifficultyAdjustment && curr != nil && curr.Header != nil && curr.Header.Number.Uint64() > 0 {
+	for len(window) < pow.DifficultyAdjustment-1 && curr != nil && curr.Header != nil && curr.Header.Number.Uint64() > 0 {
 		ancestor, err := bc.GetBlockByHash(curr.Header.ParentHash)
 		if err != nil || ancestor == nil || ancestor.Header == nil {
 			break
@@ -350,20 +345,7 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 	}
 	window = append(window, delta)
 
-	var total uint64
-	for _, t := range window {
-		total += t
-	}
-	avg := float64(total) / float64(len(window))
-	ratio := float64(pow.BlockTimeTarget) / avg
-	if ratio > 4.0 {
-		ratio = 4.0
-	} else if ratio < 0.25 {
-		ratio = 0.25
-	}
-
-	_ = ratio // ratio derivation intentionally retained for debugging parity with prior implementation
-	return pow.CalculateDifficultyFromWindow(expected, height, window)
+	return pow.CalculateDifficultyFromWindow(new(big.Int).Set(parent.Header.Difficulty), height, window)
 }
 
 // validateProofOfWork verifies the block nonce/mix digest satisfy the header difficulty.

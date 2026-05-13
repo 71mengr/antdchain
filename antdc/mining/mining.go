@@ -800,6 +800,20 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 			blk.Header.Extra = append(blk.Header.Extra, signature...)
 		}
 
+		blk.Header.Difficulty = bc.CalculateExpectedDifficultyForBlock(blk, parent)
+		stateRoot, err := bc.ComputeBlockFinalStateRoot(
+			minerAddr,
+			blk.Header.Time,
+			height,
+			blk.Header.Extra,
+			blk.Txs,
+		)
+		if err != nil {
+			log.Printf("[miner] Failed to recompute state root for block %d: %v", height, err)
+			continue
+		}
+		blk.Header.Root = stateRoot
+
 		if err := mineBlockProofOfWork(context.Background(), ms.powEngine, blk.Header); err != nil {
 			log.Printf("[miner] Proof-of-work failed for block %d: %v", height, err)
 			continue

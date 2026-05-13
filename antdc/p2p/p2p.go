@@ -59,6 +59,7 @@ const (
 	msgTypeDBSyncAnnounce    = 0x08 // NEW: Database sync announcement
 	msgTypeKingConfig        = 0x09
 	msgTypeKingConfigRequest = iota + 30
+	orphanBlockTTL           = 2 * time.Minute
 )
 
 type DBSyncRequest struct {
@@ -187,6 +188,12 @@ func defaultP2PLogLevel() string {
 	return "error"
 }
 
+type orphanBlockEntry struct {
+	block     *block.Block
+	expiresAt time.Time
+	reason    string
+}
+
 type Node struct {
 	host      host.Host
 	pubsub    *pubsub.PubSub
@@ -198,7 +205,8 @@ type Node struct {
 	publishMu sync.RWMutex
 	processMu sync.Mutex
 	syncMu    sync.Mutex
-	// orphanPool     map[common.Hash]*block.Block
+	orphanPool   map[common.Hash]orphanBlockEntry
+	orphanPoolMu sync.Mutex
 	synced         bool
 	syncHeight     uint64
 	ctx            context.Context
@@ -1702,6 +1710,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		cfg:             cfg,
 		knownTxs:        make(map[common.Hash]time.Time),
 		knownTxsLimit:   10000,
+		orphanPool:      make(map[common.Hash]orphanBlockEntry),
 		dbSyncRequests:  make(map[string]*DBSyncRequest),
 		dbSyncResponses: make(map[string]*DBSyncResponse),
 		dbSyncPeers:     make(map[string]*DBSyncStatus),
@@ -2417,9 +2426,124 @@ func (n *Node) quickFindCommonAncestor(peerID peer.ID, maxHeight uint64) (uint64
 	return 0, nil
 }
 
+func (n *Node) rememberOrphanBlock(blk *block.Block, reason string) {
+	if n == nil || blk == nil || blk.Header == nil {
+		return
+	}
+	n.orphanPoolMu.Lock()
+	defer n.orphanPoolMu.Unlock()
+	if n.orphanPool == nil {
+		n.orphanPool = make(map[common.Hash]orphanBlockEntry)
+	}
+	now := time.Now()
+	for hash, entry := range n.orphanPool {
+		if !entry.expiresAt.After(now) {
+			delete(n.orphanPool, hash)
+		}
+	}
+	hash := blk.Hash()
+	expiresAt := now.Add(orphanBlockTTL)
+	n.orphanPool[hash] = orphanBlockEntry{
+		block:     blk,
+		expiresAt: expiresAt,
+		reason:    reason,
+	}
+	go n.deleteOrphanBlockAfter(hash, expiresAt)
+	if n.logger != nil {
+		n.logger.Warnf("Moved block %d hash=%s to orphan pool for %s; expires in %s",
+			blk.Header.Number.Uint64(), hash.String()[:8], reason, orphanBlockTTL)
+	}
+}
+
+func (n *Node) deleteOrphanBlockAfter(hash common.Hash, expiresAt time.Time) {
+	timer := time.NewTimer(time.Until(expiresAt))
+	defer timer.Stop()
+	<-timer.C
+	n.orphanPoolMu.Lock()
+	defer n.orphanPoolMu.Unlock()
+	entry, ok := n.orphanPool[hash]
+	if ok && !entry.expiresAt.After(time.Now()) {
+		delete(n.orphanPool, hash)
+	}
+}
+
+func (n *Node) validateProtocolCandidate(blk *block.Block, parent *block.Block) error {
+	if blk == nil || blk.Header == nil {
+		return errors.New("nil block or header")
+	}
+	if blk.Hash() != blk.Header.Hash() {
+		return errors.New("block hash does not match canonical header hash")
+	}
+	if parent == nil {
+		return errors.New("missing parent for protocol candidate")
+	}
+	if blk.Header.ParentHash != parent.Hash() {
+		return fmt.Errorf("parent hash mismatch: expected %s, got %s", parent.Hash().String()[:8], blk.Header.ParentHash.String()[:8])
+	}
+	if blk.Header.Number == nil || parent.Header == nil || parent.Header.Number == nil {
+		return errors.New("missing block number")
+	}
+	if blk.Header.Number.Uint64() != parent.Header.Number.Uint64()+1 {
+		return fmt.Errorf("height mismatch: parent=%d child=%d", parent.Header.Number.Uint64(), blk.Header.Number.Uint64())
+	}
+	if checkpoints := n.chain.Checkpoints(); checkpoints != nil {
+		if err := checkpoints.ValidateBlock(blk.Header.Number.Uint64(), blk.Hash()); err != nil {
+			return fmt.Errorf("checkpoint validation failed: %w", err)
+		}
+	}
+	if err := blk.Validate(parent); err != nil {
+		return fmt.Errorf("block validation failed: %w", err)
+	}
+	return nil
+}
+
+func (n *Node) selectProtocolBlock(local *block.Block, remote *block.Block, parent *block.Block) (*block.Block, *block.Block, error) {
+	localErr := n.validateProtocolCandidate(local, parent)
+	remoteErr := n.validateProtocolCandidate(remote, parent)
+
+	if localErr != nil && remoteErr != nil {
+		return nil, nil, fmt.Errorf("no same-height block meets network protocol: local=%v remote=%v", localErr, remoteErr)
+	}
+	if remoteErr != nil {
+		return local, remote, nil
+	}
+	if localErr != nil {
+		return remote, local, nil
+	}
+
+	localDifficulty := local.Header.Difficulty
+	if localDifficulty == nil {
+		localDifficulty = big.NewInt(0)
+	}
+	remoteDifficulty := remote.Header.Difficulty
+	if remoteDifficulty == nil {
+		remoteDifficulty = big.NewInt(0)
+	}
+	if cmp := remoteDifficulty.Cmp(localDifficulty); cmp > 0 {
+		return remote, local, nil
+	} else if cmp < 0 {
+		return local, remote, nil
+	}
+
+	if remote.Header.Time < local.Header.Time {
+		return remote, local, nil
+	}
+	if local.Header.Time < remote.Header.Time {
+		return local, remote, nil
+	}
+
+	if strings.Compare(remote.Hash().String(), local.Hash().String()) < 0 {
+		return remote, local, nil
+	}
+	return local, remote, nil
+}
+
 func (n *Node) processBlock(blk *block.Block) error {
 	if blk == nil || blk.Header == nil {
 		return errors.New("nil block or header")
+	}
+	if blk.Header.Number == nil {
+		return errors.New("nil block number")
 	}
 
 	num := blk.Header.Number.Uint64()
@@ -2445,6 +2569,11 @@ func (n *Node) processBlock(blk *block.Block) error {
 
 	// FAST PATH: Direct chain extension
 	if blk.Header.ParentHash == expectedParent && num == currentHeight+1 {
+		if err := n.validateProtocolCandidate(blk, tip); err != nil {
+			n.rememberOrphanBlock(blk, fmt.Sprintf("protocol rejection: %v", err))
+			return err
+		}
+
 		err := n.chain.AddBlock(blk)
 
 		if err == nil {
@@ -2472,12 +2601,14 @@ func (n *Node) processBlock(blk *block.Block) error {
 			return nil // Already processed
 		}
 
+		n.rememberOrphanBlock(blk, fmt.Sprintf("direct extension rejected: %v", err))
 		n.logger.Warnf("Direct extension failed for block %d: %v", num, err)
 		return err
 	}
 
 	// ORPHAN CHECK: Parent not in chain
 	if !n.chain.HasBlock(blk.Header.ParentHash) {
+		n.rememberOrphanBlock(blk, "missing parent")
 		n.logger.Warnf("REJECTING ORPHAN: Block %d (parent %s not found)",
 			num, blk.Header.ParentHash.String()[:8])
 
@@ -2498,9 +2629,25 @@ func (n *Node) processBlock(blk *block.Block) error {
 			return nil // Duplicate
 		}
 
-		n.logger.Warnf("Same-height fork at height %d (ours: %s, theirs: %s); deferring to chain fork-choice",
-			num, existing.Hash().String()[:8], hash.String()[:8])
+		parent := n.chain.GetBlock(num - 1)
+		chosen, orphan, err := n.selectProtocolBlock(existing, blk, parent)
+		if err != nil {
+			n.rememberOrphanBlock(blk, fmt.Sprintf("same-height fork without protocol-valid winner: %v", err))
+			return err
+		}
+		if orphan != nil {
+			n.rememberOrphanBlock(orphan, "same-height fork lost deterministic protocol selection")
+		}
+		if chosen.Hash() == existing.Hash() {
+			n.logger.Warnf("Same-height fork at height %d kept local protocol block %s; orphaned remote %s",
+				num, existing.Hash().String()[:8], hash.String()[:8])
+			return nil
+		}
+
+		n.logger.Warnf("Same-height fork at height %d selected remote protocol block %s over local %s",
+			num, hash.String()[:8], existing.Hash().String()[:8])
 		if err := n.chain.AddBlock(blk); err != nil {
+			n.rememberOrphanBlock(blk, fmt.Sprintf("selected fork rejected: %v", err))
 			return fmt.Errorf("fork block rejected at height %d: %w", num, err)
 		}
 		return nil
