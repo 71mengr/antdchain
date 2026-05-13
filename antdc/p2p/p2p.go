@@ -2114,6 +2114,11 @@ func (n *Node) triggerSync() {
 func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 	localHeight := n.currentHeight()
 
+	if targetHeight <= localHeight {
+		n.logger.Debugf("Sync target %d is not ahead of local height %d", targetHeight, localHeight)
+		return nil
+	}
+
 	n.logger.Infof("SYNC START → %d blocks needed (%d → %d)",
 		targetHeight-localHeight, localHeight+1, targetHeight)
 
@@ -2125,43 +2130,36 @@ func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 		default:
 		}
 
-		var blk *block.Block
-		var err error
+		if height <= n.currentHeight() {
+			n.logger.Debugf("Already applied block %d, skipping", height)
+			continue
+		}
 
-		// CHECK FIRST: Do we already have this block?
-		// Future blocks may have been persisted by a previous sync attempt without
-		// being applied to canonical state.  Reuse them instead of skipping, so the
-		// state advances block-by-block and balance checks see the correct parent.
-		if existing := n.chain.GetBlock(height); existing != nil {
-			if height <= n.currentHeight() {
-				n.logger.Debugf("Already applied block %d, skipping", height)
-				continue // Skip to next block
+		n.logger.Debugf("Fetching block %d/%d from peer %s", height, targetHeight, peerID.String()[:12])
+
+		ctx, cancel := context.WithTimeout(n.ctx, 12*time.Second)
+		blk, err := n.requestBlockWithContext(ctx, peerID, height)
+		cancel()
+
+		if err != nil {
+			n.logger.Warnf("Failed to fetch block %d: %v", height, err)
+			failures++
+			if failures > 10 {
+				return fmt.Errorf("too many failures fetching block %d from %s", height, peerID.String()[:12])
 			}
-			n.logger.Debugf("Using stored unapplied block %d", height)
-			blk = existing
-		} else {
-			n.logger.Debugf("Fetching block %d/%d", height, targetHeight)
+			height-- // retry same block
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
 
-			ctx, cancel := context.WithTimeout(n.ctx, 12*time.Second)
-			fetched, err := n.requestBlockWithContext(ctx, peerID, height)
-			cancel()
-
-			if err != nil {
-				n.logger.Warnf("Failed to fetch block %d: %v", height, err)
-				failures++
-				if failures > 10 {
-					return fmt.Errorf("too many failures")
-				}
-				height-- // retry same block
-				time.Sleep(300 * time.Millisecond)
-				continue
-			}
-			blk = fetched
+		if existing := n.chain.GetBlock(height); existing != nil && existing.Hash() == blk.Hash() && height <= n.currentHeight() {
+			n.logger.Debugf("Block %d was applied while fetching; skipping", height)
+			continue
 		}
 
 		failures = 0
 
-		n.logger.Debugf("Got block %d, adding to chain...", height)
+		n.logger.Debugf("Got block %d from peer %s, adding to chain...", height, peerID.String()[:12])
 
 		err = n.chain.AddBlock(blk)
 		if err != nil {
@@ -2186,6 +2184,10 @@ func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 						continue
 					}
 				}
+			}
+
+			if isDeterministicSyncValidationFailure(err) {
+				return fmt.Errorf("failed to add block %d from %s: %w", height, peerID.String()[:12], err)
 			}
 
 			n.logger.Warnf("AddBlock failed for %d: %v", height, err)
@@ -2580,7 +2582,9 @@ func isDeterministicSyncValidationFailure(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "pos validation failed") ||
 		strings.Contains(msg, "miner eligibility verification failed") ||
-		strings.Contains(msg, "address not eligible to mine")
+		strings.Contains(msg, "address not eligible to mine") ||
+		strings.Contains(msg, "state root mismatch") ||
+		strings.Contains(msg, "block validation failed")
 }
 
 func finalSyncTarget(initialTarget, localHeight uint64) uint64 {
@@ -2658,6 +2662,10 @@ func (n *Node) syncLoop() {
 			for _, pid := range n.Peers() {
 				height, err := n.GetPeerHeight(pid)
 				if err != nil {
+					continue
+				}
+
+				if height <= localHeight {
 					continue
 				}
 
