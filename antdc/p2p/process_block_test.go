@@ -135,6 +135,75 @@ func TestProcessBlockOrphansProtocolLoser(t *testing.T) {
 	}
 }
 
+func TestResolveMiningTipConsensusReorgsToSuperiorPeerBlock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	parent := testP2PBlock(10, common.BytesToHash([]byte("grandparent-consensus")), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464375)
+	parentHash := parent.Hash()
+	localWeak := testP2PBlock(11, parentHash, common.BytesToQuantumAddress([]byte("local-weak-miner")), 1778464378)
+	peerStrong := testP2PBlock(11, parentHash, common.BytesToQuantumAddress([]byte("peer-strong-miner")), 1778464378)
+	peerStrong.Header.Difficulty = big.NewInt(2_000_000)
+
+	localChain := &processBlockForkChoiceChain{
+		latest: localWeak,
+		blocksByHeight: map[uint64]*block.Block{
+			10: parent,
+			11: localWeak,
+		},
+		knownHashes: map[common.Hash]bool{
+			parentHash:        true,
+			localWeak.Hash():  true,
+			peerStrong.Hash(): true,
+		},
+	}
+	peerChain := &processBlockForkChoiceChain{
+		latest: peerStrong,
+		blocksByHeight: map[uint64]*block.Block{
+			10: parent,
+			11: peerStrong,
+		},
+		knownHashes: map[common.Hash]bool{
+			parentHash:        true,
+			peerStrong.Hash(): true,
+		},
+	}
+
+	localHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create local host: %v", err)
+	}
+	defer localHost.Close()
+
+	peerHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create peer host: %v", err)
+	}
+	defer peerHost.Close()
+
+	localNode := &Node{host: localHost, chain: localChain, logger: logger, ctx: ctx}
+	peerNode := &Node{host: peerHost, chain: peerChain, logger: logger, ctx: ctx}
+	peerHost.SetStreamHandler("/antdchain/sync/1.0.0", peerNode.handleStream)
+
+	peerInfo := peer.AddrInfo{ID: peerHost.ID(), Addrs: peerHost.Addrs()}
+	if err := localHost.Connect(ctx, peerInfo); err != nil {
+		t.Fatalf("connect local node to peer: %v", err)
+	}
+
+	if err := localNode.ResolveMiningTipConsensus(); err != nil {
+		t.Fatalf("ResolveMiningTipConsensus returned error: %v", err)
+	}
+	if latest := localChain.Latest(); latest == nil || latest.Hash() != peerStrong.Hash() {
+		t.Fatalf("expected local chain to reorganize to superior peer hash %s, got %v", peerStrong.Hash(), latest)
+	}
+	if localChain.addedBlock == nil || localChain.addedBlock.Hash() != peerStrong.Hash() {
+		t.Fatalf("expected superior peer block to be submitted to AddBlock")
+	}
+}
+
 func TestProcessBlockDefersMissingParentOrphanAndTriggersSync(t *testing.T) {
 	genesis := testP2PBlock(0, common.Hash{}, common.BytesToQuantumAddress([]byte("genesis-miner")), 1778464375)
 	parent := testP2PBlock(1, genesis.Hash(), common.BytesToQuantumAddress([]byte("parent-miner")), 1778464376)

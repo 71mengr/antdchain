@@ -2619,6 +2619,130 @@ func (n *Node) validateProtocolCandidate(blk *block.Block, parent *block.Block) 
 	return nil
 }
 
+func (n *Node) strongestProtocolBlock(parent *block.Block, candidates ...*block.Block) (*block.Block, error) {
+	var strongest *block.Block
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		if strongest == nil {
+			if err := n.validateProtocolCandidate(candidate, parent); err != nil {
+				return nil, err
+			}
+			strongest = candidate
+			continue
+		}
+
+		chosen, orphan, err := n.selectProtocolBlock(strongest, candidate, parent)
+		if err != nil {
+			return nil, err
+		}
+		if orphan != nil && orphan.Hash() != chosen.Hash() {
+			n.rememberOrphanBlock(orphan, "mining-tip consensus lost deterministic protocol selection")
+		}
+		strongest = chosen
+	}
+	if strongest == nil {
+		return nil, errors.New("no block candidates to compare")
+	}
+	return strongest, nil
+}
+
+// ResolveMiningTipConsensus makes local mining wait for all currently connected
+// peers to converge on one canonical tip before the next block is mined. It
+// compares same-height local and peer blocks, reorganizes this node to the
+// superior protocol-valid hash when needed, and re-broadcasts that winner so
+// peers that still advertise a weaker hash can reorg before mining continues.
+func (n *Node) ResolveMiningTipConsensus() error {
+	if n == nil || n.chain == nil {
+		return nil
+	}
+	if n.host == nil {
+		return nil
+	}
+
+	localTip := n.chain.Latest()
+	if localTip == nil || localTip.Header == nil || localTip.Header.Number == nil {
+		return nil
+	}
+
+	height := localTip.Header.Number.Uint64()
+	if height == 0 {
+		return nil
+	}
+
+	peers := n.Peers()
+	if len(peers) == 0 {
+		return nil
+	}
+
+	parent := n.chain.GetBlock(height - 1)
+	if parent == nil {
+		return fmt.Errorf("cannot resolve mining tip at height %d: missing parent", height)
+	}
+
+	candidates := []*block.Block{localTip}
+	peerBlocks := make(map[peer.ID]*block.Block, len(peers))
+	for _, pid := range peers {
+		peerHeight, err := n.GetPeerHeight(pid)
+		if err != nil {
+			n.logger.Debugf("Skipping mining-tip comparison with %s: height unavailable: %v", pid.String()[:12], err)
+			continue
+		}
+		if peerHeight < height {
+			continue
+		}
+
+		peerBlock, err := n.RequestBlockSync(pid, height)
+		if err != nil {
+			n.logger.Debugf("Skipping mining-tip comparison with %s at height %d: %v", pid.String()[:12], height, err)
+			continue
+		}
+		if peerBlock == nil || peerBlock.Header == nil {
+			continue
+		}
+		peerBlocks[pid] = peerBlock
+		candidates = append(candidates, peerBlock)
+	}
+
+	strongest, err := n.strongestProtocolBlock(parent, candidates...)
+	if err != nil {
+		return fmt.Errorf("mining-tip candidate comparison failed at height %d: %w", height, err)
+	}
+
+	strongestHash := strongest.Hash()
+	localHash := localTip.Hash()
+	if strongestHash != localHash {
+		n.logger.Warnf("Mining-tip consensus selected superior block at height %d: local=%s superior=%s; reorganizing before next mine",
+			height, localHash.String()[:8], strongestHash.String()[:8])
+		if err := n.processBlock(strongest); err != nil {
+			return fmt.Errorf("failed to reorganize to superior mining-tip hash %s at height %d: %w", strongestHash.String(), height, err)
+		}
+		localTip = n.chain.Latest()
+		if localTip == nil || localTip.Hash() != strongestHash {
+			return fmt.Errorf("local tip did not converge to superior mining-tip hash %s at height %d", strongestHash.String(), height)
+		}
+	}
+
+	divergedPeers := 0
+	for pid, peerBlock := range peerBlocks {
+		if peerBlock.Hash() == strongestHash {
+			continue
+		}
+		divergedPeers++
+		n.logger.Warnf("Peer %s has weaker mining-tip hash at height %d: peer=%s superior=%s; rebroadcasting winner and pausing mining",
+			pid.String()[:12], height, peerBlock.Hash().String()[:8], strongestHash.String()[:8])
+	}
+	if divergedPeers > 0 {
+		if err := n.BroadcastBlock(strongest); err != nil {
+			n.logger.Warnf("Failed to rebroadcast superior mining-tip block %d %s: %v", height, strongestHash.String()[:8], err)
+		}
+		return fmt.Errorf("waiting for %d connected peers to reorganize to mining-tip hash %s at height %d", divergedPeers, strongestHash.String(), height)
+	}
+
+	return nil
+}
+
 func (n *Node) selectProtocolBlock(local *block.Block, remote *block.Block, parent *block.Block) (*block.Block, *block.Block, error) {
 	localErr := n.validateProtocolCandidate(local, parent)
 	remoteErr := n.validateProtocolCandidate(remote, parent)

@@ -723,6 +723,16 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 			continue
 		}
 
+		if p2pNode != nil {
+			if err := p2pNode.ResolveMiningTipConsensus(); err != nil {
+				if time.Since(lastSyncLog) > LogSyncStatusInterval {
+					log.Printf("[miner] Mining paused while connected peers resolve tip: %v", err)
+					lastSyncLog = time.Now()
+				}
+				continue
+			}
+		}
+
 		if remaining := bc.SyncCooldownRemaining(); remaining > 0 {
 			if time.Since(lastSyncLog) > LogSyncStatusInterval {
 				log.Printf("[miner] Sync completed; waiting %s before resuming mining", remaining.Truncate(time.Second))
