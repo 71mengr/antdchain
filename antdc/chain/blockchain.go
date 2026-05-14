@@ -855,6 +855,11 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 	firstHeight := firstBlock.Header.Number.Uint64()
 	lastHeight := lastBlock.Header.Number.Uint64()
 
+	incomingBlocks := make(map[common.Hash]*block.Block, len(blocks))
+	for _, blk := range blocks {
+		incomingBlocks[blk.Hash()] = blk
+	}
+
 	currentHeight := bc.GetChainHeight()
 	currentTip := bc.Latest()
 
@@ -893,8 +898,26 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 			// Parent is not canonical - we're on a fork
 			reorgRequired = true
 		} else {
-			// Parent is canonical - simple extension
+			// Parent is canonical. This is a simple extension only if the
+			// incoming segment does not conflict with an existing canonical
+			// block at any covered height. Same-height/same-parent competitors
+			// must still pass fork choice before they can replace the tip.
 			reorgRequired = false
+			for _, candidate := range blocks {
+				height := candidate.Header.Number.Uint64()
+				if height > currentHeight {
+					break
+				}
+
+				existingHash, err := bc.db.GetCanonicalHash(height)
+				if err != nil {
+					return 0, fmt.Errorf("failed to read canonical hash at height %d: %w", height, err)
+				}
+				if existingHash != (common.Hash{}) && existingHash != candidate.Hash() {
+					reorgRequired = true
+					break
+				}
+			}
 		}
 	}
 
@@ -913,18 +936,20 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 			return 0, fmt.Errorf("failed to calculate old chain weight: %w", err)
 		}
 
-		newChainWeight, err := bc.calculateChainWeight(lastBlock, ancestorHeight)
+		newChainWeight, err := bc.calculateChainWeightWithCandidates(lastBlock, ancestorHeight, incomingBlocks)
 		if err != nil {
 			return 0, fmt.Errorf("failed to calculate new chain weight: %w", err)
 		}
 
-		// Fork choice: prefer only a strictly heavier chain. Equal-work forks are
-		// left untouched until one branch gains more work, avoiding avoidable
-		// network-induced reorganizations between peers at the same height.
-		if newChainWeight.Cmp(oldChainWeight) <= 0 {
-			log.Printf("[blockchain] InsertChain: new chain weight %s <= old chain weight %s",
+		// Fork choice: prefer a heavier chain. If competing tips have equal
+		// accumulated work at the same height, apply the deterministic protocol
+		// tie-breaker so peers that receive same-height gossip in different orders
+		// still converge on the same canonical block.
+		weightCmp := newChainWeight.Cmp(oldChainWeight)
+		if weightCmp < 0 || (weightCmp == 0 && (lastHeight != currentHeight || !isBetterBlockCandidate(lastBlock, currentTip))) {
+			log.Printf("[blockchain] InsertChain: new chain weight %s does not beat old chain weight %s",
 				newChainWeight.String(), oldChainWeight.String())
-			return 0, fmt.Errorf("new chain is not heavier")
+			return 0, fmt.Errorf("new chain does not win fork choice")
 		}
 
 		// Perform reorg
@@ -1001,6 +1026,12 @@ func (bc *Blockchain) InsertChain(blocks []*block.Block) (int, error) {
 
 // calculateChainWeight calculates the weight of a chain segment
 func (bc *Blockchain) calculateChainWeight(tip *block.Block, fromHeight uint64) (*big.Int, error) {
+	return bc.calculateChainWeightWithCandidates(tip, fromHeight, nil)
+}
+
+// calculateChainWeightWithCandidates calculates the weight of a chain segment,
+// resolving parents from candidate blocks before falling back to persisted data.
+func (bc *Blockchain) calculateChainWeightWithCandidates(tip *block.Block, fromHeight uint64, candidates map[common.Hash]*block.Block) (*big.Int, error) {
 	weight := big.NewInt(0)
 	current := tip
 
@@ -1014,7 +1045,15 @@ func (bc *Blockchain) calculateChainWeight(tip *block.Block, fromHeight uint64) 
 			break
 		}
 
-		parent, err := bc.GetBlockByHash(current.Header.ParentHash)
+		parentHash := current.Header.ParentHash
+		if candidates != nil {
+			if parent := candidates[parentHash]; parent != nil {
+				current = parent
+				continue
+			}
+		}
+
+		parent, err := bc.GetBlockByHash(parentHash)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get parent block: %w", err)
 		}
@@ -1361,22 +1400,16 @@ func (bc *Blockchain) pruneAncientBlocks(pruneUpToHeight uint64) {
 	}
 }
 
-// WriteBlock writes a block to database (public interface)
+// WriteBlock writes a single block through the same fork-choice path used for chain inserts.
 func (bc *Blockchain) WriteBlock(blk *block.Block) error {
-	// Execute block and get state root
-	stateRoot, err := bc.executeBlock(blk)
+	inserted, err := bc.InsertChain([]*block.Block{blk})
 	if err != nil {
-		return fmt.Errorf("failed to execute block: %w", err)
+		return err
 	}
-
-	// Verify state root
-	if stateRoot != blk.Header.Root {
-		return fmt.Errorf("state root mismatch: expected %s, got %s",
-			blk.Header.Root.Hex(), stateRoot.Hex())
+	if inserted == 0 {
+		return nil
 	}
-
-	// Write to database
-	return bc.writeBlock(blk)
+	return nil
 }
 
 // SetReorgDepth sets the maximum reorg depth allowed
