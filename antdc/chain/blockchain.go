@@ -245,20 +245,51 @@ func (bc *Blockchain) GetBlockByNumber(number uint64) (monitoring.BlockProvider,
 	return &BlockWrapper{blk}, nil
 }
 
-// getBlockByNumber internal implementation
-func (bc *Blockchain) getBlockByNumber(number uint64) (*block.Block, error) {
-	// First try number cache
+// getCanonicalCachedBlock returns a cached height lookup only when the cached
+// block still matches the database canonical hash for that height. Hash-based
+// lookups may load side-branch blocks, so every number-cache hit is checked
+// before it can influence canonical chain decisions.
+func (bc *Blockchain) getCanonicalCachedBlock(number uint64) (*block.Block, bool) {
 	bc.cacheMu.RLock()
-	if bc.blockByNumberCache != nil {
-		if cached, ok := bc.blockByNumberCache.Get(number); ok {
-			if blk, ok := cached.(*block.Block); ok && blk != nil {
-				bc.cacheMu.RUnlock()
-				cacheHitCounter.WithLabelValues("number").Inc()
-				return blk, nil
-			}
-		}
+	if bc.blockByNumberCache == nil {
+		bc.cacheMu.RUnlock()
+		return nil, false
+	}
+
+	cached, ok := bc.blockByNumberCache.Get(number)
+	if !ok {
+		bc.cacheMu.RUnlock()
+		return nil, false
+	}
+
+	blk, ok := cached.(*block.Block)
+	if !ok || blk == nil || blk.Header == nil || blk.Header.Number == nil || blk.Header.Number.Uint64() != number {
+		bc.cacheMu.RUnlock()
+		bc.cacheMu.Lock()
+		bc.blockByNumberCache.Remove(number)
+		bc.cacheMu.Unlock()
+		return nil, false
 	}
 	bc.cacheMu.RUnlock()
+
+	canonicalHash, err := bc.db.GetCanonicalHash(number)
+	if err != nil || canonicalHash == (common.Hash{}) || blk.Hash() != canonicalHash {
+		bc.cacheMu.Lock()
+		bc.blockByNumberCache.Remove(number)
+		bc.cacheMu.Unlock()
+		return nil, false
+	}
+
+	cacheHitCounter.WithLabelValues("number").Inc()
+	return blk, true
+}
+
+// getBlockByNumber internal implementation
+func (bc *Blockchain) getBlockByNumber(number uint64) (*block.Block, error) {
+	// First try canonical number cache
+	if blk, ok := bc.getCanonicalCachedBlock(number); ok {
+		return blk, nil
+	}
 
 	cacheMissCounter.WithLabelValues("number").Inc()
 

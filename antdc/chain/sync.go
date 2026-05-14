@@ -127,9 +127,9 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 						correctParent.Header.Number.Uint64())
 					parentBlock = correctParent
 
-					// Update cache with correct block
+					// Cache by hash only. The parent may be a side-branch block, so
+					// never overwrite the canonical height cache from a hash lookup.
 					bc.cacheMu.Lock()
-					bc.blockByNumberCache.Add(blockHeight-1, parentBlock)
 					bc.blockByHashCache.Add(parentHash, parentBlock)
 					bc.cacheMu.Unlock()
 				} else {
@@ -186,9 +186,9 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 				// Still use it - might be from a reorg
 			}
 
-			// Update cache
+			// Cache by hash only. The parent may be a side-branch block, so
+			// never overwrite the canonical height cache from a hash lookup.
 			bc.cacheMu.Lock()
-			bc.blockByNumberCache.Add(blockHeight-1, parentBlock)
 			bc.blockByHashCache.Add(parentHash, parentBlock)
 			bc.cacheMu.Unlock()
 		}
@@ -826,21 +826,11 @@ func (bc *Blockchain) SetCheckpointManager(cp *checkpoints.Checkpoints) {
 
 // GetBlock implementation
 func (bc *Blockchain) GetBlock(height uint64) *block.Block {
-	// Check cache first
-	bc.cacheMu.RLock()
-	if cached, found := bc.blockByNumberCache.Get(height); found {
-		cachedBlock := cached.(*block.Block)
-		bc.cacheMu.RUnlock()
-
-		if cachedBlock.Header.Number.Uint64() == height {
-			return cachedBlock
-		}
-		// Cache corruption - clear it
-		bc.cacheMu.Lock()
-		bc.blockByNumberCache.Remove(height)
-		bc.cacheMu.Unlock()
-	} else {
-		bc.cacheMu.RUnlock()
+	// Check canonical number cache first. Side-branch blocks can be known by
+	// hash, but GetBlock(height) must only return the canonical block selected
+	// for that height so peers converge on a single chain.
+	if cachedBlock, ok := bc.getCanonicalCachedBlock(height); ok {
+		return cachedBlock
 	}
 
 	// Get from database
@@ -904,10 +894,10 @@ func (bc *Blockchain) GetBlockByHash(hash common.Hash) (*block.Block, error) {
 		return nil, fmt.Errorf("block not found by hash %s: %w", hash.Hex()[:12], err)
 	}
 
-	// Update cache
+	// Cache hash lookups by hash only. The block may be a side-branch/fork
+	// candidate, so it must not replace the canonical number cache.
 	bc.cacheMu.Lock()
 	bc.blockByHashCache.Add(hash, block)
-	bc.blockByNumberCache.Add(block.Header.Number.Uint64(), block)
 	bc.cacheMu.Unlock()
 
 	return block, nil

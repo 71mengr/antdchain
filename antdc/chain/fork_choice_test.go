@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/antdaza/antdchain/antdc/block"
+	"github.com/antdaza/antdchain/antdc/chain/db"
 	"github.com/antdaza/antdchain/common"
+	"github.com/hashicorp/golang-lru"
 )
 
 func TestSameHeightForkChoiceUsesDeterministicProtocolTieBreak(t *testing.T) {
@@ -59,6 +61,75 @@ func TestSameHeightForkChoiceFallsBackToLowerHash(t *testing.T) {
 		t.Fatalf("expected higher-hash equal-work same-timestamp fork to be rejected")
 	}
 }
+func TestHashLookupDoesNotPolluteCanonicalNumberCache(t *testing.T) {
+	chainDB, err := db.NewChainDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("create chain db: %v", err)
+	}
+	defer chainDB.Close()
+
+	numberCache, err := lru.New(16)
+	if err != nil {
+		t.Fatalf("create number cache: %v", err)
+	}
+	hashCache, err := lru.New(16)
+	if err != nil {
+		t.Fatalf("create hash cache: %v", err)
+	}
+
+	bc := &Blockchain{
+		db:                 chainDB,
+		blockByNumberCache: numberCache,
+		blockByHashCache:   hashCache,
+	}
+
+	parent := testForkChoiceBlock(40, common.BytesToHash([]byte("grandparent")), 1_000_000, 1778678100, "parent")
+	canonical := testForkChoiceBlock(41, parent.Hash(), 1_000_000, 1778678112, "canonical")
+	sideBranch := testForkChoiceBlock(41, parent.Hash(), 1_000_000, 1778678112, "side-branch")
+	if canonical.Hash() == sideBranch.Hash() {
+		t.Fatalf("test blocks unexpectedly have the same hash")
+	}
+
+	for _, blk := range []*block.Block{parent, canonical, sideBranch} {
+		if err := chainDB.WriteBlock(blk); err != nil {
+			t.Fatalf("write block %d: %v", blk.Header.Number.Uint64(), err)
+		}
+	}
+	if err := chainDB.WriteCanonicalHash(parent.Header.Number.Uint64(), parent.Hash()); err != nil {
+		t.Fatalf("write parent canonical hash: %v", err)
+	}
+	if err := chainDB.WriteCanonicalHash(canonical.Header.Number.Uint64(), canonical.Hash()); err != nil {
+		t.Fatalf("write canonical hash: %v", err)
+	}
+
+	foundSide, err := bc.GetBlockByHash(sideBranch.Hash())
+	if err != nil {
+		t.Fatalf("get side branch by hash: %v", err)
+	}
+	if foundSide.Hash() != sideBranch.Hash() {
+		t.Fatalf("expected side branch by hash, got %s", foundSide.Hash().Hex())
+	}
+
+	if got := bc.GetBlock(canonical.Header.Number.Uint64()); got == nil || got.Hash() != canonical.Hash() {
+		t.Fatalf("GetBlock returned non-canonical block after hash lookup: got %v want %s", blockHashForTest(got), canonical.Hash().Hex())
+	}
+
+	bc.cacheMu.Lock()
+	bc.blockByNumberCache.Add(canonical.Header.Number.Uint64(), sideBranch)
+	bc.cacheMu.Unlock()
+
+	if got := bc.GetBlock(canonical.Header.Number.Uint64()); got == nil || got.Hash() != canonical.Hash() {
+		t.Fatalf("GetBlock trusted polluted number cache: got %v want %s", blockHashForTest(got), canonical.Hash().Hex())
+	}
+}
+
+func blockHashForTest(blk *block.Block) string {
+	if blk == nil {
+		return "<nil>"
+	}
+	return blk.Hash().Hex()
+}
+
 func testForkChoiceBlock(height uint64, parent common.Hash, difficulty int64, timestamp uint64, extra string) *block.Block {
 	return &block.Block{
 		Header: &block.Header{
