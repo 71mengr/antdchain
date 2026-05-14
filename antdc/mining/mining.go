@@ -753,12 +753,9 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 		}
 
 		if p2pNode != nil {
-			if err := p2pNode.ResolveMiningTipConsensus(); err != nil {
-				if time.Since(lastSyncLog) > LogSyncStatusInterval {
-					log.Printf("[miner] Mining paused while connected peers resolve tip: %v", err)
-					lastSyncLog = time.Now()
-				}
-				continue
+			if err := p2pNode.ResolveMiningTipConsensus(); err != nil && time.Since(lastSyncLog) > LogSyncStatusInterval {
+				log.Printf("[miner] Continuing mining while peer tip consensus catches up: %v", err)
+				lastSyncLog = time.Now()
 			}
 		}
 
@@ -856,19 +853,14 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 		}
 		blk.Header.Root = stateRoot
 
-		if err := mineBlockWithTipWatch(bc, ms.powEngine, blk.Header, parent.Hash()); err != nil {
-			if errors.Is(err, context.Canceled) {
-				log.Printf("[miner] Tip changed while mining block %d; canceled candidate", height)
-				continue
-			}
+		if err := mineBlockProofOfWork(context.Background(), ms.powEngine, blk.Header); err != nil {
 			log.Printf("[miner] Proof-of-work failed for block %d: %v", height, err)
 			continue
 		}
 
 		currentTip = bc.Latest()
 		if currentTip == nil || currentTip.Hash() != parent.Hash() {
-			log.Printf("[miner] Tip changed while mining block %d; discarding candidate", height)
-			continue
+			log.Printf("[miner] Tip changed while mining block %d; submitting candidate to fork-choice", height)
 		}
 
 		if err := bc.AddBlock(blk); err != nil {

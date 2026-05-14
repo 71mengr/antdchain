@@ -6,6 +6,7 @@ package p2p
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -2730,14 +2731,13 @@ func (n *Node) ResolveMiningTipConsensus() error {
 			continue
 		}
 		divergedPeers++
-		n.logger.Warnf("Peer %s has weaker mining-tip hash at height %d: peer=%s superior=%s; rebroadcasting winner and pausing mining",
+		n.logger.Warnf("Peer %s has weaker mining-tip hash at height %d: peer=%s superior=%s; rebroadcasting winner without pausing mining",
 			pid.String()[:12], height, peerBlock.Hash().String()[:8], strongestHash.String()[:8])
 	}
 	if divergedPeers > 0 {
 		if err := n.BroadcastBlock(strongest); err != nil {
 			n.logger.Warnf("Failed to rebroadcast superior mining-tip block %d %s: %v", height, strongestHash.String()[:8], err)
 		}
-		return fmt.Errorf("waiting for %d connected peers to reorganize to mining-tip hash %s at height %d", divergedPeers, strongestHash.String(), height)
 	}
 
 	return nil
@@ -2771,6 +2771,12 @@ func (n *Node) selectProtocolBlock(local *block.Block, remote *block.Block, pare
 		return local, remote, nil
 	}
 
+	if cmp := compareP2PProofQuality(remote, local); cmp < 0 {
+		return remote, local, nil
+	} else if cmp > 0 {
+		return local, remote, nil
+	}
+
 	if remote.Header.Time < local.Header.Time {
 		return remote, local, nil
 	}
@@ -2778,10 +2784,26 @@ func (n *Node) selectProtocolBlock(local *block.Block, remote *block.Block, pare
 		return local, remote, nil
 	}
 
-	if strings.Compare(remote.Hash().String(), local.Hash().String()) < 0 {
+	if bytes.Compare(remote.Hash().Bytes(), local.Hash().Bytes()) < 0 {
 		return remote, local, nil
 	}
 	return local, remote, nil
+}
+
+func compareP2PProofQuality(a, b *block.Block) int {
+	aProof := p2pProofQualityHash(a)
+	bProof := p2pProofQualityHash(b)
+	return bytes.Compare(aProof[:], bProof[:])
+}
+
+func p2pProofQualityHash(b *block.Block) common.Hash {
+	if b == nil || b.Header == nil {
+		return common.Hash{}
+	}
+	if b.Header.MixDigest != (common.Hash{}) {
+		return b.Header.MixDigest
+	}
+	return b.Hash()
 }
 
 func (n *Node) processBlock(blk *block.Block) error {
@@ -2874,6 +2896,10 @@ func (n *Node) processBlock(blk *block.Block) error {
 			return nil // Duplicate
 		}
 
+		if err := n.validateMinedBlockProposal(blk); err != nil {
+			return err
+		}
+
 		parent := n.chain.GetBlock(num - 1)
 		chosen, orphan, err := n.selectProtocolBlock(existing, blk, parent)
 		if err != nil {
@@ -2891,9 +2917,6 @@ func (n *Node) processBlock(blk *block.Block) error {
 
 		n.logger.Warnf("Same-height fork at height %d (ours: %s, theirs: %s); comparing %d known mined candidates before chain fork-choice",
 			num, existing.Hash().String()[:8], hash.String()[:8], n.minedBlockCandidateCount(num))
-		if err := n.validateMinedBlockProposal(blk); err != nil {
-			return err
-		}
 		if err := n.chain.AddBlock(blk); err != nil {
 			n.rememberOrphanBlock(blk, fmt.Sprintf("selected fork rejected: %v", err))
 			return fmt.Errorf("fork block rejected at height %d: %w", num, err)

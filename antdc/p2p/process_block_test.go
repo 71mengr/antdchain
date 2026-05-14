@@ -30,6 +30,8 @@ func TestProcessBlockDefersSameHeightForkToChainForkChoice(t *testing.T) {
 	parentHash := parent.Hash()
 	existing := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("existing-miner")), 1778464378)
 	competitor := testP2PBlock(6, parentHash, common.BytesToQuantumAddress([]byte("fork-miner")), 1778464376)
+	existing.Header.MixDigest = testP2PProofHash(0x20)
+	competitor.Header.MixDigest = testP2PProofHash(0x20)
 
 	chain := &processBlockForkChoiceChain{
 		latest: existing,
@@ -100,6 +102,8 @@ func TestProcessBlockOrphansProtocolLoser(t *testing.T) {
 	parentHash := parent.Hash()
 	winner := testP2PBlock(8, parentHash, common.BytesToQuantumAddress([]byte("winner-miner")), 1778464376)
 	loser := testP2PBlock(8, parentHash, common.BytesToQuantumAddress([]byte("loser-miner")), 1778464380)
+	winner.Header.MixDigest = testP2PProofHash(0x20)
+	loser.Header.MixDigest = testP2PProofHash(0x20)
 
 	chain := &processBlockForkChoiceChain{
 		latest: winner,
@@ -493,4 +497,10 @@ func (c *processBlockForkChoiceChain) HasBlock(hash common.Hash) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.knownHashes[hash]
+}
+
+func testP2PProofHash(lastByte byte) common.Hash {
+	var h common.Hash
+	h[len(h)-1] = lastByte
+	return h
 }
