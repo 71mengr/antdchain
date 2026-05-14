@@ -574,6 +574,35 @@ func mineBlockProofOfWork(ctx context.Context, engine *pow.PoW, header *block.He
 	return nil
 }
 
+func mineBlockWithTipWatch(bc *chain.Blockchain, engine *pow.PoW, header *block.Header, parentHash common.Hash) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				tip := bc.Latest()
+				if tip == nil || tip.Hash() != parentHash {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	err := mineBlockProofOfWork(ctx, engine, header)
+	cancel()
+	<-done
+	return err
+}
+
 func broadcastMinedBlock(p *p2p.Node, blk *block.Block, ms *PosMiningState) {
 	if p == nil || blk == nil {
 		return
@@ -827,7 +856,11 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 		}
 		blk.Header.Root = stateRoot
 
-		if err := mineBlockProofOfWork(context.Background(), ms.powEngine, blk.Header); err != nil {
+		if err := mineBlockWithTipWatch(bc, ms.powEngine, blk.Header, parent.Hash()); err != nil {
+			if errors.Is(err, context.Canceled) {
+				log.Printf("[miner] Tip changed while mining block %d; canceled candidate", height)
+				continue
+			}
 			log.Printf("[miner] Proof-of-work failed for block %d: %v", height, err)
 			continue
 		}

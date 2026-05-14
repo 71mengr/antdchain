@@ -18,23 +18,28 @@ import (
 func TestSameHeightForkChoiceUsesDeterministicProtocolTieBreak(t *testing.T) {
 	parent := common.BytesToHash([]byte("parent"))
 	current := testForkChoiceBlock(30, parent, 1_000_000, 1778677890, "current")
+	current.Header.MixDigest = testProofHash(0x20)
 	laterEqualWork := testForkChoiceBlock(30, parent, 1_000_000, 1778677927, "later")
+	laterEqualWork.Header.MixDigest = testProofHash(0x20)
 
 	if isBetterBlockCandidate(laterEqualWork, current) {
 		t.Fatalf("expected later equal-work same-height fork to be rejected")
 	}
 
 	earlierEqualWork := testForkChoiceBlock(30, parent, 1_000_000, 1778677889, "earlier")
+	earlierEqualWork.Header.MixDigest = testProofHash(0x20)
 	if !isBetterBlockCandidate(earlierEqualWork, current) {
 		t.Fatalf("expected earlier equal-work same-height fork to be accepted")
 	}
 
 	heavier := testForkChoiceBlock(30, parent, 1_000_001, 1778677927, "heavier")
+	heavier.Header.MixDigest = testProofHash(0xff)
 	if !isBetterBlockCandidate(heavier, current) {
 		t.Fatalf("expected higher-work same-height fork to be accepted")
 	}
 
 	lighter := testForkChoiceBlock(30, parent, 999_999, 1778677889, "lighter")
+	lighter.Header.MixDigest = testProofHash(0x00)
 	if isBetterBlockCandidate(lighter, current) {
 		t.Fatalf("expected lower-work same-height fork to be rejected")
 	}
@@ -61,6 +66,24 @@ func TestSameHeightForkChoiceFallsBackToLowerHash(t *testing.T) {
 		t.Fatalf("expected higher-hash equal-work same-timestamp fork to be rejected")
 	}
 }
+
+func TestSameHeightForkChoicePrefersStrongerProofQuality(t *testing.T) {
+	parent := common.BytesToHash([]byte("parent"))
+	current := testForkChoiceBlock(32, parent, 1_000_000, 1778678200, "current")
+	current.Header.MixDigest = testProofHash(0x80)
+	strongerProof := testForkChoiceBlock(32, parent, 1_000_000, 1778678220, "stronger")
+	strongerProof.Header.MixDigest = testProofHash(0x01)
+	weakerProof := testForkChoiceBlock(32, parent, 1_000_000, 1778678190, "weaker")
+	weakerProof.Header.MixDigest = testProofHash(0xf0)
+
+	if !isBetterBlockCandidate(strongerProof, current) {
+		t.Fatalf("expected lower proof hash to beat later timestamp at same height")
+	}
+	if isBetterBlockCandidate(weakerProof, current) {
+		t.Fatalf("expected weaker proof to lose even with earlier timestamp")
+	}
+}
+
 func TestHashLookupDoesNotPolluteCanonicalNumberCache(t *testing.T) {
 	chainDB, err := db.NewChainDB(t.TempDir())
 	if err != nil {
@@ -142,4 +165,10 @@ func testForkChoiceBlock(height uint64, parent common.Hash, difficulty int64, ti
 			Extra:      []byte(extra),
 		},
 	}
+}
+
+func testProofHash(lastByte byte) common.Hash {
+	var h common.Hash
+	h[len(h)-1] = lastByte
+	return h
 }

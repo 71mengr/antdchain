@@ -68,12 +68,18 @@ func (bc *Blockchain) AddBlock(b *block.Block) error {
 	// retry while the in-memory canonical state is still behind it.  In that case
 	// we must still execute it so account balances/nonces advance in order.
 	if bc.HasBlock(blockHash) {
-		if blockHeight <= currentHeight {
-			log.Printf("[blockchain] Rejecting duplicate block: %s", blockHash.Hex()[:12])
+		canonicalAtHeight := bc.GetBlock(blockHeight)
+		if canonicalAtHeight != nil && canonicalAtHeight.Hash() == blockHash && blockHeight <= currentHeight {
+			log.Printf("[blockchain] Rejecting duplicate canonical block: %s", blockHash.Hex()[:12])
 			return fmt.Errorf("duplicate block %s", blockHash.Hex()[:12])
 		}
-		log.Printf("[blockchain] Processing previously stored future block: height=%d hash=%s current=%d",
-			blockHeight, blockHash.Hex()[:12], currentHeight)
+		if blockHeight <= currentHeight {
+			log.Printf("[blockchain] Re-evaluating stored side-branch block: height=%d hash=%s current=%d",
+				blockHeight, blockHash.Hex()[:12], currentHeight)
+		} else {
+			log.Printf("[blockchain] Processing previously stored future block: height=%d hash=%s current=%d",
+				blockHeight, blockHash.Hex()[:12], currentHeight)
+		}
 	}
 
 	// Reject if below current height (stale)
@@ -947,28 +953,54 @@ func isBetterBlockCandidate(newBlock, currentBlock *block.Block) bool {
 		return false
 	}
 
-	newDifficulty := new(big.Int)
-	if newBlock.Header.Difficulty != nil {
-		newDifficulty.Set(newBlock.Header.Difficulty)
-	}
-
-	currentDifficulty := new(big.Int)
-	if currentBlock.Header.Difficulty != nil {
-		currentDifficulty.Set(currentBlock.Header.Difficulty)
-	}
-
+	newDifficulty := normalizedDifficulty(newBlock.Header.Difficulty)
+	currentDifficulty := normalizedDifficulty(currentBlock.Header.Difficulty)
 	if cmp := newDifficulty.Cmp(currentDifficulty); cmp != 0 {
 		return cmp > 0
 	}
 
-	// Equal-work same-height forks still need a deterministic winner so peers
-	// converge when multiple miners produce competing blocks at the same height.
-	// Match the P2P protocol selection: earlier timestamp wins, then lower hash.
+	// Equal-difficulty same-height forks are expected when two miners solve the
+	// same parent concurrently.  Pick the block with the strongest proof first:
+	// a lower MixDigest means the miner found a rarer hash under the same target.
+	// That makes the tie-break depend on PoW quality instead of gossip order or
+	// wall-clock luck, while remaining deterministic on every peer.
+	if cmp := compareProofQuality(newBlock, currentBlock); cmp != 0 {
+		return cmp < 0
+	}
+
+	// If the proof quality is indistinguishable, converge with stable protocol
+	// tie-breakers.  Timestamp remains below proof quality so miners cannot win a
+	// race simply by choosing an older-but-valid clock value.
 	if newBlock.Header.Time != currentBlock.Header.Time {
 		return newBlock.Header.Time < currentBlock.Header.Time
 	}
 
+	// Final fallback: lower full block hash wins.  This is deterministic and also
+	// covers legacy/test blocks that do not carry a populated MixDigest.
 	newHash := newBlock.Hash()
 	currentHash := currentBlock.Hash()
 	return bytes.Compare(newHash[:], currentHash[:]) < 0
+}
+
+func normalizedDifficulty(diff *big.Int) *big.Int {
+	if diff == nil || diff.Sign() <= 0 {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(diff)
+}
+
+func compareProofQuality(a, b *block.Block) int {
+	aProof := proofQualityHash(a)
+	bProof := proofQualityHash(b)
+	return bytes.Compare(aProof[:], bProof[:])
+}
+
+func proofQualityHash(b *block.Block) common.Hash {
+	if b == nil || b.Header == nil {
+		return common.Hash{}
+	}
+	if b.Header.MixDigest != (common.Hash{}) {
+		return b.Header.MixDigest
+	}
+	return b.Hash()
 }
