@@ -322,6 +322,103 @@ func TestTwoNodesFindHeightAndBlock(t *testing.T) {
 	}
 }
 
+func TestSyncIfBehindReactivatesForHigherPeer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+
+	genesis := testP2PBlock(0, common.Hash{}, common.BytesToQuantumAddress([]byte("genesis-miner")), 1778464375)
+	block1 := testP2PBlock(1, genesis.Hash(), common.BytesToQuantumAddress([]byte("block-1-miner")), 1778464376)
+	block2 := testP2PBlock(2, block1.Hash(), common.BytesToQuantumAddress([]byte("block-2-miner")), 1778464377)
+	block3 := testP2PBlock(3, block2.Hash(), common.BytesToQuantumAddress([]byte("block-3-miner")), 1778464378)
+
+	lowPeerChain := &processBlockForkChoiceChain{
+		latest: block2,
+		blocksByHeight: map[uint64]*block.Block{
+			0: genesis,
+			1: block1,
+			2: block2,
+		},
+		knownHashes: map[common.Hash]bool{
+			genesis.Hash(): true,
+			block1.Hash():  true,
+			block2.Hash():  true,
+		},
+	}
+	highPeerChain := &processBlockForkChoiceChain{
+		latest: block3,
+		blocksByHeight: map[uint64]*block.Block{
+			0: genesis,
+			1: block1,
+			2: block2,
+			3: block3,
+		},
+		knownHashes: map[common.Hash]bool{
+			genesis.Hash(): true,
+			block1.Hash():  true,
+			block2.Hash():  true,
+			block3.Hash():  true,
+		},
+	}
+	requestingChain := &processBlockForkChoiceChain{
+		latest: block1,
+		blocksByHeight: map[uint64]*block.Block{
+			0: genesis,
+			1: block1,
+		},
+		knownHashes: map[common.Hash]bool{
+			genesis.Hash(): true,
+			block1.Hash():  true,
+		},
+	}
+
+	lowPeerHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create low peer host: %v", err)
+	}
+	defer lowPeerHost.Close()
+
+	highPeerHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create high peer host: %v", err)
+	}
+	defer highPeerHost.Close()
+
+	requestingHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create requesting host: %v", err)
+	}
+	defer requestingHost.Close()
+
+	lowPeerNode := &Node{host: lowPeerHost, chain: lowPeerChain, logger: logger, ctx: ctx}
+	highPeerNode := &Node{host: highPeerHost, chain: highPeerChain, logger: logger, ctx: ctx}
+	requestingNode := &Node{host: requestingHost, chain: requestingChain, logger: logger, ctx: ctx}
+	lowPeerHost.SetStreamHandler("/antdchain/sync/1.0.0", lowPeerNode.handleStream)
+	highPeerHost.SetStreamHandler("/antdchain/sync/1.0.0", highPeerNode.handleStream)
+
+	if err := requestingHost.Connect(ctx, peer.AddrInfo{ID: lowPeerHost.ID(), Addrs: lowPeerHost.Addrs()}); err != nil {
+		t.Fatalf("connect requesting node to low peer: %v", err)
+	}
+	if err := requestingHost.Connect(ctx, peer.AddrInfo{ID: highPeerHost.ID(), Addrs: highPeerHost.Addrs()}); err != nil {
+		t.Fatalf("connect requesting node to high peer: %v", err)
+	}
+
+	requestingNode.syncIfBehind(lowPeerHost.ID())
+
+	latest := requestingChain.Latest()
+	if latest == nil {
+		t.Fatal("expected requesting chain to sync, latest block is nil")
+	}
+	if got := latest.Header.Number.Uint64(); got != 3 {
+		t.Fatalf("expected reactivated sync to reach height 3, got %d", got)
+	}
+	if requestingChain.IsSyncing() {
+		t.Fatal("expected sync mode to stop after reactivated sync completed")
+	}
+}
+
 func TestTriggerImmediateSyncDoesNotPreMarkSyncing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -3071,6 +3071,9 @@ func (n *Node) syncIfBehind(pid peer.ID) {
 
 	if peerHeight <= localHeight {
 		n.logger.Debugf("Not behind peer %s (local=%d, peer=%d)", pid.String()[:12], localHeight, peerHeight)
+		if n.continueSyncWithHigherPeer(localHeight, pid) {
+			return
+		}
 		if n.chain.IsSyncing() {
 			n.chain.StopSync()
 		}
@@ -3114,9 +3117,61 @@ func (n *Node) syncIfBehind(pid peer.ID) {
 		} else {
 			n.logger.Info("Sync completed successfully")
 		}
+
+		if n.continueSyncWithHigherPeer(finalHeight, pid) {
+			return
+		}
 	} else {
 		n.logger.Warnf("Sync ended at %d but target was %d", finalHeight, peerHeight)
+		if n.continueSyncWithHigherPeer(finalHeight, pid) {
+			return
+		}
 	}
+}
+
+func (n *Node) continueSyncWithHigherPeer(localHeight uint64, exclude peer.ID) bool {
+	bestPeer := peer.ID("")
+	bestHeight := localHeight
+
+	for _, candidate := range n.Peers() {
+		if candidate == exclude {
+			continue
+		}
+
+		height, err := n.GetPeerHeight(candidate)
+		if err != nil {
+			continue
+		}
+		if height > bestHeight {
+			bestPeer = candidate
+			bestHeight = height
+		}
+	}
+
+	if bestPeer == "" {
+		return false
+	}
+
+	n.logger.Warnf("Reactivating sync with higher peer %s (local=%d, peer=%d)",
+		bestPeer.String()[:12], localHeight, bestHeight)
+	n.chain.StartSync(bestHeight)
+	if err := n.syncMissingBlocks(bestPeer, bestHeight); err != nil {
+		n.logger.Errorf("Reactivated sync failed with %s: %v", bestPeer.String()[:12], err)
+		if n.chain.IsSyncing() {
+			n.chain.StopSync()
+		}
+		return true
+	}
+
+	finalHeight := n.currentHeight()
+	if finalHeight >= bestHeight {
+		n.chain.StopSync()
+		n.logger.Infof("Reactivated sync completed successfully at height %d", finalHeight)
+		return true
+	}
+
+	n.logger.Warnf("Reactivated sync ended at %d but target was %d", finalHeight, bestHeight)
+	return true
 }
 
 func isDeterministicSyncValidationFailure(err error) bool {
