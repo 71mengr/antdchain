@@ -144,3 +144,23 @@ func TestAnyMinerCanMineAndVerifyBlock(t *testing.T) {
 		assert.True(t, engine.Verify(header))
 	}
 }
+
+func TestMineBlockReturnsWhenContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	engine := NewPoW()
+	header := &BlockHeader{
+		ParentHash: common.BytesToHash([]byte("parent")),
+		Coinbase:   common.BytesToQuantumAddress([]byte("miner")),
+		Root:       common.BytesToHash([]byte("root")),
+		TxHash:     common.BytesToHash([]byte("txs")),
+		Number:     1,
+		Difficulty: big.NewInt(MaxDifficulty),
+		Time:       1,
+		Extra:      []byte("ANTDChain-PoW"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, engine.MineBlock(ctx, header), context.Canceled)
+}
