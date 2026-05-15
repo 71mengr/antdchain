@@ -121,7 +121,8 @@ func NewHeader(
 		if baseDifficulty == nil {
 			baseDifficulty = big.NewInt(1)
 		}
-		difficulty = pow.CalculateDifficultyFromWindow(baseDifficulty, number.Uint64(), []uint64{maxUint64(1, currentTime-parent.Header.Time)})
+		baseDifficulty = pow.CalculateDifficultyFromWindow(baseDifficulty, number.Uint64(), []uint64{maxUint64(1, currentTime-parent.Header.Time)})
+		difficulty = pow.CalculateMinerDifficulty(baseDifficulty, coinbase)
 	} else {
 		// Fallback (testing or no engine) — default to 1
 		difficulty = big.NewInt(1)

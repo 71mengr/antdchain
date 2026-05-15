@@ -39,6 +39,33 @@ func TestCalculateDifficultyMovesEveryBlock(t *testing.T) {
 	}
 }
 
+func TestMinerSpecificDifficultyIsUniqueAtSameHeight(t *testing.T) {
+	base := CalculateDifficultyFromWindow(big.NewInt(BaseDifficulty), 5, []uint64{BlockTimeTarget})
+	minerA := common.BytesToQuantumAddress([]byte("miner-a"))
+	minerB := common.BytesToQuantumAddress([]byte("miner-b"))
+
+	diffA := CalculateMinerDifficulty(base, minerA)
+	diffB := CalculateMinerDifficulty(base, minerB)
+
+	assert.NotEqual(t, 0, diffA.Cmp(diffB))
+	assert.Equal(t, base, NormalizeDifficulty(diffA))
+	assert.Equal(t, base, NormalizeDifficulty(diffB))
+	assert.Equal(t, 0, TargetForDifficulty(diffA).Cmp(TargetForDifficulty(diffB)))
+}
+
+func TestCalculateExpectedDifficultyForMinerUsesMinerSuffix(t *testing.T) {
+	engine := NewPoW()
+	minerA := common.BytesToQuantumAddress([]byte("miner-a"))
+	minerB := common.BytesToQuantumAddress([]byte("miner-b"))
+
+	diffA := engine.CalculateExpectedDifficultyForMiner(5, 1000, 1000+BlockTimeTarget, minerA)
+	diffB := engine.CalculateExpectedDifficultyForMiner(5, 1000, 1000+BlockTimeTarget, minerB)
+
+	assert.NotEqual(t, 0, diffA.Cmp(diffB))
+	assert.Equal(t, engine.CalculateExpectedDifficulty(5, 1000, 1000+BlockTimeTarget), NormalizeDifficulty(diffA))
+	assert.Equal(t, engine.CalculateExpectedDifficulty(5, 1000, 1000+BlockTimeTarget), NormalizeDifficulty(diffB))
+}
+
 func TestAutoRegisterIfEligible(t *testing.T) {
 	engine := NewPoW()
 	addr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")

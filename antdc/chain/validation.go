@@ -345,7 +345,8 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 	}
 	window = append(window, delta)
 
-	return pow.CalculateDifficultyFromWindow(new(big.Int).Set(parent.Header.Difficulty), height, window)
+	baseDifficulty := pow.CalculateDifficultyFromWindow(new(big.Int).Set(parent.Header.Difficulty), height, window)
+	return pow.CalculateMinerDifficulty(baseDifficulty, b.Header.Coinbase)
 }
 
 // validateProofOfWork verifies the block nonce/mix digest satisfy the header difficulty.

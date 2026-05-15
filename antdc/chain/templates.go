@@ -86,11 +86,7 @@ func powHeaderFromBlockHeader(header *block.Header) (*pow.BlockHeader, error) {
 }
 
 func targetHexForDifficulty(difficulty *big.Int) string {
-	if difficulty == nil || difficulty.Sign() <= 0 {
-		difficulty = big.NewInt(pow.MinDifficulty)
-	}
-	maxTarget := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
-	target := new(big.Int).Div(maxTarget, difficulty)
+	target := pow.TargetForDifficulty(difficulty)
 	return fmt.Sprintf("%064x", target)
 }
 
