@@ -1583,7 +1583,6 @@ func (n *Node) connectToBootstrap(bootstrap []string) int {
 			}
 
 			n.logger.Infof("Connected to bootstrap node %s", ai.ID.String()[:8])
-			go n.syncIfBehind(ai.ID)
 			results <- ai.ID
 		}()
 	}
@@ -1798,34 +1797,12 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 		logger.Infof("  %s/p2p/%s", addr, h.ID())
 	}
 
-	// Initialize DHT if enabled
-	var dht *kd.IpfsDHT
-	if cfg.EnableDHT {
-		dht, err = kd.New(ctx, h,
-			kd.Mode(kd.ModeAutoServer),
-			kd.ProtocolPrefix(protocol.ID(fmt.Sprintf("/%s/kad/1.0.0", cfg.NetworkNamespace))),
-			kd.BootstrapPeers(parseBootstrapPeers(cfg.BootstrapPeers, logger)...),
-		)
-		if err != nil {
-			h.Close()
-			cancel()
-			return nil, fmt.Errorf("failed to create DHT: %w", err)
-		}
-
-		bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, 45*time.Second)
-		defer bootstrapCancel()
-
-		if err := dht.Bootstrap(bootstrapCtx); err != nil {
-			logger.Warnf("DHT bootstrap warning: %v", err)
-		} else {
-			logger.Info("DHT bootstrapped successfully")
-		}
-	}
-
-	// Create node instance
+	// Create node instance. DHT setup happens after bootstrap peers are connected so
+	// direct peer connectivity is established before any longer discovery/bootstrap
+	// work can delay startup block sync.
 	node := &Node{
 		host:            h,
-		dht:             dht,
+		dht:             nil,
 		chain:           bc,
 		logger:          logger,
 		ctx:             ctx,
@@ -1932,13 +1909,38 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	node.IntegrateBanManagerWithCheckpoints(cp)
 	node.logger.Infof("Checkpoints initialized with genesis hash: %s", genesisHash.String())
 
-	// Connect to bootstrap peers
+	// Connect to bootstrap peers before starting block download.
 	if len(cfg.BootstrapPeers) > 0 {
 		connected := node.connectToBootstrap(cfg.BootstrapPeers)
 		if connected > 0 {
 			logger.Infof("Connected to %d bootstrap peers", connected)
+			node.syncConnectedPeersNow()
 		} else {
 			logger.Warn("Failed to connect to any bootstrap peers")
+		}
+	}
+
+	// Initialize DHT only after bootstrap peers have had the first chance to connect
+	// and block sync has been triggered.
+	if cfg.EnableDHT {
+		dht, err := kd.New(ctx, h,
+			kd.Mode(kd.ModeAutoServer),
+			kd.ProtocolPrefix(protocol.ID(fmt.Sprintf("/%s/kad/1.0.0", cfg.NetworkNamespace))),
+			kd.BootstrapPeers(parseBootstrapPeers(cfg.BootstrapPeers, logger)...),
+		)
+		if err != nil {
+			node.Stop()
+			return nil, fmt.Errorf("failed to create DHT: %w", err)
+		}
+		node.dht = dht
+
+		bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, 45*time.Second)
+		defer bootstrapCancel()
+
+		if err := dht.Bootstrap(bootstrapCtx); err != nil {
+			logger.Warnf("DHT bootstrap warning: %v", err)
+		} else {
+			logger.Info("DHT bootstrapped successfully")
 		}
 	}
 
@@ -2052,13 +2054,25 @@ func (n *Node) Stop() {
 	n.logger.Info("P2P node stopped gracefully")
 }
 
+func (n *Node) syncConnectedPeersNow() {
+	peers := n.Peers()
+	if len(peers) == 0 {
+		return
+	}
+
+	n.logger.Infof("Triggering startup block sync after connecting %d peers", len(peers))
+	go n.forceInitialSync()
+}
+
 func (n *Node) SyncWithPeer(pid peer.ID) {
 	go n.syncIfBehind(pid)
 }
 
 func (n *Node) ForceBootstrap() {
 	if n.cfg.BootstrapPeers != nil {
-		n.connectToBootstrap(n.cfg.BootstrapPeers)
+		if n.connectToBootstrap(n.cfg.BootstrapPeers) > 0 {
+			n.syncConnectedPeersNow()
+		}
 	}
 }
 
