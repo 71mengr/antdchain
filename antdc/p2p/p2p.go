@@ -1919,7 +1919,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 
 	// Initialize checkpoints system before the node begins syncing.
 	checkpointsPath := filepath.Join(cfg.DataDir, "checkpoints.json")
-	genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+	genesisHash := common.HexToHash("0x2687ed48c4956ed1606de8bce5cb8b05a3a420df6eba0d654dab8ef33555c6d3")
 	cp, err := checkpoints.NewCheckpoints(cfg.DataDir, checkpointsPath, genesisHash)
 	if err != nil {
 		node.Stop()

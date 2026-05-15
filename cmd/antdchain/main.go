@@ -182,7 +182,7 @@ var CheckpointCommands = &cli.Command{
 				}
 
 				// Get actual genesis hash
-				genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+				genesisHash := common.HexToHash("0x2687ed48c4956ed1606de8bce5cb8b05a3a420df6eba0d654dab8ef33555c6d3")
 
 				err := checkpoints.CreateSampleConfig(configPath, genesisHash)
 				if err != nil {
@@ -207,7 +207,7 @@ var CheckpointCommands = &cli.Command{
 				checkpointDir := filepath.Join(dataDir, "checkpoints")
 				configPath := filepath.Join(dataDir, "checkpoints.json")
 
-				genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+				genesisHash := common.HexToHash("0x2687ed48c4956ed1606de8bce5cb8b05a3a420df6eba0d654dab8ef33555c6d3")
 
 				cp, err := checkpoints.NewCheckpoints(checkpointDir, configPath, genesisHash)
 				if err != nil {
@@ -255,7 +255,7 @@ var CheckpointCommands = &cli.Command{
 				checkpointDir := filepath.Join(dataDir, "checkpoints")
 				configPath := filepath.Join(dataDir, "checkpoints.json")
 
-				genesisHash := common.HexToHash("0xc78fbaf000cc0023fcb2cef07f0fa8aa35ccc437279510d803306f60447fcb09")
+				genesisHash := common.HexToHash("0x2687ed48c4956ed1606de8bce5cb8b05a3a420df6eba0d654dab8ef33555c6d3")
 
 				cp, err := checkpoints.NewCheckpoints(checkpointDir, configPath, genesisHash)
 				if err != nil {
