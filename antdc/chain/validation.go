@@ -396,7 +396,11 @@ func (bc *Blockchain) validateTransactionRoot(b *block.Block) error {
 
 // validateBlockSignature verifies the PoS block signature
 func (bc *Blockchain) validateBlockSignature(b *block.Block) error {
-	sig := extractSignatureFromBlock(b)
+	if b == nil || b.Header == nil {
+		return errors.New("nil block or header")
+	}
+
+	sig := b.Header.Signature
 	if len(sig) == 0 {
 		return errors.New("missing PoS signature")
 	}

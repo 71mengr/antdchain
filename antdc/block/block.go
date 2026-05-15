@@ -62,6 +62,7 @@ type Header struct {
 	GasUsed     uint64                `json:"gasUsed"`
 	Time        uint64                `json:"timestamp"`
 	Extra       []byte                `json:"extraData"`
+	Signature   []byte                `json:"signature,omitempty"`
 	MixDigest   common.Hash           `json:"mixHash"`
 	Nonce       BlockNonce            `json:"nonce"`
 	Version     uint32                `json:"version"`
@@ -376,6 +377,16 @@ func (h *Header) Hash() common.Hash {
 	binary.BigEndian.PutUint64(buf, uint64(len(extra)))
 	data = append(data, buf...)
 	data = append(data, extra...)
+
+	// Block signature with length prefix. Signatures are stored separately from
+	// Extra so quantum signatures do not consume the metadata budget.
+	signature := h.Signature
+	if signature == nil {
+		signature = []byte{}
+	}
+	binary.BigEndian.PutUint64(buf, uint64(len(signature)))
+	data = append(data, buf...)
+	data = append(data, signature...)
 
 	// PoW fields
 	data = append(data, h.MixDigest[:]...)
@@ -693,6 +704,7 @@ func (b *Block) Size() int {
 	size += 8               // GasUsed
 	size += 8               // Time
 	size += len(b.Header.Extra)
+	size += len(b.Header.Signature)
 	size += 32 // MixDigest
 	size += 8  // Nonce
 

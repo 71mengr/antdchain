@@ -834,16 +834,13 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 			continue
 		}
 
-		if len(signature) > 0 {
-			sigMarker := []byte("|SIG|")
-			extraData := blk.Header.GetExtraData()
-			extraData = append(extraData, sigMarker...)
-			extraData = append(extraData, signature...)
-			if err := blk.Header.SetExtraData(extraData); err != nil {
-				log.Printf("[miner] Invalid signed block extra data: %v", err)
-				continue
-			}
+		extraData := blk.Header.GetExtraData()
+		if len(extraData) > block.MaxExtraDataSize {
+			log.Printf("[miner] Invalid block extra data size: %d > %d", len(extraData), block.MaxExtraDataSize)
+			continue
 		}
+
+		blk.Header.Signature = append([]byte(nil), signature...)
 
 		blk.Header.Difficulty = bc.CalculateExpectedDifficultyForBlock(blk, parent)
 		stateRoot, err := bc.ComputeBlockFinalStateRoot(

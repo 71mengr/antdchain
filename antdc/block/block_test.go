@@ -111,3 +111,22 @@ func TestNewHeaderRejectsMissingParentHeaderForDifficulty(t *testing.T) {
 		t.Fatal("expected missing parent header to fail")
 	}
 }
+
+func TestHeaderHashIncludesSignature(t *testing.T) {
+	header := &Header{
+		Number:     big.NewInt(1),
+		GasLimit:   1,
+		Time:       uint64(time.Now().Unix()),
+		Difficulty: big.NewInt(1),
+		Extra:      []byte("metadata"),
+		Signature:  []byte("signature-a"),
+	}
+
+	hashA := header.Hash()
+	header.Signature = []byte("signature-b")
+	hashB := header.Hash()
+
+	if hashA == hashB {
+		t.Fatal("expected header hash to change when signature changes")
+	}
+}
