@@ -505,25 +505,31 @@ func (ms *PosMiningState) waitForPendingBlock(bc *chain.Blockchain, height uint6
 		return false
 	}
 
-	log.Printf("[miner] �� Pending block at height %d – waiting up to %v for it to arrive",
+	log.Printf("[miner] ⏳ Pending block at height %d – waiting up to %v for it to arrive",
 		height, ms.pendingBlockTimeout)
 
-	deadline := time.Now().Add(ms.pendingBlockTimeout)
+	timer := time.NewTimer(ms.pendingBlockTimeout)
+	defer timer.Stop()
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
-	for time.Now().Before(deadline) {
-		<-ticker.C
-		if bc.GetBlock(height) != nil {
-			log.Printf("[miner] ✅ Pending block at height %d was added – skipping own mining", height)
+	for ms.IsMining() {
+		select {
+		case <-timer.C:
+			log.Printf("[miner] ⏰ Timeout waiting for pending block at height %d – proceeding to mine", height)
 			ms.clearPendingHeight(height)
-			return true
+			return false
+		case <-ticker.C:
+			if bc.GetBlock(height) != nil {
+				log.Printf("[miner] ✅ Pending block at height %d was added – skipping own mining", height)
+				ms.clearPendingHeight(height)
+				return true
+			}
 		}
 	}
 
-	log.Printf("[miner] ⏰ Timeout waiting for pending block at height %d – proceeding to mine", height)
-	ms.clearPendingHeight(height)
-	return false
+	log.Printf("[miner] Mining stopped while waiting for pending block at height %d", height)
+	return true
 }
 
 func generateBlockSignature(miner common.QuantumAddress, parentHash common.Hash, height uint64, timestamp uint64, privateKey []byte) ([]byte, error) {
@@ -575,7 +581,7 @@ func mineBlockProofOfWork(ctx context.Context, engine *pow.PoW, header *block.He
 	return nil
 }
 
-func mineBlockWithTipWatch(bc *chain.Blockchain, engine *pow.PoW, header *block.Header, parentHash common.Hash) error {
+func mineBlockWithMiningWatch(bc *chain.Blockchain, ms *PosMiningState, engine *pow.PoW, header *block.Header, parentHash common.Hash) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -589,6 +595,10 @@ func mineBlockWithTipWatch(bc *chain.Blockchain, engine *pow.PoW, header *block.
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if ms != nil && !ms.IsMining() {
+					cancel()
+					return
+				}
 				tip := bc.Latest()
 				if tip == nil || tip.Hash() != parentHash {
 					cancel()
@@ -714,7 +724,28 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 	ms.mu.RUnlock()
 
 	jitter := time.Duration(rand.Int63n(int64(miningInterval / 2)))
-	time.Sleep(jitter)
+	if jitter > 0 {
+		timer := time.NewTimer(jitter)
+		stopCheck := time.NewTicker(100 * time.Millisecond)
+		for waiting := true; waiting; {
+			if !ms.IsMining() {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				stopCheck.Stop()
+				return
+			}
+			select {
+			case <-timer.C:
+				waiting = false
+			case <-stopCheck.C:
+			}
+		}
+		stopCheck.Stop()
+	}
 	log.Printf("[miner] Mining loop started – base interval %v + jitter %v", miningInterval, jitter)
 
 	ticker := time.NewTicker(miningInterval)
@@ -727,14 +758,22 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 	)
 
 	go func() {
-		for ms.mining {
+		for ms.IsMining() {
 			miningSessionDuration.Set(time.Since(sessionStartTime).Seconds())
 			time.Sleep(1 * time.Second)
 		}
 	}()
 
-	for ms.mining {
-		<-ticker.C
+	for ms.IsMining() {
+		select {
+		case <-ticker.C:
+		default:
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if !ms.IsMining() {
+			break
+		}
 
 		if err := networkReadyForMining(bc, p2pNode); err != nil {
 			if time.Since(lastSyncLog) > LogSyncStatusInterval {
@@ -856,7 +895,15 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 		}
 		blk.Header.Root = stateRoot
 
-		if err := mineBlockProofOfWork(context.Background(), ms.powEngine, blk.Header); err != nil {
+		if err := mineBlockWithMiningWatch(bc, ms, ms.powEngine, blk.Header, parent.Hash()); err != nil {
+			if errors.Is(err, context.Canceled) && !ms.IsMining() {
+				log.Printf("[miner] Proof-of-work canceled for block %d because mining stopped", height)
+				break
+			}
+			if errors.Is(err, context.Canceled) {
+				log.Printf("[miner] Proof-of-work canceled for block %d because the tip changed", height)
+				continue
+			}
 			log.Printf("[miner] Proof-of-work failed for block %d: %v", height, err)
 			continue
 		}
@@ -906,21 +953,17 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 
 // StartPowMining starts the mining loop
 func StartPowMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr common.QuantumAddress, p2pNode *p2p.Node, mempoolTxns []*TxEntry) {
-	if bc == nil || rewardAddr == (common.QuantumAddress{}) || state.powEngine == nil {
+	if bc == nil || state == nil || rewardAddr == (common.QuantumAddress{}) || state.powEngine == nil {
 		log.Println("[miner] Missing required components")
 		return
 	}
-	if !state.enabled {
+	if !state.IsEnabled() {
 		log.Println("[miner] Mining disabled")
 		return
 	}
-	if err := networkReadyForMining(bc, p2pNode); err != nil {
-		log.Printf("[miner] Mining not started: %v", err)
+	if state.IsMining() {
+		log.Println("[miner] Mining already running")
 		return
-	}
-	if state.mining {
-		state.mining = false
-		time.Sleep(200 * time.Millisecond)
 	}
 	if err := state.SetMinerAddress(rewardAddr); err != nil {
 		log.Printf("[miner] Cannot set miner address: %v", err)
@@ -928,7 +971,7 @@ func StartPowMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
 	}
 
 	log.Printf("[miner] Starting PoW mining checks for %s", rewardAddr.String()[:12])
-	state.mining = true
+	state.SetMining(true)
 	log.Printf("[miner] PoW Mining STARTED → %s", rewardAddr.String())
 
 	go miningLoop(bc, state, p2pNode, mempoolTxns)
@@ -937,7 +980,7 @@ func StartPowMining(bc *chain.Blockchain, state *PosMiningState, rewardAddr comm
 // StopMining stops mining
 func StopMining(state *PosMiningState) {
 	if state != nil {
-		state.mining = false
+		state.SetMining(false)
 		log.Println("[miner] Mining STOPPED")
 	}
 }
@@ -963,10 +1006,29 @@ func max(a, b uint64) uint64 {
 }
 
 // Existing methods for compatibility
-func (ms *PosMiningState) IsMining() bool    { return ms.mining }
-func (ms *PosMiningState) IsEnabled() bool   { return ms.enabled }
-func (ms *PosMiningState) SetEnabled(v bool) { ms.enabled = v }
-func (ms *PosMiningState) SetMining(v bool)  { ms.mining = v }
+func (ms *PosMiningState) IsMining() bool {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return ms.mining
+}
+
+func (ms *PosMiningState) IsEnabled() bool {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	return ms.enabled
+}
+
+func (ms *PosMiningState) SetEnabled(v bool) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	ms.enabled = v
+}
+
+func (ms *PosMiningState) SetMining(v bool) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	ms.mining = v
+}
 
 func (ms *PosMiningState) SetMiningInterval(interval time.Duration) {
 	ms.mu.Lock()
