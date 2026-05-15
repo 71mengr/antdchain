@@ -51,6 +51,18 @@ import (
 var _ rotatingking.P2PBroadcaster = (*Node)(nil)
 
 const (
+	msgTypeBlock             = 0x01
+	msgTypeTx                = 0x02
+	msgTypeKingRotation      = 0x03
+	msgTypeKingListUpdate    = 0x04
+	msgTypeDBSyncRequest     = 0x05 // Request database sync
+	msgTypeDBSyncResponse    = 0x06 // Database sync response
+	msgTypeDBSyncStatus      = 0x07 // Database status
+	msgTypeDBSyncAnnounce    = 0x08 // Database sync announcement
+	msgTypeKingConfig        = 0x09
+	msgTypeKingConfigRequest = 0x27
+	orphanBlockTTL           = 2 * time.Minute
+
 	MaxBlocksPerPeerPerSec = 50
 	MaxTxPerPeerPerSecond  = 100
 	MaxTxPerPeerBurst      = 500
