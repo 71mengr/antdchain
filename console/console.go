@@ -37,6 +37,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/mining"
 	"github.com/antdaza/antdchain/antdc/monitoring"
 	"github.com/antdaza/antdchain/antdc/p2p"
+	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
 	"github.com/antdaza/antdchain/antdc/staking"
@@ -3317,7 +3318,7 @@ func (c *Console) handleGetBlockInfo(parts []string) {
 	fmt.Printf("  Hash: %s\n", blk.Hash().String())
 	fmt.Printf("  Timestamp: %d\n", blk.Header.Time)
 	if blk.Header.Difficulty != nil {
-		fmt.Printf("  Difficulty: %s\n", blk.Header.Difficulty.String())
+		fmt.Printf("  Difficulty: %s\n", pow.NormalizeDifficulty(blk.Header.Difficulty).String())
 	}
 	fmt.Printf("  Gas Used: %d / %d\n", blk.Header.GasUsed, blk.Header.GasLimit)
 	fmt.Printf("  Transactions: %d\n", len(blk.Txs))
