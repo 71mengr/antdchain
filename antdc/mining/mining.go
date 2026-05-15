@@ -380,6 +380,7 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 	// Create header using NewHeader
 	stateRoot := common.Hash{}
 	txRoot := block.CalculateTxHash(ba.template.Block.Txs)
+	extraData := ba.blockExtraData()
 
 	header, err := block.NewHeader(
 		prevBlock,
@@ -389,6 +390,7 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 		new(big.Int).SetUint64(ba.height),
 		prevBlock.Header.GasLimit,
 		ba.chainstate.GetPoWEngine(),
+		extraData,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create header: %w", err)
@@ -396,7 +398,6 @@ func (ba *BlockAssembler) CreateNewBlock(coinbaseAddr common.QuantumAddress, mem
 
 	header.Version = 1
 	header.GasUsed = 0
-	header.Extra = ba.blockExtraData()
 	if err := chain.ApplyProtocolHeaderFields(header); err != nil {
 		return nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
 	}
@@ -835,8 +836,13 @@ func miningLoop(bc *chain.Blockchain, ms *PosMiningState, p2pNode *p2p.Node, mem
 
 		if len(signature) > 0 {
 			sigMarker := []byte("|SIG|")
-			blk.Header.Extra = append(blk.Header.Extra, sigMarker...)
-			blk.Header.Extra = append(blk.Header.Extra, signature...)
+			extraData := blk.Header.GetExtraData()
+			extraData = append(extraData, sigMarker...)
+			extraData = append(extraData, signature...)
+			if err := blk.Header.SetExtraData(extraData); err != nil {
+				log.Printf("[miner] Invalid signed block extra data: %v", err)
+				continue
+			}
 		}
 
 		blk.Header.Difficulty = bc.CalculateExpectedDifficultyForBlock(blk, parent)

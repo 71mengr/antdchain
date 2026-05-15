@@ -79,7 +79,7 @@ func powHeaderFromBlockHeader(header *block.Header) (*pow.BlockHeader, error) {
 		Number:     header.Number.Uint64(),
 		Difficulty: difficulty,
 		Time:       header.Time,
-		Extra:      append([]byte(nil), header.Extra...),
+		Extra:      header.GetExtraData(),
 		Nonce:      [8]byte(header.Nonce),
 		MixDigest:  header.MixDigest,
 	}, nil
@@ -158,7 +158,9 @@ func (bc *Blockchain) GenerateBlockTemplate(rewardAddr common.QuantumAddress) (*
 		GasLimit:   parent.Header.GasLimit,
 		GasUsed:    0,
 		Time:       now,
-		Extra:      extraData,
+	}
+	if err := header.SetExtraData(extraData); err != nil {
+		return nil, fmt.Errorf("failed to set block header extra data: %w", err)
 	}
 	header.Difficulty = bc.calculateExpectedDifficultyFromChainState(&block.Block{Header: header}, parent)
 	if header.GasLimit == 0 {
@@ -358,8 +360,10 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 		Number:     new(big.Int).Add(parent.Header.Number, big.NewInt(1)),
 		GasLimit:   10_000_000,
 		Time:       currentTime,
-		Extra:      extraData,
 		Stakers:    bc.blockHeaderStakerRegistrations(),
+	}
+	if err := header.SetExtraData(extraData); err != nil {
+		return nil, nil, fmt.Errorf("failed to set block header extra data: %w", err)
 	}
 	header.Difficulty = bc.calculateExpectedDifficultyFromChainState(
 		&block.Block{Header: header},
@@ -427,14 +431,18 @@ func (bc *Blockchain) computeBlockFinalStateRoot(view headerMinerBlockView, txs 
 		return common.Hash{}, errors.New("reward distributor not initialized")
 	}
 
+	simHeader := &block.Header{
+		Coinbase: view.miner,
+		Number:   new(big.Int).SetUint64(view.blockNum),
+		Time:     view.blockTime,
+	}
+	if err := simHeader.SetExtraData(view.extra); err != nil {
+		return common.Hash{}, fmt.Errorf("failed to set simulated block header extra data: %w", err)
+	}
+
 	simBlock := &block.Block{
-		Header: &block.Header{
-			Coinbase: view.miner,
-			Number:   new(big.Int).SetUint64(view.blockNum),
-			Time:     view.blockTime,
-			Extra:    view.extra,
-		},
-		Txs: txs,
+		Header: simHeader,
+		Txs:    txs,
 	}
 
 	totalFees := big.NewInt(0)

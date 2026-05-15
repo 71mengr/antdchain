@@ -206,6 +206,10 @@ func (bc *Blockchain) validateBasicBlockIntegrity(b *block.Block, parent *block.
 		return errors.New("genesis block cannot be validated")
 	}
 
+	if err := block.ValidateExtraDataSize(b.Header.Extra); err != nil {
+		return fmt.Errorf("invalid block header extra data: %w", err)
+	}
+
 	if blockHeight != parentHeight+1 {
 		return fmt.Errorf("invalid block height: expected %d, got %d",
 			parentHeight+1, blockHeight)

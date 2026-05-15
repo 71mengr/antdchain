@@ -7,10 +7,13 @@ package chain
 import (
 	"bytes"
 	"math/big"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/antdaza/antdchain/antdc/block"
 	"github.com/antdaza/antdchain/antdc/chain/db"
+	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/common"
 	"github.com/hashicorp/golang-lru"
 )
@@ -81,6 +84,22 @@ func TestSameHeightForkChoicePrefersStrongerProofQuality(t *testing.T) {
 	}
 	if isBetterBlockCandidate(weakerProof, current) {
 		t.Fatalf("expected weaker proof to lose even with earlier timestamp")
+	}
+}
+
+func TestValidateBasicBlockIntegrityRejectsOversizedExtraData(t *testing.T) {
+	parentTime := uint64(time.Now().Unix()) - uint64(2*pow.TargetBlockTimeSeconds)
+	parent := testForkChoiceBlock(40, common.BytesToHash([]byte("grandparent")), 1_000_000, parentTime, "parent")
+	child := testForkChoiceBlock(41, parent.Hash(), 1_000_000, parentTime+uint64(pow.TargetBlockTimeSeconds), "child")
+	child.Header.Extra = make([]byte, block.MaxExtraDataSize+1)
+
+	bc := &Blockchain{}
+	err := bc.validateBasicBlockIntegrity(child, parent)
+	if err == nil {
+		t.Fatal("expected oversized extra data to fail basic block validation")
+	}
+	if !strings.Contains(err.Error(), "extra data too large") {
+		t.Fatalf("expected extra data size error, got %v", err)
 	}
 }
 

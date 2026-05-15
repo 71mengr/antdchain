@@ -22,12 +22,14 @@ import (
 
 // Constants for block validation
 const (
-	MaxBlockSize         = 8 * 1024 * 1024            // 8MB maximum block size
+	MaxBlockSize         = 8 << 20                    // 8MB maximum block size
 	MaxTransactions      = 10000                      // Maximum transactions per block
 	MaxUncles            = 2                          // Maximum uncle blocks
+	MaxExtraDataSize     = 256                        // Maximum block header extra data size in bytes
+	BloomByteLength      = 1 << 8                     // Bloom filter length: 256 bytes
 	BlockTimeTarget      = pow.TargetBlockTimeSeconds // 3 minute target block time
 	FutureBlockThreshold = 30                         // Reject blocks more than 30 seconds in future
-	DifficultyAdjustment = 1024                       // Difficulty adjustment divisor
+	DifficultyAdjustment = 1 << 10                    // Difficulty adjustment divisor
 )
 
 var (
@@ -94,6 +96,7 @@ func NewHeader(
 	number *big.Int,
 	gasLimit uint64,
 	powEngine *pow.PoW,
+	extraData []byte,
 ) (*Header, error) {
 
 	if number == nil {
@@ -142,17 +145,20 @@ func NewHeader(
 		Coinbase:   coinbase,
 		Root:       root,
 		TxHash:     txHash,
-		TxRoot:     txHash,            // compatibility field
-		Bloom:      make([]byte, 256), // empty bloom filter
+		TxRoot:     txHash,                        // compatibility field
+		Bloom:      make([]byte, BloomByteLength), // empty bloom filter
 		Difficulty: difficulty,
 		Number:     new(big.Int).Set(number),
 		GasLimit:   gasLimit,
 		GasUsed:    0,
 		Time:       currentTime,
-		Extra:      []byte("ANTDChain"),
 		MixDigest:  common.Hash{},
 		Nonce:      BlockNonce{},
 		Version:    1,
+	}
+
+	if err := header.SetExtraData(extraData); err != nil {
+		return nil, err
 	}
 
 	// Genesis block special handling
@@ -170,6 +176,70 @@ func maxUint64(a, b uint64) uint64 {
 		return a
 	}
 	return b
+}
+
+// validateExtraDataContent rejects low-information extra data patterns.
+func validateExtraDataContent(extra []byte) error {
+	if len(extra) == 0 {
+		return nil
+	}
+
+	first := extra[0]
+	for _, b := range extra[1:] {
+		if b != first {
+			return nil
+		}
+	}
+
+	if first == 0x00 {
+		return errors.New("extra data cannot be an all-zero pattern")
+	}
+	if first == 0xff {
+		return errors.New("extra data cannot be an all-0xff pattern")
+	}
+	if len(extra) > 1 {
+		return fmt.Errorf("extra data cannot be a repeating single-byte pattern: 0x%02x", first)
+	}
+
+	return nil
+}
+
+// ValidateExtraDataSize enforces the consensus limit for block header extra data.
+func ValidateExtraDataSize(extra []byte) error {
+	if len(extra) > MaxExtraDataSize {
+		return fmt.Errorf("extra data too large: %d > %d", len(extra), MaxExtraDataSize)
+	}
+	if err := validateExtraDataContent(extra); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// SetExtraData validates and defensively copies block header extra data.
+func (h *Header) SetExtraData(data []byte) error {
+	if h == nil {
+		return errors.New("header is nil")
+	}
+	if err := ValidateExtraDataSize(data); err != nil {
+		return err
+	}
+	if data == nil {
+		h.Extra = nil
+		return nil
+	}
+
+	h.Extra = append([]byte(nil), data...)
+	return nil
+}
+
+// GetExtraData returns a defensive copy of block header extra data.
+func (h *Header) GetExtraData() []byte {
+	if h == nil || h.Extra == nil {
+		return nil
+	}
+
+	return append([]byte(nil), h.Extra...)
 }
 
 // Validate performs basic header validation
@@ -219,9 +289,12 @@ func (h *Header) Validate(parent *Header) error {
 		return ErrInvalidDifficulty
 	}
 
-	// Validate extra data size (prevent spam)
-	if len(h.Extra) > 1024 {
-		return errors.New("extra data too large")
+	// Validate extra data size and content (prevent spam)
+	if len(h.Extra) > MaxExtraDataSize {
+		return fmt.Errorf("extra data too large: %d > %d", len(h.Extra), MaxExtraDataSize)
+	}
+	if err := validateExtraDataContent(h.Extra); err != nil {
+		return err
 	}
 
 	return nil
@@ -256,7 +329,7 @@ func (h *Header) Hash() common.Hash {
 	hasher := common.ComputeHash
 
 	// Write all header fields in consistent order
-	data := make([]byte, 0, 1024)
+	data := make([]byte, 0, MaxExtraDataSize)
 	data = append(data, h.ParentHash[:]...)
 	data = append(data, h.UncleHash[:]...)
 	data = append(data, h.Coinbase.Bytes()...)
@@ -265,11 +338,11 @@ func (h *Header) Hash() common.Hash {
 	data = append(data, h.ReceiptHash[:]...)
 
 	// Bloom filter must be serialized as fixed 256 bytes.
-	bloomBytes := make([]byte, 256)
+	bloomBytes := make([]byte, BloomByteLength)
 	if len(h.Bloom) > 0 {
 		copyLen := len(h.Bloom)
-		if copyLen > 256 {
-			copyLen = 256
+		if copyLen > BloomByteLength {
+			copyLen = BloomByteLength
 		}
 		copy(bloomBytes, h.Bloom[:copyLen])
 	}
@@ -604,18 +677,18 @@ func (b *Block) Size() int {
 	size := 0
 
 	// Header components
-	size += 32  // ParentHash
-	size += 32  // UncleHash
-	size += 20  // Coinbase (quantum address payload)
-	size += 32  // Root
-	size += 32  // TxHash
-	size += 32  // ReceiptHash
-	size += 256 // Bloom (fixed 256 bytes)
-	size += 32  // Difficulty
-	size += 32  // Number
-	size += 8   // GasLimit
-	size += 8   // GasUsed
-	size += 8   // Time
+	size += 32              // ParentHash
+	size += 32              // UncleHash
+	size += 20              // Coinbase (quantum address payload)
+	size += 32              // Root
+	size += 32              // TxHash
+	size += 32              // ReceiptHash
+	size += BloomByteLength // Bloom (fixed 256 bytes)
+	size += 32              // Difficulty
+	size += 32              // Number
+	size += 8               // GasLimit
+	size += 8               // GasUsed
+	size += 8               // Time
 	size += len(b.Header.Extra)
 	size += 32 // MixDigest
 	size += 8  // Nonce
@@ -682,35 +755,46 @@ func (n *BlockNonce) UnmarshalText(text []byte) error {
 // Custom JSON unmarshal for Header
 func (h *Header) UnmarshalJSON(data []byte) error {
 	type Alias Header
+	var alias Alias
 	aux := &struct {
 		Number     interface{} `json:"number"`
 		Difficulty interface{} `json:"difficulty"`
 		Nonce      string      `json:"nonce"`
 		*Alias
 	}{
-		Alias: (*Alias)(h),
+		Alias: &alias,
 	}
 
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 
-	if err := h.Nonce.UnmarshalText([]byte(aux.Nonce)); err != nil {
+	var nonce BlockNonce
+	if err := nonce.UnmarshalText([]byte(aux.Nonce)); err != nil {
 		return fmt.Errorf("invalid nonce: %w", err)
 	}
+	alias.Nonce = nonce
 
 	if num, err := parseBigInt(aux.Number); err != nil {
 		return fmt.Errorf("invalid number: %w", err)
 	} else {
-		h.Number = num
+		alias.Number = num
 	}
 
 	if diff, err := parseBigInt(aux.Difficulty); err != nil {
 		return fmt.Errorf("invalid difficulty: %w", err)
 	} else {
-		h.Difficulty = diff
+		alias.Difficulty = diff
 	}
 
+	if len(alias.Extra) > MaxExtraDataSize {
+		return fmt.Errorf("extra data too large: %d > %d", len(alias.Extra), MaxExtraDataSize)
+	}
+	if err := validateExtraDataContent(alias.Extra); err != nil {
+		return fmt.Errorf("invalid extra data: %w", err)
+	}
+
+	*h = Header(alias)
 	h.SyncRoots()
 	return nil
 }

@@ -66,6 +66,7 @@ common.Hash{}, // no txs
 big.NewInt(0), // block 0
 GenesisGasLimit,
 pow.NewPoW(), // pass PoS engine for consistency
+[]byte(GenesisExtraData),
 )
 if err != nil {
 return nil, fmt.Errorf("failed to create genesis header: %w", err)
@@ -73,14 +74,13 @@ return nil, fmt.Errorf("failed to create genesis header: %w", err)
 
 header.Time = GenesisTimestamp
 header.Difficulty = big.NewInt(GenesisDifficulty)
-header.Extra = []byte(GenesisExtraData)
 header.ParentHash = common.Hash{} // explicit zero
 // Ensure other fields are properly set
 header.UncleHash = common.Hash{}
 header.ReceiptHash = common.Hash{}
 header.MixDigest = common.Hash{}
 header.Nonce = block.BlockNonce{}
-header.Bloom = make([]byte, 256) // Empty bloom filter
+header.Bloom = make([]byte, block.BloomByteLength) // Empty bloom filter
 if err := applyProtocolHeaderFields(header); err != nil {
 return nil, fmt.Errorf("failed to apply protocol header fields: %w", err)
 }
