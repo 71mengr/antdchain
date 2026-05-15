@@ -162,20 +162,6 @@ type minedBlockProposalValidator interface {
 	ValidateMinedBlockProposal(*block.Block) error
 }
 
-const (
-	MaxTxPerPeerPerSecond  = 50
-	MaxTxPerPeerBurst      = 200
-	MaxBlocksPerPeerPerSec = 10
-	DefaultMaxPeers        = 100
-	MaxDirectPushBytes     = 4 << 20
-	MaxConfigStreamBytes   = 64 << 10
-	MaxSyncResponseBytes   = 16 << 20
-	MaxConnsPerPeer        = 3
-	DBSyncPeerTimeout      = 15 * time.Second
-	DBSyncMaxPeersPerAttempt = 3
-	DefaultNetworkNamespace = "antdchain"
-)
-
 type Config struct {
 	DataDir           string        // Directory for persistent data
 	Port              int           // P2P listening port
