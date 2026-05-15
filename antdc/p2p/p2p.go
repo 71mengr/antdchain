@@ -65,24 +65,26 @@ const (
 )
 
 type DBSyncRequest struct {
-	RequestID   string `json:"requestId"`
-	FromHeight  uint64 `json:"fromHeight"`
-	ToHeight    uint64 `json:"toHeight"`
-	RequestType string `json:"requestType"` // "full", "incremental", "metadata", "config"
-	Timestamp   int64  `json:"timestamp"`
-	PeerID      string `json:"peerId"`
+	RequestID    string `json:"requestId"`
+	FromHeight   uint64 `json:"fromHeight"`
+	ToHeight     uint64 `json:"toHeight"`
+	RequestType  string `json:"requestType"` // "full", "incremental", "metadata", "config"
+	Timestamp    int64  `json:"timestamp"`
+	PeerID       string `json:"peerId"`
+	TargetPeerID string `json:"targetPeerId,omitempty"`
 }
 
 type DBSyncResponse struct {
-	RequestID   string                           `json:"requestId"`
-	Status      string                           `json:"status"` // "success", "partial", "error"
-	Rotations   []rotatingking.KingRotation      `json:"rotations,omitempty"`
-	Config      *rotatingking.RotatingKingConfig `json:"config,omitempty"` // ADD THIS LINE
-	LatestBlock uint64                           `json:"latestBlock"`
-	SyncState   *rotatingking.SyncState          `json:"syncState,omitempty"`
-	Timestamp   int64                            `json:"timestamp"`
-	Error       string                           `json:"error,omitempty"`
-	PeerID      string                           `json:"peerId"` // Who is responding
+	RequestID    string                           `json:"requestId"`
+	Status       string                           `json:"status"` // "success", "partial", "error"
+	Rotations    []rotatingking.KingRotation      `json:"rotations,omitempty"`
+	Config       *rotatingking.RotatingKingConfig `json:"config,omitempty"` // ADD THIS LINE
+	LatestBlock  uint64                           `json:"latestBlock"`
+	SyncState    *rotatingking.SyncState          `json:"syncState,omitempty"`
+	Timestamp    int64                            `json:"timestamp"`
+	Error        string                           `json:"error,omitempty"`
+	PeerID       string                           `json:"peerId"` // Who is responding
+	TargetPeerID string                           `json:"targetPeerId,omitempty"`
 }
 
 type DBSyncStatus struct {
@@ -158,6 +160,8 @@ const (
 	MaxConfigStreamBytes   = 64 << 10
 	MaxSyncResponseBytes   = 16 << 20
 	MaxConnsPerPeer        = 3
+	DBSyncPeerTimeout      = 15 * time.Second
+	DBSyncMaxPeersPerAttempt = 3
 	DefaultNetworkNamespace = "antdchain"
 )
 
@@ -3632,6 +3636,10 @@ func (n *Node) handleDBSyncRequest(msg *pubsub.Message) {
 		return
 	}
 
+	if req.TargetPeerID != "" && req.TargetPeerID != n.host.ID().String() {
+		return
+	}
+
 	if req.RequestType == "config" {
 		n.handleConfigSyncRequest(&req, msg.GetFrom())
 		return
@@ -3674,10 +3682,11 @@ func (n *Node) processDBSyncRequest(req *DBSyncRequest, requester peer.ID) {
 
 	// Initialize response variable FIRST
 	response := DBSyncResponse{
-		RequestID:   req.RequestID,
-		Timestamp:   time.Now().Unix(),
-		LatestBlock: n.currentHeight(),
-		PeerID:      n.host.ID().String(),
+		RequestID:    req.RequestID,
+		Timestamp:    time.Now().Unix(),
+		LatestBlock:  n.currentHeight(),
+		PeerID:       n.host.ID().String(),
+		TargetPeerID: req.PeerID,
 		Status:      "success", // Default status
 	}
 
@@ -3744,6 +3753,13 @@ func (n *Node) processDBSyncRequest(req *DBSyncRequest, requester peer.ID) {
 		response.Error = "database access not available"
 	}
 
+	if response.Status == "success" && maxHeight < req.ToHeight {
+		response.Status = "partial"
+	}
+	if response.Status == "success" || response.Status == "partial" {
+		response.LatestBlock = maxHeight
+	}
+
 	// Send response
 	n.sendDBSyncResponse(requester, response)
 
@@ -3763,6 +3779,27 @@ func (n *Node) handleDBSyncResponse(msg *pubsub.Message) {
 	if err := json.Unmarshal(msg.Data[1:], &resp); err != nil {
 		n.logger.Warnf("Failed to unmarshal DB sync response: %v", err)
 		return
+	}
+
+	if resp.TargetPeerID != "" && resp.TargetPeerID != n.host.ID().String() {
+		return
+	}
+
+	if resp.PeerID == "" {
+		resp.PeerID = msg.GetFrom().String()
+	}
+
+	n.dbSyncMu.Lock()
+	n.dbSyncResponses[resp.RequestID] = &resp
+	n.pruneDBSyncCacheLocked(time.Now().Add(-10 * time.Minute).Unix())
+	n.dbSyncMu.Unlock()
+
+	if len(resp.Rotations) > 0 {
+		n.processReceivedRotations(resp.Rotations, resp.PeerID)
+	}
+
+	if (resp.Status == "success" || resp.Status == "partial") && resp.LatestBlock > 0 {
+		n.markDBSyncHeight(resp.LatestBlock)
 	}
 
 	// If response contains configuration
@@ -3853,10 +3890,20 @@ func (n *Node) periodicDBSync() {
 
 // Syncs database with connected peers
 func (n *Node) performDBSyncWithPeers() {
+	n.dbSyncMu.Lock()
 	if n.isDBSyncing {
+		n.dbSyncMu.Unlock()
 		n.logger.Debug("Database sync already in progress, skipping")
 		return
 	}
+	n.isDBSyncing = true
+	n.dbSyncMu.Unlock()
+	defer func() {
+		n.dbSyncMu.Lock()
+		n.isDBSyncing = false
+		n.currentSyncPeer = ""
+		n.dbSyncMu.Unlock()
+	}()
 
 	peers := n.Peers()
 	if len(peers) == 0 {
@@ -3893,15 +3940,14 @@ func (n *Node) performDBSyncWithPeers() {
 		return
 	}
 
-	// Find the best peer to sync from
-	bestPeer := n.selectBestSyncPeer()
-	if bestPeer == "" {
+	syncPeers := n.selectSyncPeers(DBSyncMaxPeersPerAttempt)
+	if len(syncPeers) == 0 {
 		n.logger.Debug("No suitable peer found for database sync")
 		return
 	}
 
-	n.logger.Infof("🔄 Syncing database from peer %s (current height: %d, db synced to: %d)",
-		bestPeer[:8], currentBlockHeight,
+	n.logger.Infof("�� Syncing database from %d candidate peer(s) (current height: %d, db synced to: %d)",
+		len(syncPeers), currentBlockHeight,
 		func() uint64 {
 			if ourSyncState != nil {
 				return ourSyncState.LastSyncedBlock
@@ -3909,71 +3955,73 @@ func (n *Node) performDBSyncWithPeers() {
 			return 0
 		}())
 
-	// Start sync with best peer
-	n.startDBSyncWithPeer(bestPeer, ourSyncState, currentBlockHeight)
-}
-
-// Selects the best peer to sync from
-func (n *Node) selectBestSyncPeer() string {
-	n.dbSyncMu.RLock()
-	defer n.dbSyncMu.RUnlock()
-
-	var bestPeer string
-	var bestHeight uint64
-
-	for peerID, status := range n.dbSyncPeers {
-		// Skip if peer is syncing (they might be behind)
-		if status.IsSyncing {
-			continue
-		}
-
-		// Skip if version mismatch
-		if status.Version != n.dbSyncVersion {
-			continue
-		}
-
-		// Choose peer with highest last synced block
-		if status.LastSyncedBlock > bestHeight {
-			bestHeight = status.LastSyncedBlock
-			bestPeer = peerID
+	for _, syncPeer := range syncPeers {
+		if n.startDBSyncWithPeer(syncPeer, ourSyncState, currentBlockHeight) {
+			return
 		}
 	}
 
-	return bestPeer
+	n.logger.Warnf("DB sync did not receive a usable response from %d candidate peer(s)", len(syncPeers))
 }
 
-// Starts database sync with a specific peer
-func (n *Node) startDBSyncWithPeer(peerID string, ourState *rotatingking.SyncState, currentBlockHeight uint64) {
+// Selects database sync peers, preferring peers that have advertised the highest synced height.
+func (n *Node) selectSyncPeers(limit int) []string {
+	n.dbSyncMu.RLock()
+	defer n.dbSyncMu.RUnlock()
+
+	type candidate struct {
+		peerID string
+		height uint64
+	}
+
+	candidates := make([]candidate, 0, len(n.dbSyncPeers))
+	for peerID, status := range n.dbSyncPeers {
+		if status == nil || status.IsSyncing || status.Version != n.dbSyncVersion {
+			continue
+		}
+		candidates = append(candidates, candidate{peerID: peerID, height: status.LastSyncedBlock})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].height > candidates[j].height
+	})
+
+	if limit <= 0 || limit > len(candidates) {
+		limit = len(candidates)
+	}
+
+	peers := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		peers = append(peers, candidates[i].peerID)
+	}
+	return peers
+}
+
+// Starts database sync with a specific peer.
+func (n *Node) startDBSyncWithPeer(peerID string, ourState *rotatingking.SyncState, currentBlockHeight uint64) bool {
 	n.dbSyncMu.Lock()
-	n.isDBSyncing = true
 	n.currentSyncPeer = peerID
 	n.dbSyncMetrics.SyncAttempts++
 	n.dbSyncMu.Unlock()
 
-	defer func() {
-		n.dbSyncMu.Lock()
-		n.isDBSyncing = false
-		n.currentSyncPeer = ""
-		n.dbSyncMu.Unlock()
-	}()
-
 	// Convert string peerID to peer.ID
 	pid, err := peer.Decode(peerID)
 	if err != nil {
-		n.logger.Warnf("Invalid peer ID %s: %v", peerID[:8], err)
-		return
+		n.logger.Warnf("Invalid peer ID %s: %v", shortID(peerID), err)
+		return false
 	}
 
 	// Create request
 	requestID := fmt.Sprintf("db-sync-%s-%d", n.host.ID().String()[:8], time.Now().UnixNano())
 
 	req := DBSyncRequest{
-		RequestID:   requestID,
-		FromHeight:  0,
-		ToHeight:    currentBlockHeight, // Sync to current blockchain height
-		RequestType: "incremental",
-		Timestamp:   time.Now().Unix(),
-		PeerID:      n.host.ID().String(),
+		RequestID:    requestID,
+		FromHeight:   0,
+		ToHeight:     currentBlockHeight, // Sync to current blockchain height
+		RequestType:  "incremental",
+		Timestamp:    time.Now().Unix(),
+		PeerID:       n.host.ID().String(),
+		TargetPeerID: pid.String(),
 	}
 
 	// If we have a sync state, request from where we left off
@@ -3984,7 +4032,7 @@ func (n *Node) startDBSyncWithPeer(peerID string, ourState *rotatingking.SyncSta
 	// Don't request if we're already caught up
 	if req.FromHeight > req.ToHeight {
 		n.logger.Debugf("Database already synced to height %d", req.ToHeight)
-		return
+		return true
 	}
 
 	n.logger.Infof("📥 Requesting DB sync from peer %s: blocks %d-%d",
@@ -3994,15 +4042,16 @@ func (n *Node) startDBSyncWithPeer(peerID string, ourState *rotatingking.SyncSta
 	n.sendDBSyncRequest(pid, req)
 
 	// Wait for response with timeout
-	if err := n.waitForDBSyncResponse(requestID, 30*time.Second); err != nil {
+	resp, err := n.waitForDBSyncResponse(requestID, DBSyncPeerTimeout)
+	if err != nil {
 		n.logger.Warnf("❌ DB sync timeout with peer %s: %v", pid.String()[:8], err)
 		n.dbSyncMu.Lock()
 		n.dbSyncMetrics.FailedSyncs++
 		n.dbSyncMu.Unlock()
-
-		// Try another peer
-		n.tryNextSyncPeer(peerID, ourState, currentBlockHeight)
-		return
+		return false
+	}
+	if resp != nil && resp.Status == "partial" {
+		n.logger.Debugf("DB sync peer %s returned a partial batch through block %d", pid.String()[:8], resp.LatestBlock)
 	}
 
 	n.dbSyncMu.Lock()
@@ -4010,28 +4059,18 @@ func (n *Node) startDBSyncWithPeer(peerID string, ourState *rotatingking.SyncSta
 	n.lastDBSyncTime = time.Now()
 	n.dbSyncMu.Unlock()
 
+	syncedTo := req.ToHeight
+	if resp != nil && resp.LatestBlock > 0 && resp.LatestBlock < syncedTo {
+		syncedTo = resp.LatestBlock
+	}
+
 	n.logger.Infof("✅ Database sync completed with peer %s up to block %d",
-		pid.String()[:8], req.ToHeight)
-}
-
-func (n *Node) tryNextSyncPeer(excludedPeer string, ourState *rotatingking.SyncState, currentBlockHeight uint64) {
-	n.dbSyncMu.RLock()
-	peers := make([]string, 0, len(n.dbSyncPeers))
-	for peerID := range n.dbSyncPeers {
-		if peerID != excludedPeer {
-			peers = append(peers, peerID)
-		}
-	}
-	n.dbSyncMu.RUnlock()
-
-	if len(peers) > 0 {
-		n.logger.Debugf("Trying next peer: %s", peers[0][:8])
-		n.startDBSyncWithPeer(peers[0], ourState, currentBlockHeight)
-	}
+		pid.String()[:8], syncedTo)
+	return true
 }
 
 // Wait for a database sync response
-func (n *Node) waitForDBSyncResponse(requestID string, timeout time.Duration) error {
+func (n *Node) waitForDBSyncResponse(requestID string, timeout time.Duration) (*DBSyncResponse, error) {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
@@ -4040,20 +4079,27 @@ func (n *Node) waitForDBSyncResponse(requestID string, timeout time.Duration) er
 		n.dbSyncMu.RUnlock()
 
 		if exists {
-			if resp.Status == "success" {
-				return nil
+			if resp.Status == "success" || resp.Status == "partial" {
+				return resp, nil
 			}
-			return fmt.Errorf("sync failed: %s", resp.Error)
+			return resp, fmt.Errorf("sync failed: %s", resp.Error)
 		}
 
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	return fmt.Errorf("timeout waiting for response")
+	return nil, fmt.Errorf("timeout waiting for response")
 }
 
 // Sends a database sync request via pubsub
 func (n *Node) sendDBSyncRequest(peerID peer.ID, req DBSyncRequest) {
+	if n.dbSyncTopic == nil {
+		n.logger.Warn("Cannot send DB sync request: topic not initialized")
+		return
+	}
+	if req.TargetPeerID == "" && peerID != "" {
+		req.TargetPeerID = peerID.String()
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		n.logger.Warnf("Failed to marshal DB sync request: %v", err)
@@ -4071,6 +4117,13 @@ func (n *Node) sendDBSyncRequest(peerID peer.ID, req DBSyncRequest) {
 
 // Sends a database sync response via pubsub
 func (n *Node) sendDBSyncResponse(peerID peer.ID, resp DBSyncResponse) {
+	if n.dbSyncTopic == nil {
+		n.logger.Warn("Cannot send DB sync response: topic not initialized")
+		return
+	}
+	if resp.TargetPeerID == "" && peerID != "" {
+		resp.TargetPeerID = peerID.String()
+	}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		n.logger.Warnf("Failed to marshal DB sync response: %v", err)
@@ -4088,11 +4141,12 @@ func (n *Node) sendDBSyncResponse(peerID peer.ID, resp DBSyncResponse) {
 
 func (n *Node) sendDBSyncErrorResponse(peerID peer.ID, requestID string, errorMsg string) {
 	resp := DBSyncResponse{
-		RequestID: requestID,
-		Status:    "error",
-		Error:     errorMsg,
-		Timestamp: time.Now().Unix(),
-		PeerID:    n.host.ID().String(),
+		RequestID:    requestID,
+		Status:       "error",
+		Error:        errorMsg,
+		Timestamp:    time.Now().Unix(),
+		PeerID:       n.host.ID().String(),
+		TargetPeerID: peerID.String(),
 	}
 	n.sendDBSyncResponse(peerID, resp)
 }
@@ -4191,6 +4245,56 @@ func (n *Node) processReceivedRotations(rotations []rotatingking.KingRotation, s
 	n.dbSyncMu.Lock()
 	n.dbSyncMetrics.TotalRotations += processed
 	n.dbSyncMu.Unlock()
+}
+
+func (n *Node) markDBSyncHeight(height uint64) {
+	currentHeight := n.currentHeight()
+	if height > currentHeight {
+		height = currentHeight
+	}
+	if height == 0 {
+		return
+	}
+
+	n.processMu.Lock()
+	mgr := n.chain.GetRotatingKingManager()
+	n.processMu.Unlock()
+	if mgr == nil {
+		return
+	}
+
+	if manager, ok := mgr.(interface {
+		GetSyncState() (*rotatingking.SyncState, error)
+		SaveSyncState(*rotatingking.SyncState) error
+	}); ok {
+		syncState, err := manager.GetSyncState()
+		if err == nil && syncState != nil && syncState.LastSyncedBlock >= height {
+			return
+		}
+
+		state := &rotatingking.SyncState{
+			LastSyncedBlock: height,
+			LastSyncTime:    time.Now(),
+			SyncProgress:    1.0,
+			TotalBlocks:     currentHeight,
+		}
+		if err := manager.SaveSyncState(state); err != nil {
+			n.logger.Debugf("Failed to update DB sync height to %d: %v", height, err)
+		}
+	}
+}
+
+func (n *Node) pruneDBSyncCacheLocked(beforeUnix int64) {
+	for requestID, req := range n.dbSyncRequests {
+		if req.Timestamp < beforeUnix {
+			delete(n.dbSyncRequests, requestID)
+		}
+	}
+	for requestID, resp := range n.dbSyncResponses {
+		if resp.Timestamp < beforeUnix {
+			delete(n.dbSyncResponses, requestID)
+		}
+	}
 }
 
 // Returns current database sync status
@@ -5207,6 +5311,13 @@ func getKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 func (n *Node) DebugKingConfiguration() {
