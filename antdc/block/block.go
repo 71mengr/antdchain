@@ -111,6 +111,15 @@ func NewHeader(
 		return nil, errors.New("gas limit cannot be zero")
 	}
 
+	if number.Sign() != 0 {
+		if parent == nil {
+			return nil, errors.New("parent block required for non-genesis block")
+		}
+		if parent.Header == nil {
+			return nil, errors.New("parent header required for non-genesis block")
+		}
+	}
+
 	currentTime := uint64(time.Now().Unix())
 
 	// Determine difficulty
@@ -118,14 +127,17 @@ func NewHeader(
 	if number.Sign() == 0 {
 		// Genesis block — fixed difficulty
 		difficulty = big.NewInt(1)
-	} else if powEngine != nil && parent != nil {
-		// Normal block — use parent difficulty as base for deterministic chain-wide difficulty calculation
-		baseDifficulty := parent.Header.Difficulty
-		if baseDifficulty == nil {
-			baseDifficulty = big.NewInt(1)
-		}
-		baseDifficulty = pow.CalculateDifficultyFromWindow(baseDifficulty, number.Uint64(), []uint64{maxUint64(1, currentTime-parent.Header.Time)})
-		difficulty = pow.CalculateMinerDifficulty(baseDifficulty, coinbase)
+	} else if powEngine != nil {
+		// Normal block — use the same PoW engine path as mining templates for
+		// deterministic base difficulty, then append the miner-specific suffix so
+		// miners building competing blocks at the same height do not share the same
+		// full header difficulty.
+		difficulty = powEngine.CalculateExpectedDifficultyForMiner(
+			number.Uint64(),
+			parent.Header.Time,
+			currentTime,
+			coinbase,
+		)
 	} else {
 		// Fallback (testing or no engine) — default to 1
 		difficulty = big.NewInt(1)
@@ -135,8 +147,6 @@ func NewHeader(
 	var parentHash common.Hash
 	if parent != nil {
 		parentHash = parent.Hash()
-	} else if number.Sign() != 0 {
-		return nil, errors.New("parent block required for non-genesis block")
 	}
 
 	header := &Header{
@@ -169,13 +179,6 @@ func NewHeader(
 	}
 
 	return header, nil
-}
-
-func maxUint64(a, b uint64) uint64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // validateExtraDataContent rejects low-information extra data patterns.

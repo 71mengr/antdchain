@@ -30,6 +30,14 @@ func TestCalculateExpectedDifficultyBootstrapHeight(t *testing.T) {
 	assert.Equal(t, big.NewInt(BaseDifficulty*4), diff)
 }
 
+func TestCalculateExpectedDifficultyHandlesNonIncreasingTime(t *testing.T) {
+	engine := NewPoW()
+
+	diff := engine.CalculateExpectedDifficulty(1, 1000, 1000)
+
+	assert.Equal(t, CalculateDifficultyFromWindow(big.NewInt(BaseDifficulty), 1, []uint64{1}), diff)
+}
+
 func TestCalculateDifficultyMovesEveryBlock(t *testing.T) {
 	difficulty := big.NewInt(BaseDifficulty)
 	for height := uint64(1); height <= 5; height++ {

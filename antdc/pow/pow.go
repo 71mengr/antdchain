@@ -137,10 +137,7 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
 	defer p.mu.RUnlock()
 
 	window := append([]uint64(nil), p.blockTimes...)
-	delta := currentTime - parentTime
-	if delta == 0 {
-		delta = 1
-	}
+	delta := elapsedBlockTime(parentTime, currentTime)
 	window = append(window, delta)
 	if len(window) > DifficultyAdjustment {
 		window = window[1:]
@@ -202,10 +199,7 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 	defer p.mu.Unlock()
 
 	// Record block time for moving average
-	delta := currentTime - parentTime
-	if delta == 0 {
-		delta = 1
-	}
+	delta := elapsedBlockTime(parentTime, currentTime)
 	p.blockTimes = append(p.blockTimes, delta)
 	if len(p.blockTimes) > DifficultyAdjustment {
 		p.blockTimes = p.blockTimes[1:]
@@ -231,6 +225,13 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 		height, adjusted.String(), avg)
 
 	return adjusted
+}
+
+func elapsedBlockTime(parentTime, currentTime uint64) uint64 {
+	if currentTime <= parentTime {
+		return 1
+	}
+	return currentTime - parentTime
 }
 
 func computeAdjustedDifficulty(current *big.Int, height uint64, blockTimes []uint64) *big.Int {
