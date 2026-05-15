@@ -51,17 +51,28 @@ import (
 var _ rotatingking.P2PBroadcaster = (*Node)(nil)
 
 const (
-	msgTypeBlock             = 0x01
-	msgTypeTx                = 0x02
-	msgTypeKingRotation      = 0x03
-	msgTypeKingListUpdate    = 0x04
-	msgTypeDBSyncRequest     = 0x05 // NEW: Request database sync
-	msgTypeDBSyncResponse    = 0x06 // NEW: Database sync response
-	msgTypeDBSyncStatus      = 0x07 // NEW: Database status
-	msgTypeDBSyncAnnounce    = 0x08 // NEW: Database sync announcement
-	msgTypeKingConfig        = 0x09
-	msgTypeKingConfigRequest = iota + 30
-	orphanBlockTTL           = 2 * time.Minute
+	MaxBlocksPerPeerPerSec = 50
+	MaxTxPerPeerPerSecond  = 100
+	MaxTxPerPeerBurst      = 500
+	
+	// FASTER DISCOVERY
+	DefaultMaxPeers        = 100
+	MaxDirectPushBytes     = 4 << 20
+	MaxConfigStreamBytes   = 64 << 10
+	MaxSyncResponseBytes   = 16 << 20
+	MaxConnsPerPeer        = 3
+	DBSyncPeerTimeout      = 15 * time.Second
+	DBSyncMaxPeersPerAttempt = 3
+	DefaultNetworkNamespace = "antdchain"
+	
+	// ULTRA-FAST SYNC INTERVALS
+	FastSyncCheckInterval   = 2 * time.Second  
+	PeriodicSyncInterval    = 15 * time.Second
+	ConfigCheckInterval     = 10 * time.Second
+	
+	// BLOCK ANNOUNCEMENT PRIORITY
+	MinedBlockAnnouncePriority = true // Direct push immediately
+	BlockAnnounceRetries       = 3    // Retry failed announces
 )
 
 type DBSyncRequest struct {
@@ -581,7 +592,7 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 	}
 
 	// Validate block hash
-	if b.Hash() != b.Header.Hash() { // ← Fixed: use .Hash() not .ComputeHash()
+	if b.Hash() != b.Header.Hash() {
 		return errors.New("invalid block: hash mismatch")
 	}
 
@@ -594,8 +605,6 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 			n.logger.Warnf("Checkpoint rejected block %d: %v", b.Header.Number.Uint64(), err)
 			return fmt.Errorf("checkpoint validation failed: %w", err)
 		}
-	} else {
-		n.logger.Debug("Checkpoint manager not available, skipping validation")
 	}
 
 	data, err := json.Marshal(b)
@@ -607,15 +616,19 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 	msg[0] = msgTypeBlock
 	copy(msg[1:], data)
 
-	publishCtx, cancel := context.WithTimeout(n.ctx, 5*time.Second)
+	// OPTIMIZATION: Publish with shorter timeout for faster propagation
+	publishCtx, cancel := context.WithTimeout(n.ctx, 2*time.Second) // Reduced from 5s
 	defer cancel()
+	
 	if err := n.topic.Publish(publishCtx, msg); err != nil {
-		return fmt.Errorf("gossipsub publish failed: %w", err)
+		n.logger.Warnf("GossipSub publish failed: %v", err)
+		// Don't fail - still try direct push
 	}
 
-	go n.directPushBlock(b, msg)
+	// Immediate direct push to all peers (don't wait for gossip)
+	go n.directPushBlockWithRetry(b, msg, BlockAnnounceRetries)
 
-	n.logger.Infof("BLOCK BROADCAST #%d | hash=%s | txs=%d | size=%d KB",
+	n.logger.Infof("�� BLOCK BROADCAST #%d | hash=%s | txs=%d | size=%d KB | pushed to peers",
 		b.Header.Number.Uint64(),
 		b.Hash().String()[:12],
 		len(b.Txs),
@@ -623,6 +636,20 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 	)
 
 	return nil
+}
+
+func (n *Node) directPushBlockWithRetry(b *block.Block, msg []byte, retries int) {
+	for i := 0; i < retries; i++ {
+		count := n.directPushMessage(msg, 50) // Push to up to 50 peers immediately
+		if count > 0 {
+			n.logger.Debugf("Direct-pushed block %d to %d peers (attempt %d/%d)",
+				b.Header.Number.Uint64(), count, i+1, retries)
+			return
+		}
+		if i < retries-1 {
+			time.Sleep(50 * time.Millisecond) // Short delay before retry
+		}
+	}
 }
 
 // directPushBlock sends block directly to recent peers.
@@ -643,37 +670,68 @@ func (n *Node) directPushTx(t *tx.Tx, msg []byte) {
 	}
 }
 
-// directPushMessage sends a pre-encoded network message over the direct push
-// stream protocol and returns the number of peers that accepted the write.
 func (n *Node) directPushMessage(msg []byte, limit int) int {
 	if n == nil || n.host == nil || n.ctx == nil {
 		return 0
 	}
+	
 	peers := n.host.Network().Peers()
-	count := 0
-	for _, pid := range peers {
-		if count >= limit {
-			break
-		}
+	if len(peers) == 0 {
+		return 0
+	}
+	
+	// Limit peers to push to
+	if limit > len(peers) {
+		limit = len(peers)
+	}
+	
+	// Use worker pool for parallel direct pushes
+	type pushResult struct {
+		success bool
+	}
+	
+	results := make(chan pushResult, limit)
+	var wg sync.WaitGroup
+	
+	for i := 0; i < limit && i < len(peers); i++ {
+		pid := peers[i]
 		if pid == n.host.ID() {
 			continue
 		}
-
-		ctx, cancel := context.WithTimeout(n.ctx, 3*time.Second)
-		s, err := n.host.NewStream(ctx, pid, n.protocolID("direct"))
-		cancel()
-		if err != nil {
-			continue
-		}
-
-		if _, err := s.Write(msg); err != nil {
-			s.Close()
-			continue
-		}
-		s.Close()
+		
+		wg.Add(1)
+		go func(p peer.ID) {
+			defer wg.Done()
+			
+			// Shorter timeout for faster propagation
+			ctx, cancel := context.WithTimeout(n.ctx, 1*time.Second) // Reduced from 3s
+			defer cancel()
+			
+			s, err := n.host.NewStream(ctx, p, n.protocolID("direct"))
+			if err != nil {
+				results <- pushResult{success: false}
+				return
+			}
+			defer s.Close()
+			
+			if _, err := s.Write(msg); err != nil {
+				results <- pushResult{success: false}
+				return
+			}
+			results <- pushResult{success: true}
+		}(pid)
+	}
+	
+	// Wait for all pushes to complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	
+	count := 0
+	for range results {
 		count++
 	}
-
 	return count
 }
 
@@ -849,23 +907,21 @@ func (n *Node) handleMessages() {
 			continue
 		}
 
-		// ===== ADD ENHANCED BAN CHECK HERE =====
+		// Ban check
 		if n.banManager != nil {
 			shouldBan, violation, cpViolation := n.banManager.CheckMessageWithCheckpoints(msg, msg.Data[0])
 			if shouldBan {
 				n.banManager.RecordViolation(msg.GetFrom(), violation, cpViolation)
-				continue // Skip processing banned peer's message
+				continue
 			}
 		}
-		// ===== END ENHANCED BAN CHECK =====
 
 		switch msg.Data[0] {
 		case msgTypeKingConfigRequest:
-			n.logger.Infof("Received king config request from %s - broadcasting our config", msg.GetFrom().String()[:8])
+			n.logger.Infof("Received king config request from %s", msg.GetFrom().String()[:8])
 			n.BroadcastCurrentKingConfig()
 
 		case msgTypeKingListUpdate:
-			n.logger.Info("Received king list update event")
 			if len(msg.Data) < 100 {
 				continue
 			}
@@ -884,54 +940,12 @@ func (n *Node) handleMessages() {
 			if mgr != nil {
 				currentList := mgr.GetKingAddresses()
 				mergedList := n.mergeAddressLists(currentList, event.NewList)
-
-				// Never shrink local knowledge from a single remote update; only merge.
-				if len(mergedList) == len(currentList) && n.areAddressListsEqual(currentList, mergedList) {
-					n.logger.Debug("Received king list update is subset/identical - no changes applied")
-					n.processMu.Unlock()
-					continue
-				}
-
-				if err := mgr.UpdateKingAddresses(mergedList); err != nil {
-					n.logger.Warnf("Failed to apply king list update: %v", err)
-				} else {
-					n.logger.Infof("King list updated via P2P (%d -> %d addresses)", len(currentList), len(mergedList))
-				}
-			}
-			n.processMu.Unlock()
-
-		case msgTypeKingRotation:
-			if len(msg.Data) < 100 {
-				continue
-			}
-			if !n.allowEventFromPeer(msg.GetFrom()) {
-				continue
-			}
-			var event KingRotationEvent
-			if err := json.Unmarshal(msg.Data[1:], &event); err != nil {
-				n.logger.Warnf("Failed to unmarshal rotation event: %v", err)
-				continue
-			}
-			n.logger.Infof("Received king rotation event: %s → %s at height %d (eligible=%v)",
-				event.PreviousKing.String()[:8], event.NewKing.String()[:8], event.BlockHeight, event.Eligible)
-
-			n.processMu.Lock()
-			mgr := n.chain.GetRotatingKingManager()
-			if mgr != nil {
-				currentHeight := n.currentHeight()
-				if event.BlockHeight != currentHeight && event.BlockHeight != currentHeight+1 {
-					n.logger.Warnf("Invalid rotation event height %d (current %d)", event.BlockHeight, currentHeight)
-					n.processMu.Unlock()
-					continue
-				}
-				localEligible := mgr.IsEligible(event.BlockHeight)
-				if localEligible != event.Eligible {
-					n.logger.Warnf("Eligibility mismatch: local=%v event=%v - skipping", localEligible, event.Eligible)
-					n.processMu.Unlock()
-					continue
-				}
-				if err := mgr.ForceRotateToAddress(event.NewKing, "p2p-rotation-event"); err != nil {
-					n.logger.Warnf("Failed to apply rotation event: %v", err)
+				if len(mergedList) != len(currentList) || !n.areAddressListsEqual(currentList, mergedList) {
+					if err := mgr.UpdateKingAddresses(mergedList); err != nil {
+						n.logger.Warnf("Failed to apply king list update: %v", err)
+					} else {
+						n.logger.Infof("King list updated via P2P (%d -> %d addresses)", len(currentList), len(mergedList))
+					}
 				}
 			}
 			n.processMu.Unlock()
@@ -940,7 +954,6 @@ func (n *Node) handleMessages() {
 			if len(msg.Data) < 100 {
 				continue
 			}
-
 			if !n.allowBlockFromPeer(msg.GetFrom()) {
 				continue
 			}
@@ -951,43 +964,41 @@ func (n *Node) handleMessages() {
 				continue
 			}
 
-			n.logger.Infof("Received block %d | hash=%s | from=%s",
+			n.logger.Infof("⛏️ Received block %d | hash=%s | from=%s",
 				blk.Header.Number.Uint64(), blk.Hash().String()[:12], msg.GetFrom().String()[:8])
 
 			n.rememberMinedBlockCandidate(&blk, msg.GetFrom().String())
 
-			// If we're at height 0 and receive any block, force sync
+			// Immediate sync trigger for missed blocks
 			currentHeight := n.currentHeight()
 			if currentHeight == 0 && blk.Header.Number.Uint64() > 0 {
-				n.logger.Warnf("EMERGENCY: At height 0 but received block %d - forcing sync!",
-					blk.Header.Number.Uint64())
+				n.logger.Warnf("EMERGENCY: At height 0, received block %d - forcing sync!", blk.Header.Number.Uint64())
 				go n.forceSync()
 			}
 
-			if err := n.processBlock(&blk); err != nil {
-				if !strings.Contains(err.Error(), "already known") &&
-					!strings.Contains(err.Error(), "parent") {
-					n.logger.Warnf("Block %d rejected: %v", blk.Header.Number.Uint64(), err)
+			// Process block immediately in goroutine (don't block)
+			go func(b *block.Block) {
+				if err := n.processBlock(b); err != nil {
+					if !strings.Contains(err.Error(), "already known") &&
+						!strings.Contains(err.Error(), "parent") {
+						n.logger.Warnf("Block %d rejected: %v", b.Header.Number.Uint64(), err)
+					}
 				}
-			}
+			}(&blk)
 
 		case msgTypeTx:
 			if len(msg.Data) < 2 {
 				continue
 			}
-
 			if !n.allowTxFromPeer(msg.GetFrom()) {
 				continue
 			}
-
 			var txObj tx.Tx
 			if err := json.Unmarshal(msg.Data[1:], &txObj); err != nil {
 				n.logger.Warnf("Failed to unmarshal tx: %v", err)
 				continue
 			}
-
-			n.processIncomingTx(&txObj, msg.GetFrom())
-
+			go n.processIncomingTx(&txObj, msg.GetFrom())
 		}
 	}
 }
@@ -1038,12 +1049,20 @@ func (n *Node) triggerSyncWithPeers() {
 func (n *Node) GetPeerHeight(pid peer.ID) (uint64, error) {
 	n.syncMu.Lock()
 	defer n.syncMu.Unlock()
-	s, err := n.host.NewStream(n.ctx, pid, n.protocolID("sync"))
+	
+	// Shorter timeout for faster checks
+	ctx, cancel := context.WithTimeout(n.ctx, 3*time.Second) // Reduced from 10s
+	defer cancel()
+	
+	s, err := n.host.NewStream(ctx, pid, n.protocolID("sync"))
 	if err != nil {
 		return 0, fmt.Errorf("failed to open stream to %s: %w", pid, err)
 	}
 	defer s.Close()
 
+	// Set shorter deadline
+	s.SetDeadline(time.Now().Add(3 * time.Second))
+	
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 	var req uint64 = math.MaxUint64
 	if err := binary.Write(rw, binary.BigEndian, req); err != nil {
@@ -1057,34 +1076,10 @@ func (n *Node) GetPeerHeight(pid peer.ID) (uint64, error) {
 	}
 
 	localHeight := n.currentHeight()
-	difference := int64(height) - int64(localHeight)
-
-	// Smart logging based on difference
-	switch {
-	case height == 0:
-		n.logger.Debugf("Peer %s at genesis", pid.String()[:12])
-
-	case height == localHeight:
-		n.logger.Debugf("Peer %s at same height: %d", pid.String()[:12], height)
-	case difference > 0 && difference <= 10:
-		n.logger.Infof("Peer %s slightly ahead: %d (+%d)",
-			pid.String()[:12], height, difference)
-
-	case difference > 10:
-		n.logger.Warnf("Peer %s significantly ahead: %d (+%d)",
-			pid.String()[:12], height, difference)
-
-	case difference < 0 && difference >= -10:
-		n.logger.Infof("Peer %s slightly behind: %d (%d)",
-			pid.String()[:12], height, difference)
-
-	case difference < -10:
-		n.logger.Infof("Peer %s significantly behind: %d (%d)",
-			pid.String()[:12], height, difference)
-
-	default:
-		n.logger.Infof("Peer %s height: %d (we're at %d)",
-			pid.String()[:12], height, localHeight)
+	
+	// Only log if significant difference
+	if height > localHeight {
+		n.logger.Debugf("Peer %s ahead: %d (we're at %d)", pid.String()[:12], height, localHeight)
 	}
 
 	if height > n.syncHeight {
@@ -1987,7 +1982,7 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	go node.PeriodicKingConfigCheck()
 
 	time.AfterFunc(3*time.Second, func() {
-		node.logger.Info("🚀 Broadcasting initial king configuration")
+		node.logger.Info("�� Broadcasting initial king configuration")
 		node.BroadcastCurrentKingConfig()
 	})
 
@@ -2270,8 +2265,9 @@ func (n *Node) binarySearchDivergence(peerID peer.ID, maxHeight uint64) (uint64,
 }
 
 // Add this function to p2p.go
+
 func (n *Node) PeriodicSyncCheck() {
-	ticker := time.NewTicker(60 * time.Second) // Check every minute
+	ticker := time.NewTicker(PeriodicSyncInterval) // 15s instead of 60s
 	defer ticker.Stop()
 
 	for {
@@ -2279,29 +2275,51 @@ func (n *Node) PeriodicSyncCheck() {
 		case <-n.ctx.Done():
 			return
 		case <-ticker.C:
-			// If we're already syncing, skip
 			if n.chain.IsSyncing() {
 				continue
 			}
 
-			// Check if we're behind any peer
-			for _, pid := range n.Peers() {
-				peerHeight, err := n.GetPeerHeight(pid)
-				if err != nil {
-					continue
-				}
+			// Quick height check with all peers in parallel
+			peers := n.Peers()
+			if len(peers) == 0 {
+				continue
+			}
 
-				localHeight := n.currentHeight()
-				if peerHeight > localHeight+5 { // If behind by more than 5 blocks
-					n.logger.Warnf("Periodic check: behind peer %s by %d blocks → triggering sync",
-						pid.String()[:12], peerHeight-localHeight)
-					go n.syncIfBehind(pid)
-					break // Only trigger with one peer
-				}
+			localHeight := n.currentHeight()
+			var bestPeer peer.ID
+			var bestHeight uint64
+
+			// Use WaitGroup for parallel checks
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			
+			for _, pid := range peers {
+				wg.Add(1)
+				go func(p peer.ID) {
+					defer wg.Done()
+					height, err := n.GetPeerHeight(p)
+					if err != nil {
+						return
+					}
+					mu.Lock()
+					if height > bestHeight {
+						bestHeight = height
+						bestPeer = p
+					}
+					mu.Unlock()
+				}(pid)
+			}
+			wg.Wait()
+
+			if bestHeight > localHeight+2 { // Lower threshold from 5 to 2
+				n.logger.Warnf("PERIODIC: Behind peer %s by %d blocks → syncing",
+					bestPeer.String()[:12], bestHeight-localHeight)
+				go n.syncIfBehind(bestPeer)
 			}
 		}
 	}
 }
+
 
 func (n *Node) triggerSync() {
 	peers := n.Peers()
@@ -2332,102 +2350,112 @@ func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 	localHeight := n.currentHeight()
 
 	if targetHeight <= localHeight {
-		n.logger.Debugf("Sync target %d is not ahead of local height %d", targetHeight, localHeight)
+		n.logger.Debugf("Sync target %d not ahead of local %d", targetHeight, localHeight)
 		return nil
 	}
 
-	n.logger.Infof("SYNC START → %d blocks needed (%d → %d)",
-		targetHeight-localHeight, localHeight+1, targetHeight)
+	blocksNeeded := targetHeight - localHeight
+	n.logger.Infof("�� FAST SYNC START → %d blocks needed (%d → %d)",
+		blocksNeeded, localHeight+1, targetHeight)
 
-	failures := 0
-	for height := localHeight + 1; height <= targetHeight; height++ {
-		select {
-		case <-n.ctx.Done():
-			return n.ctx.Err()
-		default:
-		}
-
-		if height <= n.currentHeight() {
-			n.logger.Debugf("Already applied block %d, skipping", height)
-			continue
-		}
-
-		n.logger.Debugf("Fetching block %d/%d from peer %s", height, targetHeight, peerID.String()[:12])
-
-		ctx, cancel := context.WithTimeout(n.ctx, 12*time.Second)
-		blk, err := n.requestBlockWithContext(ctx, peerID, height)
-		cancel()
-
-		if err != nil {
-			n.logger.Warnf("Failed to fetch block %d: %v", height, err)
-			failures++
-			if failures > 10 {
-				return fmt.Errorf("too many failures fetching block %d from %s", height, peerID.String()[:12])
-			}
-			height-- // retry same block
-			time.Sleep(300 * time.Millisecond)
-			continue
-		}
-
-		if existing := n.chain.GetBlock(height); existing != nil && existing.Hash() == blk.Hash() && height <= n.currentHeight() {
-			n.logger.Debugf("Block %d was applied while fetching; skipping", height)
-			continue
-		}
-
-		failures = 0
-
-		n.logger.Debugf("Got block %d from peer %s, adding to chain...", height, peerID.String()[:12])
-
-		err = n.chain.AddBlock(blk)
-		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "already") ||
-				strings.Contains(err.Error(), "known") ||
-				strings.Contains(err.Error(), "duplicate") {
-				// Block was added by gossip between check and add
-				n.logger.Debugf("Block %d added via gossip while syncing — skipping", height)
-				continue
-			}
-			if ancestorHeight, ok := parseParentBranchMissingAncestor(err); ok {
-				localHeightNow := n.currentHeight()
-				if localHeightNow > ancestorHeight {
-					n.logger.Warnf("Detected branch mismatch while syncing block %d; rewinding local chain from %d to %d",
-						height, localHeightNow, ancestorHeight)
-					if truncErr := n.chain.TruncateTo(ancestorHeight); truncErr != nil {
-						n.logger.Warnf("Failed to truncate chain to %d after branch mismatch: %v", ancestorHeight, truncErr)
-					} else {
-						// Restart fetching from the ancestor height (loop increments by 1).
-						height = ancestorHeight
-						time.Sleep(150 * time.Millisecond)
-						continue
-					}
-				}
-			}
-
-			if isDeterministicSyncValidationFailure(err) {
-				return fmt.Errorf("failed to add block %d from %s: %w", height, peerID.String()[:12], err)
-			}
-
-			n.logger.Warnf("AddBlock failed for %d: %v", height, err)
-			time.Sleep(200 * time.Millisecond)
-			height-- // retry
-			continue
-		}
-
-		n.logger.Infof("Synced block %d", height)
-
-		// Progress log
-		if height%20 == 0 || height == targetHeight {
-			n.logger.Infof("Sync progress: %d/%d (%.1f%%)",
-				height-localHeight, targetHeight-localHeight,
-				float64(height-localHeight)/float64(targetHeight-localHeight)*100)
-		}
-
-		time.Sleep(25 * time.Millisecond)
+	// Use worker pool for parallel fetching
+	const workers = 5
+	type fetchJob struct {
+		height uint64
+	}
+	type fetchResult struct {
+		height uint64
+		block  *block.Block
+		err    error
 	}
 
-	// SUCCESS
+	jobs := make(chan fetchJob, blocksNeeded)
+	results := make(chan fetchResult, blocksNeeded)
+
+	// Start workers
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				ctx, cancel := context.WithTimeout(n.ctx, 8*time.Second) // Reduced from 12s
+				blk, err := n.requestBlockWithContext(ctx, peerID, job.height)
+				cancel()
+				results <- fetchResult{
+					height: job.height,
+					block:  blk,
+					err:    err,
+				}
+			}
+		}()
+	}
+
+	// Queue blocks to fetch (sequential heights)
+	go func() {
+		for height := localHeight + 1; height <= targetHeight; height++ {
+			jobs <- fetchJob{height: height}
+		}
+		close(jobs)
+	}()
+
+	// Wait for all workers and close results
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Process results as they come in
+	fetchedBlocks := make(map[uint64]*block.Block)
+	failures := 0
+	successCount := 0
+
+	for result := range results {
+		if result.err != nil {
+			n.logger.Warnf("Failed to fetch block %d: %v", result.height, result.err)
+			failures++
+			if failures > 20 {
+				return fmt.Errorf("too many failures fetching blocks")
+			}
+			continue
+		}
+
+		fetchedBlocks[result.height] = result.block
+		successCount++
+
+		// Try to add blocks in order as they arrive
+		nextHeight := n.currentHeight() + 1
+		for {
+			if block, ok := fetchedBlocks[nextHeight]; ok {
+				if err := n.chain.AddBlock(block); err != nil {
+					if !strings.Contains(err.Error(), "already") &&
+						!strings.Contains(err.Error(), "known") {
+						n.logger.Warnf("Failed to add block %d: %v", nextHeight, err)
+					}
+				} else {
+					n.logger.Infof("✅ Synced block %d (parallel fetch)", nextHeight)
+				}
+				delete(fetchedBlocks, nextHeight)
+				nextHeight++
+			} else {
+				break
+			}
+		}
+
+		// Progress logging
+		if successCount%50 == 0 || successCount == int(blocksNeeded) {
+			current := n.currentHeight()
+			n.logger.Infof("⚡ Sync progress: %d/%d blocks (%.1f%%)",
+				current-localHeight, blocksNeeded,
+				float64(current-localHeight)/float64(blocksNeeded)*100)
+		}
+	}
+
+	// Final sync completion
 	n.chain.StopSync()
-	n.logger.Infof("SYNC COMPLETE — at height %d", n.currentHeight())
+	finalHeight := n.currentHeight()
+	n.logger.Infof("✅ FAST SYNC COMPLETE — at height %d (synced %d blocks in parallel)",
+		finalHeight, successCount)
 	return nil
 }
 
@@ -2463,7 +2491,7 @@ func parseParentBranchMissingAncestor(err error) (uint64, bool) {
 
 // Finds common ancestor when chains diverge
 func (n *Node) resolveFork(peerID peer.ID, maxHeight uint64, ctx context.Context) (uint64, error) {
-	n.logger.Infof("🔍 Resolving fork, checking up to height %d", maxHeight)
+	n.logger.Infof("�� Resolving fork, checking up to height %d", maxHeight)
 
 	// Try to find a matching block quickly
 	// Check recent blocks first (most likely place for match)
@@ -3061,16 +3089,14 @@ func (n *Node) triggerSyncToHeight(targetHeight uint64) {
 }
 
 func (n *Node) syncIfBehind(pid peer.ID) {
-	// Skip sync lock check for genesis nodes - we NEED to sync
+	// Genesis nodes sync immediately
 	isGenesis := n.currentHeight() == 0
 
 	if !isGenesis {
-		// For non-genesis nodes, use normal checks
 		if n.chain.IsSyncing() {
 			n.logger.Debug("Already syncing, skipping")
 			return
 		}
-
 		if !n.shouldAttemptSync() {
 			return
 		}
@@ -3097,21 +3123,20 @@ func (n *Node) syncIfBehind(pid peer.ID) {
 	gap := peerHeight - localHeight
 
 	if isGenesis {
-		n.logger.Warnf("🚀 GENESIS SYNC: %d → %d with peer %s (gap: %d blocks)",
+		n.logger.Warnf("�� GENESIS FAST SYNC: %d → %d with peer %s (gap: %d blocks)",
 			localHeight, peerHeight, pid.String()[:12], gap)
 	} else {
-		n.logger.Warnf("Behind by %d blocks — starting sync with peer %s", gap, pid.String()[:12])
+		n.logger.Warnf("FAST SYNC: Behind by %d blocks — starting sync with peer %s", gap, pid.String()[:12])
 	}
 
 	n.chain.StartSync(peerHeight)
 
-	// Run sync in foreground
+	// Use optimized parallel sync
 	err = n.syncMissingBlocks(pid, peerHeight)
 	if err != nil {
-		n.logger.Errorf("Sync failed with %s: %v", pid.String()[:12], err)
+		n.logger.Errorf("Fast sync failed with %s: %v", pid.String()[:12], err)
 		if isDeterministicSyncValidationFailure(err) {
-			n.logger.Warnf("Detected deterministic validation failure while syncing from %s, trying alternate peer",
-				pid.String()[:12])
+			n.logger.Warnf("Deterministic failure from %s, trying alternate peer", pid.String()[:12])
 			if recovered := n.retrySyncWithAlternatePeer(pid, finalSyncTarget(peerHeight, n.currentHeight())); recovered {
 				return
 			}
@@ -3122,24 +3147,16 @@ func (n *Node) syncIfBehind(pid peer.ID) {
 		return
 	}
 
-	// Verify we caught up
 	finalHeight := n.currentHeight()
 	if finalHeight >= peerHeight {
 		n.chain.StopSync()
 		if isGenesis {
-			n.logger.Warnf("✅ GENESIS SYNC COMPLETE: Now at height %d", finalHeight)
+			n.logger.Warnf("✅ GENESIS FAST SYNC COMPLETE: Now at height %d", finalHeight)
 		} else {
-			n.logger.Info("Sync completed successfully")
-		}
-
-		if n.continueSyncWithHigherPeer(finalHeight, pid) {
-			return
+			n.logger.Infof("✅ Fast sync completed successfully at height %d", finalHeight)
 		}
 	} else {
-		n.logger.Warnf("Sync ended at %d but target was %d", finalHeight, peerHeight)
-		if n.continueSyncWithHigherPeer(finalHeight, pid) {
-			return
-		}
+		n.logger.Warnf("Fast sync ended at %d but target was %d", finalHeight, peerHeight)
 	}
 }
 
@@ -3369,13 +3386,13 @@ func (n *Node) triggerImmediateSync() {
 }
 
 func (n *Node) FastSyncCheck() {
-	// First check immediately on startup
-	time.Sleep(3 * time.Second) // Give time for connections to establish
-	n.logger.Warn("STARTUP: Initial sync check")
+	// Immediate first check on startup
+	time.Sleep(1 * time.Second) // Reduced from 3s
+	n.logger.Warn("STARTUP: Initial fast sync check")
 	n.forceInitialSync()
 
-	// Then continue with periodic checks
-	ticker := time.NewTicker(5 * time.Second)
+	// Ultra-fast periodic checks
+	ticker := time.NewTicker(FastSyncCheckInterval)
 	defer ticker.Stop()
 
 	for {
@@ -3385,30 +3402,68 @@ func (n *Node) FastSyncCheck() {
 		case <-ticker.C:
 			localHeight := n.currentHeight()
 
-			// If we're at genesis, force sync
+			// If at genesis, force sync immediately
 			if localHeight == 0 && !n.chain.IsSyncing() {
-				n.logger.Warn("STILL AT GENESIS - forcing sync!")
-				n.forceInitialSync()
+				n.logger.Warn("GENESIS DETECTED - forcing immediate sync!")
+				go n.forceInitialSync()
 				continue
 			}
 
-			// Normal sync check
+			// Skip if already syncing
 			if n.chain.IsSyncing() {
 				continue
 			}
 
-			// Check if we're behind any peer
-			for _, pid := range n.Peers() {
-				peerHeight, err := n.GetPeerHeight(pid)
-				if err != nil {
-					continue
-				}
+			// Check if behind any peer - use parallel checks
+			peers := n.Peers()
+			if len(peers) == 0 {
+				continue
+			}
 
-				if peerHeight > localHeight {
-					n.logger.Warnf("Behind peer %s: %d -> %d",
-						pid.String()[:12], localHeight, peerHeight)
-					go n.syncIfBehind(pid)
+			// Parallel height checks for faster detection
+			type peerHeight struct {
+				pid    peer.ID
+				height uint64
+				err    error
+			}
+			
+			results := make(chan peerHeight, len(peers))
+			for _, pid := range peers {
+				go func(p peer.ID) {
+					h, err := n.GetPeerHeight(p)
+					results <- peerHeight{pid: p, height: h, err: err}
+				}(pid)
+			}
+
+			// Find best peer with timeout
+			var bestPeer peer.ID
+			var bestHeight uint64
+			timeout := time.After(2 * time.Second)
+			
+			for i := 0; i < len(peers); i++ {
+				select {
+				case result := <-results:
+					if result.err == nil && result.height > bestHeight {
+						bestHeight = result.height
+						bestPeer = result.pid
+					}
+				case <-timeout:
 					break
+				}
+			}
+
+			if bestHeight > localHeight {
+				gap := bestHeight - localHeight
+				// Lower threshold for faster sync (was 5, now 2)
+				threshold := uint64(2)
+				if localHeight < 100 {
+					threshold = 1 // Any gap triggers sync for new nodes
+				}
+				
+				if gap > threshold {
+					n.logger.Warnf("FAST SYNC: Behind peer %s by %d blocks (threshold=%d)",
+						bestPeer.String()[:12], gap, threshold)
+					go n.syncIfBehind(bestPeer)
 				}
 			}
 		}
@@ -3520,34 +3575,60 @@ func (n *Node) recordSyncAttempt(pid peer.ID) {
 }
 
 func (n *Node) forceInitialSync() {
-	// n.logger.Warn("FORCE INITIAL SYNC: Checking all peers")
-
-	// Check all peers and find the highest one
-	var bestPeer peer.ID
-	var bestHeight uint64
-
-	for _, pid := range n.Peers() {
-		height, err := n.GetPeerHeight(pid)
-		if err != nil {
-			n.logger.Debugf("Can't get height from %s: %v", pid.String()[:12], err)
-			continue
-		}
-
-		if height > bestHeight {
-			bestHeight = height
-			bestPeer = pid
-		}
-	}
-
-	if bestHeight == 0 {
-		n.logger.Warn("No peers with blocks found")
+	n.logger.Warn("�� FORCE INITIAL FAST SYNC: Finding best peer")
+	
+	// Get all peers in parallel
+	peers := n.Peers()
+	if len(peers) == 0 {
+		n.logger.Warn("No peers available for initial sync")
 		return
 	}
-
-	n.logger.Warnf("INITIAL SYNC: Found peer %s at height %d",
-		bestPeer.String()[:12], bestHeight)
-
-	// Force sync with this peer
+	
+	type peerInfo struct {
+		pid    peer.ID
+		height uint64
+		err    error
+	}
+	
+	results := make(chan peerInfo, len(peers))
+	for _, pid := range peers {
+		go func(p peer.ID) {
+			h, err := n.GetPeerHeight(p)
+			results <- peerInfo{pid: p, height: h, err: err}
+		}(pid)
+	}
+	
+	var bestPeer peer.ID
+	var bestHeight uint64
+	
+	timeout := time.After(3 * time.Second)
+	for i := 0; i < len(peers); i++ {
+		select {
+		case result := <-results:
+			if result.err == nil && result.height > bestHeight {
+				bestHeight = result.height
+				bestPeer = result.pid
+			}
+		case <-timeout:
+			break
+		}
+	}
+	
+	if bestHeight == 0 {
+		n.logger.Warn("No peers with height > 0 found")
+		return
+	}
+	
+	localHeight := n.currentHeight()
+	if bestHeight <= localHeight {
+		n.logger.Infof("Already at or ahead of best peer: %d vs %d", localHeight, bestHeight)
+		return
+	}
+	
+	n.logger.Warnf("�� FAST INITIAL SYNC: %d → %d with peer %s",
+		localHeight, bestHeight, bestPeer.String()[:12])
+	
+	// Direct sync without goroutine - run immediately
 	n.syncIfBehind(bestPeer)
 }
 
@@ -3891,7 +3972,7 @@ func (n *Node) handleDBSyncResponse(msg *pubsub.Message) {
 
 			// If peer has more addresses, adopt their configuration
 			if len(resp.Config.KingAddresses) > len(ourAddresses) {
-				n.logger.Warnf("🔄 Adopting peer configuration: %d addresses > our %d",
+				n.logger.Warnf("�� Adopting peer configuration: %d addresses > our %d",
 					len(resp.Config.KingAddresses), len(ourAddresses))
 
 				n.applyKingConfiguration(resp.Config, msg.GetFrom())
@@ -3935,7 +4016,7 @@ func (n *Node) periodicDBSync() {
 	// Wait for initial startup and connections
 	time.Sleep(30 * time.Second)
 
-	n.logger.Info("🔄 Starting periodic database synchronization")
+	n.logger.Info("�� Starting periodic database synchronization")
 
 	ticker := time.NewTicker(n.dbSyncInterval) // Should be 2 minutes based on your code
 	defer ticker.Stop()
@@ -3946,11 +4027,11 @@ func (n *Node) periodicDBSync() {
 	for {
 		select {
 		case <-n.ctx.Done():
-			n.logger.Info("🛑 Stopping periodic database sync")
+			n.logger.Info("�� Stopping periodic database sync")
 			return
 		case <-ticker.C:
 			if n.dbSyncEnabled {
-				n.logger.Info("🔄 Running periodic database sync")
+				n.logger.Info("�� Running periodic database sync")
 				n.performDBSyncWithPeers()
 			}
 		}
@@ -3980,7 +4061,7 @@ func (n *Node) performDBSyncWithPeers() {
 		return
 	}
 
-	n.logger.Infof("🔄 Starting database sync with %d peers", len(peers))
+	n.logger.Infof("�� Starting database sync with %d peers", len(peers))
 
 	// Get our current sync state
 	n.processMu.Lock()
@@ -4104,7 +4185,7 @@ func (n *Node) startDBSyncWithPeer(peerID string, ourState *rotatingking.SyncSta
 		return true
 	}
 
-	n.logger.Infof("📥 Requesting DB sync from peer %s: blocks %d-%d",
+	n.logger.Infof("�� Requesting DB sync from peer %s: blocks %d-%d",
 		pid.String()[:8], req.FromHeight, req.ToHeight)
 
 	// Send request
@@ -4834,7 +4915,7 @@ func (n *Node) applyKingConfiguration(config *rotatingking.RotatingKingConfig, s
 
 	// ALWAYS accept if larger
 	if newCount > currentCount {
-		n.logger.Warnf("🔄 ACCEPTING LARGER king list from peer %s: %d → %d addresses",
+		n.logger.Warnf("�� ACCEPTING LARGER king list from peer %s: %d → %d addresses",
 			source.String()[:8], currentCount, newCount)
 
 		if err := mgr.UpdateKingAddresses(config.KingAddresses); err != nil {
@@ -4876,7 +4957,7 @@ func (n *Node) startConfigurationSyncer() {
 	ticker := time.NewTicker(15 * time.Second) // Check every 15 seconds
 	defer ticker.Stop()
 
-	n.logger.Info("🔄 Starting continuous configuration syncer")
+	n.logger.Info("�� Starting continuous configuration syncer")
 
 	for {
 		select {
@@ -4902,7 +4983,7 @@ func (n *Node) syncConfigWithAllPeers() {
 
 	// If we have fewer than 10 addresses, aggressively request from all peers
 	if currentCount < 10 {
-		n.logger.Warnf("🔄 LOW ADDRESS COUNT (%d) - AGGRESSIVELY REQUESTING CONFIG", currentCount)
+		n.logger.Warnf("�� LOW ADDRESS COUNT (%d) - AGGRESSIVELY REQUESTING CONFIG", currentCount)
 
 		for _, pid := range n.Peers() {
 			go n.RequestKingConfigFromPeer(pid)
@@ -5114,7 +5195,7 @@ func (n *Node) BroadcastCurrentKingConfig() {
 		if err := n.BroadcastKingListUpdate(event); err != nil {
 			n.logger.Warnf("Failed to broadcast current king config: %v", err)
 		} else {
-			n.logger.Infof("📤 ALWAYS SYNC: Broadcast king config at height %d (%d addresses)",
+			n.logger.Infof("�� ALWAYS SYNC: Broadcast king config at height %d (%d addresses)",
 				currentHeight, len(currentList))
 		}
 	}
@@ -5238,7 +5319,7 @@ func (n *Node) syncKingConfigurationOnStartup() {
 	// Wait for connections
 	time.Sleep(10 * time.Second)
 
-	n.logger.Info("🔍 Starting king configuration sync")
+	n.logger.Info("�� Starting king configuration sync")
 
 	n.processMu.Lock()
 	mgr := n.chain.GetRotatingKingManager()
@@ -5478,7 +5559,7 @@ func (n *Node) BroadcastCurrentConfig() {
 }
 
 func (n *Node) TriggerConfigSync() {
-	n.logger.Info("🔍 Manually triggering configuration sync")
+	n.logger.Info("�� Manually triggering configuration sync")
 
 	// Get our current configuration
 	n.processMu.Lock()
@@ -5548,7 +5629,7 @@ func (n *Node) syncDatabaseForNewBlock(blockHeight uint64, blockHash common.Hash
 
 	// If we're behind by more than 10 blocks, trigger sync
 	if syncState.LastSyncedBlock < blockHeight-10 {
-		n.logger.Infof("🔄 Database behind by %d blocks, triggering sync",
+		n.logger.Infof("�� Database behind by %d blocks, triggering sync",
 			blockHeight-syncState.LastSyncedBlock)
 		go n.performDBSyncWithPeers()
 	}
@@ -5614,13 +5695,13 @@ func (n *Node) sendDBSyncStatusBroadcast(status DBSyncStatus) {
 	if err := n.dbSyncTopic.Publish(n.ctx, msg); err != nil {
 		//n.logger.Warnf("Failed to publish DB sync status: %v", err)
 	} else {
-		n.logger.Debugf("📤 Broadcast DB sync status: height=%d, syncing=%v",
+		n.logger.Debugf("�� Broadcast DB sync status: height=%d, syncing=%v",
 			status.LastSyncedBlock, status.IsSyncing)
 	}
 }
 
 func (n *Node) compareAndSyncConfigurations() {
-	n.logger.Info("🔄 Actively comparing configurations with peers")
+	n.logger.Info("�� Actively comparing configurations with peers")
 
 	// Get our configuration
 	n.processMu.Lock()
@@ -5643,7 +5724,7 @@ func (n *Node) compareAndSyncConfigurations() {
 	ourCount := len(ourConfig.KingAddresses)
 
 	// Broadcast our configuration first
-	n.logger.Infof("📤 Broadcasting our configuration (%d addresses) to peers", ourCount)
+	n.logger.Infof("�� Broadcasting our configuration (%d addresses) to peers", ourCount)
 	n.BroadcastCurrentConfig()
 
 	// Request configurations from all peers
@@ -5660,7 +5741,7 @@ func (n *Node) compareAndSyncConfigurations() {
 }
 
 func (n *Node) CheckIfConfigurationSyncNeeded() {
-	n.logger.Info("🔍 Checking if configuration sync is needed")
+	n.logger.Info("�� Checking if configuration sync is needed")
 
 	n.processMu.Lock()
 	mgr := n.chain.GetRotatingKingManager()
@@ -5723,7 +5804,7 @@ func (n *Node) CheckIfConfigurationSyncNeeded() {
 			// Check if this configuration is "better" than ours
 			if n.isConfigurationBetter(response.Config, &ourConfig) {
 				betterConfigs = append(betterConfigs, response.Config)
-				n.logger.Infof("📊 Peer %s has better configuration (%d > %d addresses)",
+				n.logger.Infof("�� Peer %s has better configuration (%d > %d addresses)",
 					response.PeerID[:8], peerCount, ourCount)
 			}
 		}
@@ -5745,7 +5826,7 @@ func (n *Node) CheckIfConfigurationSyncNeeded() {
 	}
 	avgCount /= len(peerCounts)
 
-	n.logger.Infof("📊 Configuration analysis: Our=%d, AvgPeer=%d, MaxPeer=%d",
+	n.logger.Infof("�� Configuration analysis: Our=%d, AvgPeer=%d, MaxPeer=%d",
 		ourCount, avgCount, maxCount)
 
 	// Decision logic
@@ -5753,12 +5834,12 @@ func (n *Node) CheckIfConfigurationSyncNeeded() {
 
 	switch decision {
 	case "sync_needed":
-		n.logger.Warnf("🔄 Configuration sync needed: we have %d addresses, peers average %d",
+		n.logger.Warnf("�� Configuration sync needed: we have %d addresses, peers average %d",
 			ourCount, avgCount)
 		n.triggerConfigurationSync()
 
 	case "broadcast":
-		n.logger.Infof("📤 Our configuration is better (%d addresses), broadcasting to peers",
+		n.logger.Infof("�� Our configuration is better (%d addresses), broadcasting to peers",
 			ourCount)
 		n.BroadcastCurrentConfig()
 
@@ -5821,7 +5902,7 @@ func (n *Node) evaluateSyncDecision(ourCount, avgCount, maxCount int, betterConf
 }
 
 func (n *Node) triggerConfigurationSync() {
-	n.logger.Info("🔄 Triggering configuration sync")
+	n.logger.Info("�� Triggering configuration sync")
 
 	// Find the best configuration from cached responses
 	var bestConfig *rotatingking.RotatingKingConfig
@@ -5837,7 +5918,7 @@ func (n *Node) triggerConfigurationSync() {
 	n.dbSyncMu.RUnlock()
 
 	if bestConfig != nil {
-		n.logger.Infof("📥 Adopting configuration with %d addresses", bestCount)
+		n.logger.Infof("�� Adopting configuration with %d addresses", bestCount)
 
 		// Apply the configuration
 		n.processMu.Lock()
@@ -5862,7 +5943,7 @@ func (n *Node) triggerConfigurationSync() {
 		n.logger.Warn("No suitable configuration found for sync")
 
 		// Request fresh configurations
-		n.logger.Info("📤 Requesting fresh configurations from peers")
+		n.logger.Info("�� Requesting fresh configurations from peers")
 		for _, pid := range n.Peers() {
 			n.RequestKingConfiguration(pid)
 		}
@@ -5870,7 +5951,7 @@ func (n *Node) triggerConfigurationSync() {
 }
 
 func (n *Node) resolveConfigurationConflict(peerCounts []int, betterConfigs []*rotatingking.RotatingKingConfig) {
-	n.logger.Warn("🔀 Resolving configuration conflict")
+	n.logger.Warn("�� Resolving configuration conflict")
 
 	// Find the most common configuration size
 	countMap := make(map[int]int)
@@ -5936,7 +6017,7 @@ func (n *Node) applyConsensusConfiguration(config *rotatingking.RotatingKingConf
 }
 
 func (n *Node) initiateConfigurationVote() {
-	n.logger.Info("🗳️  Initiating configuration vote")
+	n.logger.Info("��️  Initiating configuration vote")
 
 	// Create a vote request
 	voteRequest := map[string]interface{}{
@@ -5960,7 +6041,7 @@ func (n *Node) initiateConfigurationVote() {
 	if err := n.kingTopic.Publish(n.ctx, msg); err != nil {
 		n.logger.Warnf("Failed to publish vote request: %v", err)
 	} else {
-		n.logger.Info("📤 Configuration vote request broadcasted")
+		n.logger.Info("�� Configuration vote request broadcasted")
 	}
 }
 
@@ -5989,7 +6070,7 @@ func (n *Node) startConfigurationMonitor() {
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
 	defer ticker.Stop()
 
-	n.logger.Info("🔄 Starting aggressive configuration monitor")
+	n.logger.Info("�� Starting aggressive configuration monitor")
 
 	for {
 		select {
@@ -6017,12 +6098,12 @@ func (n *Node) startKingListCleanup() {
 	ticker := time.NewTicker(10 * time.Minute) // Check every 10 minutes
 	defer ticker.Stop()
 
-	n.logger.Info("🔄 Starting king list cleanup monitor")
+	n.logger.Info("�� Starting king list cleanup monitor")
 
 	for {
 		select {
 		case <-n.ctx.Done():
-			n.logger.Info("🛑 Stopping king list cleanup")
+			n.logger.Info("�� Stopping king list cleanup")
 			return
 		case <-ticker.C:
 			n.processMu.Lock()
@@ -6044,7 +6125,7 @@ func (n *Node) startKingListCleanup() {
 				}
 
 				if len(removed) > 0 {
-					n.logger.Warnf("🔄 Removed %d ineligible kings from rotation list", len(removed))
+					n.logger.Warnf("�� Removed %d ineligible kings from rotation list", len(removed))
 
 					// Broadcast updated list
 					n.BroadcastCurrentConfig()
@@ -6096,7 +6177,7 @@ func (n *Node) PeriodicKingConfigCheck() {
 }
 
 func (n *Node) onKingListChanged(newList []common.QuantumAddress) {
-	n.logger.Infof("🔄 King list changed to %d addresses - broadcasting immediately", len(newList))
+	n.logger.Infof("�� King list changed to %d addresses - broadcasting immediately", len(newList))
 
 	// Store the last list
 	n.lastKingListMu.Lock()
@@ -6331,7 +6412,7 @@ func (n *Node) checkAndSyncKingConfig() {
 	localCount := len(localList)
 	localKing := mgr.GetCurrentKing()
 
-	n.logger.Infof("🔍 Checking rotating king config: %d addresses, current king: %s",
+	n.logger.Infof("�� Checking rotating king config: %d addresses, current king: %s",
 		localCount, localKing.String()[:10])
 
 	// Check if we have the minimum expected configuration
@@ -6340,7 +6421,7 @@ func (n *Node) checkAndSyncKingConfig() {
 
 		// Broadcast our config request
 		for _, peer := range n.Peers() {
-			n.logger.Infof("📤 Requesting config from peer %s", peer.String()[:8])
+			n.logger.Infof("�� Requesting config from peer %s", peer.String()[:8])
 			go n.RequestKingConfigFromPeer(peer)
 		}
 
@@ -6356,11 +6437,11 @@ func (n *Node) checkAndSyncKingConfig() {
 }
 
 func (n *Node) triggerEmergencyConfigSync() {
-	n.logger.Warn("🚨 EMERGENCY CONFIGURATION SYNC TRIGGERED")
+	n.logger.Warn("�� EMERGENCY CONFIGURATION SYNC TRIGGERED")
 
 	// Broadcast urgent config request
 	for _, pid := range n.Peers() {
-		n.logger.Infof("🚨 URGENT: Requesting config from peer %s", pid.String()[:8])
+		n.logger.Infof("�� URGENT: Requesting config from peer %s", pid.String()[:8])
 		go func(p peer.ID) {
 			// Send multiple requests to ensure response
 			for i := 0; i < 3; i++ {
@@ -6386,7 +6467,7 @@ func (n *Node) triggerEmergencyConfigSync() {
 }
 
 func (n *Node) applyEmergencyDefaultConfiguration(mgr reward.RotatingKingManager) {
-	n.logger.Warn("🔄 Applying emergency default configuration")
+	n.logger.Warn("�� Applying emergency default configuration")
 
 	// Try to get any configuration from cache first
 	var bestConfig *rotatingking.RotatingKingConfig
@@ -6506,7 +6587,7 @@ func (n *Node) syncRotatingKingForBlock(blockHeight uint64) {
 		return
 	}
 
-	n.logger.Debugf("🔄 Syncing rotating king database for block %d", blockHeight)
+	n.logger.Debugf("�� Syncing rotating king database for block %d", blockHeight)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -6611,7 +6692,7 @@ func (n *Node) CompareAndSyncKingLists() {
 	ourList := mgr.GetKingAddresses()
 	ourCount := len(ourList)
 
-	n.logger.Infof("🔍 Starting king list comparison: we have %d addresses", ourCount)
+	n.logger.Infof("�� Starting king list comparison: we have %d addresses", ourCount)
 
 	// Collect lists from all peers
 	allAddresses := make(map[common.QuantumAddress]int)  // address -> count of peers that have it
@@ -6702,7 +6783,7 @@ func (n *Node) analyzeAndMergeKingLists(ourList []common.QuantumAddress,
 		}
 	}
 
-	n.logger.Infof("📊 King list analysis: %d unique addresses across %d peers, %d consensus addresses",
+	n.logger.Infof("�� King list analysis: %d unique addresses across %d peers, %d consensus addresses",
 		len(allUniqueAddresses), totalPeers, len(consensusAddresses))
 
 	// Find the largest list
@@ -6720,7 +6801,7 @@ func (n *Node) analyzeAndMergeKingLists(ourList []common.QuantumAddress,
 
 	// Check if we need to update
 	if largestPeer != "us" {
-		n.logger.Warnf("🔄 Peer %s has larger list (%d vs our %d)",
+		n.logger.Warnf("�� Peer %s has larger list (%d vs our %d)",
 			largestPeer, largestCount, len(ourList))
 
 		// Merge our list with the largest list
@@ -6846,7 +6927,7 @@ func (n *Node) StartPeriodicKingListSync() {
 	ticker := time.NewTicker(2 * time.Minute) // Compare every 2 minutes
 	defer ticker.Stop()
 
-	n.logger.Info("🔄 Starting periodic king list synchronization")
+	n.logger.Info("�� Starting periodic king list synchronization")
 
 	for {
 		select {
@@ -6859,6 +6940,6 @@ func (n *Node) StartPeriodicKingListSync() {
 }
 
 func (n *Node) TriggerImmediateKingListSync() {
-	n.logger.Info("🚀 Triggering immediate king list sync")
+	n.logger.Info("�� Triggering immediate king list sync")
 	go n.CompareAndSyncKingLists()
 }
