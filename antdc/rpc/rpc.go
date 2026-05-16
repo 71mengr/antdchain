@@ -185,7 +185,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 			"timestamp": block.Header.Time,
 
-			"difficulty": pow.NormalizeDifficulty(block.Header.Difficulty).String(),
+			"difficulty": pow.DisplayDifficulty(block.Header.Difficulty),
 
 			"gasLimit": block.Header.GasLimit,
 

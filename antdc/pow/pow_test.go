@@ -74,6 +74,15 @@ func TestCalculateExpectedDifficultyForMinerUsesMinerSuffix(t *testing.T) {
 	assert.Equal(t, engine.CalculateExpectedDifficulty(5, 1000, 1000+BlockTimeTarget), NormalizeDifficulty(diffB))
 }
 
+func TestDisplayDifficultyKeepsMinerSpecificValue(t *testing.T) {
+	base := CalculateDifficultyFromWindow(big.NewInt(BaseDifficulty), 7, []uint64{BlockTimeTarget})
+	miner := common.BytesToQuantumAddress([]byte("display-miner"))
+	diff := CalculateMinerDifficulty(base, miner)
+
+	assert.Equal(t, diff.String(), DisplayDifficulty(diff))
+	assert.NotEqual(t, NormalizeDifficulty(diff).String(), DisplayDifficulty(diff))
+}
+
 func TestAutoRegisterIfEligible(t *testing.T) {
 	engine := NewPoW()
 	addr, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")

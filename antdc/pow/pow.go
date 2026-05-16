@@ -174,6 +174,16 @@ func NormalizeDifficulty(difficulty *big.Int) *big.Int {
 	return normalizeDifficulty(difficulty)
 }
 
+// DisplayDifficulty returns the exact header difficulty for user-facing output.
+// It intentionally keeps the miner-specific suffix so competing miners at the
+// same height do not appear to have the same difficulty.
+func DisplayDifficulty(difficulty *big.Int) string {
+	if difficulty == nil || difficulty.Sign() <= 0 {
+		return "0"
+	}
+	return difficulty.String()
+}
+
 func normalizeDifficulty(difficulty *big.Int) *big.Int {
 	if difficulty == nil || difficulty.Sign() <= 0 {
 		return big.NewInt(MinDifficulty)

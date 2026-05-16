@@ -3318,7 +3318,7 @@ func (c *Console) handleGetBlockInfo(parts []string) {
 	fmt.Printf("  Hash: %s\n", blk.Hash().String())
 	fmt.Printf("  Timestamp: %d\n", blk.Header.Time)
 	if blk.Header.Difficulty != nil {
-		fmt.Printf("  Difficulty: %s\n", pow.NormalizeDifficulty(blk.Header.Difficulty).String())
+		fmt.Printf("  Difficulty: %s\n", pow.DisplayDifficulty(blk.Header.Difficulty))
 	}
 	fmt.Printf("  Gas Used: %d / %d\n", blk.Header.GasUsed, blk.Header.GasLimit)
 	fmt.Printf("  Transactions: %d\n", len(blk.Txs))
