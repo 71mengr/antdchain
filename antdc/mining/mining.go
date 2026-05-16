@@ -6,13 +6,14 @@ package mining
 
 import (
 	"context"
-	"crypto/rand"
+	cryptorand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math/big"
+	mathrand "math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,7 +30,6 @@ import (
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/common"
-	"github.com/antdaza/antdchain/common/hexutil"
 	"github.com/antdaza/antdchain/difficulty"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -193,13 +193,6 @@ type TxEntry struct {
 // IsFinal checks if transaction is final (BIP125 locktime verification)
 func (txe *TxEntry) IsFinal(blockHeight uint64, blockTime uint64) bool {
 	if txe.Tx == nil {
-		return false
-	}
-	// Locktime verification
-	if txe.Tx.LockTime > 0 {
-		if txe.Tx.LockTime < blockHeight || txe.Tx.LockTime < blockTime {
-			return true
-		}
 		return false
 	}
 	return true
@@ -587,7 +580,7 @@ func (ba *BlockAssembler) createCoinbaseScriptSig() []byte {
 	if ba.options.IncludeDummyExtranonce {
 		// Add dummy extranonce for ASIC boost compatibility
 		extranonce := make([]byte, 4)
-		rand.Read(extranonce)
+		cryptorand.Read(extranonce)
 		script = append(script, extranonce...)
 	}
 	
@@ -921,9 +914,9 @@ func (ms *PosMiningState) mineWork(work *MiningWork, workerID int) *MiningResult
 		nonceBytes := block.BlockNonce{}
 		binary.BigEndian.PutUint64(nonceBytes[:], nonce)
 		headerCopy.Nonce = nonceBytes
-		
+		mixDigest, ok := validateHeaderPoW(&headerCopy)
 		// Check PoW
-		if ms.powEngine.ValidateHeaderPoW(&headerCopy) {
+		if ok {
 			// Found valid nonce!
 			duration := time.Since(startTime)
 			hashrate := uint64(float64(hashesAttempted) / duration.Seconds())
@@ -950,10 +943,12 @@ func (ms *PosMiningState) mineWork(work *MiningWork, workerID int) *MiningResult
 			
 			// Update the actual header
 			work.Header.Nonce = nonceBytes
-			
+			work.Header.MixDigest = mixDigest
+
 			return &MiningResult{
 				WorkerID:  fmt.Sprintf("%s-%d", work.MinerID, workerID),
 				Nonce:     nonceBytes,
+				MixDigest: mixDigest,
 				Block:     work.Block,
 				Success:   true,
 				Duration:  duration,
@@ -973,7 +968,46 @@ func (ms *PosMiningState) mineWork(work *MiningWork, workerID int) *MiningResult
 		Duration: time.Since(startTime),
 		HashRate: hashesAttempted,
 		MinerID:  work.MinerID,
+
 	}
+}
+
+func validateHeaderPoW(header *block.Header) (common.Hash, bool) {
+	powHeader, err := powHeaderFromBlockHeader(header)
+	if err != nil {
+		return common.Hash{}, false
+	}
+	serialized := powHeader.SerializeForMining()
+	mixDigest := common.ComputeHash(serialized)
+	target := pow.TargetForDifficulty(powHeader.Difficulty)
+	return mixDigest, new(big.Int).SetBytes(mixDigest[:]).Cmp(target) < 0
+}
+
+func powHeaderFromBlockHeader(header *block.Header) (*pow.BlockHeader, error) {
+	if header == nil {
+		return nil, errors.New("block header is nil")
+	}
+	if header.Number == nil {
+		return nil, errors.New("block header number is nil")
+	}
+	
+	diff := big.NewInt(difficulty.MinDifficulty)
+	if header.Difficulty != nil {
+		diff = new(big.Int).Set(header.Difficulty)
+	}
+	
+	return &pow.BlockHeader{
+		ParentHash: header.ParentHash,
+		Coinbase:   header.Coinbase,
+		Root:       header.Root,
+		TxHash:     header.TxHash,
+		Number:     header.Number.Uint64(),
+		Difficulty: diff,
+		Time:       header.Time,
+		Extra:      header.GetExtraData(),
+		Nonce:      [8]byte(header.Nonce),
+		MixDigest:  header.MixDigest,
+	}, nil
 }
 
 // ============================================================================
@@ -1001,7 +1035,7 @@ func (ms *PosMiningState) miningLoop(bc *chain.Blockchain, p2pNode *p2p.Node) {
 	}
 	
 	// Add random jitter to prevent synchronization 
-	jitter := time.Duration(rand.Int63n(int64(interval / 4)))
+	jitter := time.Duration(mathrand.Int63n(int64(interval / 4)))
 	if jitter > 0 {
 		log.Printf("[miner] Mining loop starting with interval %v + jitter %v", interval, jitter)
 		time.Sleep(jitter)
@@ -1109,29 +1143,33 @@ func (ms *PosMiningState) miningLoop(bc *chain.Blockchain, p2pNode *p2p.Node) {
 		}
 		
 		// Distribute work to all active miners
-		results := make(chan *MiningResult, len(activeMiners))
-		
+
 		for _, miner := range activeMiners {
 			// Create header copy for this miner
 			headerCopy := *template.Block.Header
 			
 			// Calculate miner-specific difficulty
-			minerDifficulty := difficulty.ForMiner(
-				template.Block.Header.Difficulty,
-				miner.Address,
-			)
-			headerCopy.Difficulty = minerDifficulty
-			
+			headerCopy.Coinbase = miner.Address
+			headerCopy.Difficulty = bc.CalculateExpectedDifficultyForBlock(&block.Block{Header: &headerCopy, Txs: template.Block.Txs, Uncles: template.Block.Uncles}, parent)
+			stateRoot, err := bc.ComputeBlockFinalStateRoot(miner.Address, headerCopy.Time, height, headerCopy.Extra, template.Block.Txs)
+			if err != nil {
+				log.Printf("[miner] Failed to compute state root for miner %s: %v", miner.ID, err)
+				continue
+			}
+			headerCopy.Root = stateRoot
+			minerDifficulty := headerCopy.Difficulty
+
 			// Create work units (split nonce space among threads)
 			nonceRange := uint64(0xFFFFFFFFFFFFFFFF) / uint64(miner.Threads)
 			
 			for i := 0; i < miner.Threads; i++ {
 				blockCopy := *template.Block
-				blockCopy.Header = &headerCopy
+				workHeader := headerCopy
+				blockCopy.Header = &workHeader
 				
 				work := &MiningWork{
 					Block:      &blockCopy,
-					Header:     &headerCopy,
+					Header:     &workHeader,
 					NonceStart: uint64(i) * nonceRange,
 					NonceRange: nonceRange,
 					MinerID:    miner.ID,
@@ -1277,7 +1315,7 @@ func (ms *PosMiningState) recordStaleBlock(miner *MinerInstance, height uint64) 
 	miner.mu.Unlock()
 	
 	ms.staleMu.Lock()
-	ms.staleBlocks[height] = miner.Address.Hash()
+	ms.staleBlocks[height] = common.BytesToHash(miner.Address.Bytes())
 	ms.staleMu.Unlock()
 	
 	miningStaleBlocks.WithLabelValues(miner.Address.String()).Inc()
@@ -1522,6 +1560,93 @@ func (ms *PosMiningState) GetGlobalStats() map[string]interface{} {
 	}
 }
 
+func (ms *PosMiningState) GetMinerAddress() common.QuantumAddress {
+	ms.minerMu.RLock()
+	defer ms.minerMu.RUnlock()
+	if ms.defaultMiner == "" {
+		return common.QuantumAddress{}
+	}
+	miner := ms.miners[ms.defaultMiner]
+	if miner == nil {
+		return common.QuantumAddress{}
+	}
+	return miner.Address
+}
+
+func (ms *PosMiningState) SetMinerAddress(addr common.QuantumAddress) error {
+	if addr == (common.QuantumAddress{}) {
+		return errors.New("miner address cannot be zero")
+	}
+	
+	ms.minerMu.Lock()
+	defer ms.minerMu.Unlock()
+	
+	for id, miner := range ms.miners {
+		if miner.Address == addr {
+			ms.defaultMiner = id
+			return nil
+		}
+	}
+	
+	minerID := ms.defaultMiner
+	if minerID == "" {
+		minerID = addr.String()[:12]
+	}
+	miner := ms.miners[minerID]
+	if miner == nil {
+		miner = NewMinerInstance(minerID, addr, DefaultMinerThreads)
+		ms.miners[minerID] = miner
+	} else {
+		miner.Address = addr
+	}
+	ms.defaultMiner = minerID
+	if miner.IsActive {
+		ms.activeMiners[minerID] = miner
+	}
+	return nil
+}
+
+func (ms *PosMiningState) SetPrivateKeyFromBytes(privKey []byte) error {
+	if len(privKey) != quantum.MLDSA65PrivateKeySize {
+		return fmt.Errorf("invalid private key length: expected %d bytes, got %d", quantum.MLDSA65PrivateKeySize, len(privKey))
+	}
+	
+	ms.minerMu.Lock()
+	defer ms.minerMu.Unlock()
+	
+	minerID := ms.defaultMiner
+	if minerID == "" {
+		minerID = "default"
+		ms.defaultMiner = minerID
+	}
+	miner := ms.miners[minerID]
+	if miner == nil {
+		miner = NewMinerInstance(minerID, common.QuantumAddress{}, DefaultMinerThreads)
+		ms.miners[minerID] = miner
+	}
+	miner.PrivateKey = append(miner.PrivateKey[:0], privKey...)
+	return nil
+}
+
+func (ms *PosMiningState) GetPublicKey() []byte {
+	ms.minerMu.RLock()
+	miner := ms.miners[ms.defaultMiner]
+	ms.minerMu.RUnlock()
+	if miner == nil || len(miner.PrivateKey) == 0 {
+		return nil
+	}
+	
+	miner.mu.RLock()
+	privKey := append([]byte(nil), miner.PrivateKey...)
+	miner.mu.RUnlock()
+	
+	pubKey, err := quantum.DerivePublicKey(privKey)
+	if err != nil {
+		return nil
+	}
+	return pubKey
+}
+
 // ============================================================================
 // COMPATIBILITY METHODS (existing API)
 // ============================================================================
@@ -1536,6 +1661,14 @@ func (ms *PosMiningState) IsEnabled() bool {
 	ms.minerMu.RLock()
 	defer ms.minerMu.RUnlock()
 	return ms.enabled
+}
+
+func (ms *PosMiningState) PauseMining() {
+	ms.SetEnabled(false)
+}
+
+func (ms *PosMiningState) ResumeMining() {
+	ms.SetEnabled(true)
 }
 
 func (ms *PosMiningState) SetEnabled(v bool) {
@@ -1583,6 +1716,21 @@ func (ms *PosMiningState) SetSyncCallback(cb func(isSyncing bool)) {
 func (ms *PosMiningState) GetMiningStatistics() map[string]interface{} {
 	stats := ms.GetGlobalStats()
 	stats["miners"] = make([]map[string]interface{}, 0)
+
+	minerAddress := ms.GetMinerAddress()
+	stats["miner_address"] = minerAddress.String()
+	stats["blocks_mined"] = uint64(0)
+	stats["total_rewards_antd"] = "0"
+	stats["has_private_key"] = false
+	if ms.defaultMiner != "" {
+		if minerStats := ms.GetMinerStats(ms.defaultMiner); minerStats != nil {
+			stats["blocks_mined"] = minerStats["blocks_mined"]
+			stats["total_rewards_antd"] = minerStats["total_rewards"]
+			if miner := ms.getMiner(ms.defaultMiner); miner != nil {
+				stats["has_private_key"] = len(miner.PrivateKey) > 0
+			}
+		}
+	}
 	
 	ms.minerMu.RLock()
 	for minerID := range ms.miners {

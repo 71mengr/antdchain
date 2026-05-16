@@ -1608,14 +1608,9 @@ func parseOneShotCommandArgs(args []string) ([]string, bool) {
 			continue
 		}
 
-		// Skip global flags so one-shot commands still work when the daemon is
-		// launched with options like --data-dir.
+		// Flag-prefixed invocations belong to the node CLI, not wallet one-shot mode.
 		if strings.HasPrefix(part, "-") {
-			// Flags that take a value in the next argv token.
-			if part == "--data-dir" || part == "--keystore-dir" || part == "--config" || part == "--p2p-port" || part == "--rpc-port" {
-				i++
-			}
-			continue
+			return nil, false
 		}
 
 		commandIdx = i
