@@ -7,6 +7,7 @@ import (
 
 	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 )
 
 func TestHeaderValidateExtraDataSize(t *testing.T) {
@@ -74,7 +75,7 @@ func TestValidateExtraDataContentRejectsLowInformationPatterns(t *testing.T) {
 func TestNewHeaderUsesMinerSpecificDifficultyAtSameHeight(t *testing.T) {
 	engine := pow.NewPoW()
 	parent := &Block{Header: &Header{
-		Difficulty: big.NewInt(pow.BaseDifficulty),
+		Difficulty: big.NewInt(difficulty.BaseDifficulty),
 		Number:     big.NewInt(10),
 		GasLimit:   1,
 		Time:       uint64(time.Now().Add(time.Hour).Unix()),
@@ -96,11 +97,11 @@ func TestNewHeaderUsesMinerSpecificDifficultyAtSameHeight(t *testing.T) {
 		t.Fatalf("expected same-height miners to receive different full difficulties: %s", headerA.Difficulty)
 	}
 
-	expectedBase := pow.CalculateDifficultyFromWindow(big.NewInt(pow.BaseDifficulty), height.Uint64(), []uint64{1})
-	if got := pow.NormalizeDifficulty(headerA.Difficulty); got.Cmp(expectedBase) != 0 {
+	expectedBase := difficulty.FromWindow(big.NewInt(difficulty.BaseDifficulty), height.Uint64(), []uint64{1})
+	if got := difficulty.Normalize(headerA.Difficulty); got.Cmp(expectedBase) != 0 {
 		t.Fatalf("miner A normalized difficulty mismatch: got %s, want %s", got, expectedBase)
 	}
-	if got := pow.NormalizeDifficulty(headerB.Difficulty); got.Cmp(expectedBase) != 0 {
+	if got := difficulty.Normalize(headerB.Difficulty); got.Cmp(expectedBase) != 0 {
 		t.Fatalf("miner B normalized difficulty mismatch: got %s, want %s", got, expectedBase)
 	}
 }

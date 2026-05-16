@@ -13,6 +13,7 @@ import (
 
 	"github.com/antdaza/antdchain/antdc/block"
 	"github.com/antdaza/antdchain/antdc/pow"
+	"github.com/antdaza/antdchain/difficulty"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -234,7 +235,7 @@ func (bc *Blockchain) validateBasicBlockIntegrity(b *block.Block, parent *block.
 	}
 
 	// Enforce the network target block time for PoS.
-	minBlockTime := uint64(pow.TargetBlockTimeSeconds)
+	minBlockTime := uint64(difficulty.TargetBlockTimeSeconds)
 	if b.Header.Time < parent.Header.Time+minBlockTime {
 		return fmt.Errorf("block too fast: %d < %d + %d",
 			b.Header.Time, parent.Header.Time, minBlockTime)
@@ -327,9 +328,9 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 		return bc.pow.CalculateExpectedDifficulty(height, parent.Header.Time, b.Header.Time)
 	}
 
-	window := make([]uint64, 0, pow.DifficultyAdjustment)
+	window := make([]uint64, 0, difficulty.AdjustmentWindow)
 	curr := parent
-	for len(window) < pow.DifficultyAdjustment-1 && curr != nil && curr.Header != nil && curr.Header.Number.Uint64() > 0 {
+	for len(window) < difficulty.AdjustmentWindow-1 && curr != nil && curr.Header != nil && curr.Header.Number.Uint64() > 0 {
 		ancestor, err := bc.GetBlockByHash(curr.Header.ParentHash)
 		if err != nil || ancestor == nil || ancestor.Header == nil {
 			break
@@ -349,8 +350,8 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 	}
 	window = append(window, delta)
 
-	baseDifficulty := pow.CalculateDifficultyFromWindow(new(big.Int).Set(parent.Header.Difficulty), height, window)
-	return pow.CalculateMinerDifficulty(baseDifficulty, b.Header.Coinbase)
+	baseDifficulty := difficulty.FromWindow(new(big.Int).Set(parent.Header.Difficulty), height, window)
+	return difficulty.ForMiner(baseDifficulty, b.Header.Coinbase)
 }
 
 // validateProofOfWork verifies the block nonce/mix digest satisfy the header difficulty.

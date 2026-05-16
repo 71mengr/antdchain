@@ -15,10 +15,10 @@ import (
 
 	"github.com/antdaza/antdchain/antdc/block"
 	"github.com/antdaza/antdchain/antdc/chain"
-	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/wallet"
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -185,7 +185,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 			"timestamp": block.Header.Time,
 
-			"difficulty": pow.DisplayDifficulty(block.Header.Difficulty),
+			"difficulty": difficulty.Display(block.Header.Difficulty),
 
 			"gasLimit": block.Header.GasLimit,
 

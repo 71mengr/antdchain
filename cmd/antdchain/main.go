@@ -31,6 +31,7 @@ import (
 
 	"github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/common/hexutil"
+	"github.com/antdaza/antdchain/difficulty"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
@@ -1249,7 +1250,7 @@ func runNode(c *cli.Context) error {
 	genesisStakers := getGenesisStakers()
 	logger.Infof("   • Chain Height:       %d", bc.GetChainHeight())
 	logger.Infof("   • Genesis Stakers:    %d", len(genesisStakers))
-	logger.Infof("   • Block Time:         %d seconds", pow.TargetBlockTimeSeconds)
+	logger.Infof("   • Block Time:         %d seconds", difficulty.TargetBlockTimeSeconds)
 
 	// ==============================================
 	// WAIT FOR SHUTDOWN SIGNAL

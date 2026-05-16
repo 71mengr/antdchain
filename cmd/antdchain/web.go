@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 	"github.com/gorilla/mux"
 )
 
@@ -101,7 +101,7 @@ func (ws *WebServer) apiChainStatus(w http.ResponseWriter, r *http.Request) {
 	if latest != nil && latest.Header != nil {
 		status["height"] = latest.Header.Number.Uint64()
 		status["hash"] = latest.Hash().Hex()
-		status["difficulty"] = pow.DisplayDifficulty(latest.Header.Difficulty)
+		status["difficulty"] = difficulty.Display(latest.Header.Difficulty)
 		status["timestamp"] = latest.Header.Time
 		status["gasLimit"] = latest.Header.GasLimit
 		status["gasUsed"] = latest.Header.GasUsed
@@ -215,7 +215,7 @@ func (ws *WebServer) apiBlocks(w http.ResponseWriter, r *http.Request) {
 			"miner":        blk.Header.Coinbase.String(),
 			"timestamp":    blk.Header.Time,
 			"timestampUTC": time.Unix(int64(blk.Header.Time), 0).UTC().Format(time.RFC3339),
-			"difficulty":   pow.DisplayDifficulty(blk.Header.Difficulty),
+			"difficulty":   difficulty.Display(blk.Header.Difficulty),
 			"gasLimit":     blk.Header.GasLimit,
 			"gasUsed":      blk.Header.GasUsed,
 			"txCount":      len(blk.Txs),
@@ -253,7 +253,7 @@ func (ws *WebServer) apiBlockByHeight(w http.ResponseWriter, r *http.Request) {
 		"miner":        blk.Header.Coinbase.String(),
 		"timestamp":    blk.Header.Time,
 		"timestampUTC": time.Unix(int64(blk.Header.Time), 0).UTC().Format(time.RFC3339),
-		"difficulty":   pow.DisplayDifficulty(blk.Header.Difficulty),
+		"difficulty":   difficulty.Display(blk.Header.Difficulty),
 		"nonce":        hex.EncodeToString(blk.Header.Nonce[:]),
 		"mixHash":      blk.Header.MixDigest.Hex(),
 		"stateRoot":    blk.Header.Root.Hex(),

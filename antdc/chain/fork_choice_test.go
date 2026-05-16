@@ -15,6 +15,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/chain/db"
 	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 	"github.com/hashicorp/golang-lru"
 )
 
@@ -88,9 +89,9 @@ func TestSameHeightForkChoicePrefersStrongerProofQuality(t *testing.T) {
 }
 
 func TestValidateBasicBlockIntegrityRejectsOversizedExtraData(t *testing.T) {
-	parentTime := uint64(time.Now().Unix()) - uint64(2*pow.TargetBlockTimeSeconds)
+	parentTime := uint64(time.Now().Unix()) - uint64(2*difficulty.TargetBlockTimeSeconds)
 	parent := testForkChoiceBlock(40, common.BytesToHash([]byte("grandparent")), 1_000_000, parentTime, "parent")
-	child := testForkChoiceBlock(41, parent.Hash(), 1_000_000, parentTime+uint64(pow.TargetBlockTimeSeconds), "child")
+	child := testForkChoiceBlock(41, parent.Hash(), 1_000_000, parentTime+uint64(difficulty.TargetBlockTimeSeconds), "child")
 	child.Header.Extra = make([]byte, block.MaxExtraDataSize+1)
 
 	bc := &Blockchain{}

@@ -18,18 +18,19 @@ import (
 	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 )
 
 // Constants for block validation
 const (
-	MaxBlockSize         = 8 << 20                    // 8MB maximum block size
-	MaxTransactions      = 10000                      // Maximum transactions per block
-	MaxUncles            = 2                          // Maximum uncle blocks
-	MaxExtraDataSize     = 256                        // Maximum block header extra data size in bytes
-	BloomByteLength      = 1 << 8                     // Bloom filter length: 256 bytes
-	BlockTimeTarget      = pow.TargetBlockTimeSeconds // 3 minute target block time
-	FutureBlockThreshold = 30                         // Reject blocks more than 30 seconds in future
-	DifficultyAdjustment = 1 << 10                    // Difficulty adjustment divisor
+	MaxBlockSize         = 8 << 20                           // 8MB maximum block size
+	MaxTransactions      = 10000                             // Maximum transactions per block
+	MaxUncles            = 2                                 // Maximum uncle blocks
+	MaxExtraDataSize     = 256                               // Maximum block header extra data size in bytes
+	BloomByteLength      = 1 << 8                            // Bloom filter length: 256 bytes
+	BlockTimeTarget      = difficulty.TargetBlockTimeSeconds // 3 minute target block time
+	FutureBlockThreshold = 30                                // Reject blocks more than 30 seconds in future
+	DifficultyAdjustment = 1 << 10                           // Difficulty adjustment divisor
 )
 
 var (

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,7 @@ func TestPoWDefaults(t *testing.T) {
 	engine := NewPoW()
 	require.NotNil(t, engine)
 
-	assert.Equal(t, big.NewInt(BaseDifficulty), engine.GetDifficulty())
+	assert.Equal(t, big.NewInt(difficulty.BaseDifficulty), engine.GetDifficulty())
 	assert.NotNil(t, engine.GetTarget())
 }
 
@@ -27,7 +28,7 @@ func TestCalculateExpectedDifficultyBootstrapHeight(t *testing.T) {
 
 	diff := engine.CalculateExpectedDifficulty(1, 1000, 1012)
 
-	assert.Equal(t, big.NewInt(BaseDifficulty*4), diff)
+	assert.Equal(t, big.NewInt(difficulty.BaseDifficulty*4), diff)
 }
 
 func TestCalculateExpectedDifficultyHandlesNonIncreasingTime(t *testing.T) {
@@ -35,30 +36,30 @@ func TestCalculateExpectedDifficultyHandlesNonIncreasingTime(t *testing.T) {
 
 	diff := engine.CalculateExpectedDifficulty(1, 1000, 1000)
 
-	assert.Equal(t, CalculateDifficultyFromWindow(big.NewInt(BaseDifficulty), 1, []uint64{1}), diff)
+	assert.Equal(t, difficulty.FromWindow(big.NewInt(difficulty.BaseDifficulty), 1, []uint64{1}), diff)
 }
 
 func TestCalculateDifficultyMovesEveryBlock(t *testing.T) {
-	difficulty := big.NewInt(BaseDifficulty)
+	currentDifficulty := big.NewInt(difficulty.BaseDifficulty)
 	for height := uint64(1); height <= 5; height++ {
-		next := CalculateDifficultyFromWindow(difficulty, height, []uint64{BlockTimeTarget})
-		assert.NotEqual(t, 0, next.Cmp(difficulty), "height %d reused the parent difficulty", height)
-		difficulty = next
+		next := difficulty.FromWindow(currentDifficulty, height, []uint64{difficulty.BlockTimeTarget})
+		assert.NotEqual(t, 0, next.Cmp(currentDifficulty), "height %d reused the parent difficulty", height)
+		currentDifficulty = next
 	}
 }
 
 func TestMinerSpecificDifficultyIsUniqueAtSameHeight(t *testing.T) {
-	base := CalculateDifficultyFromWindow(big.NewInt(BaseDifficulty), 5, []uint64{BlockTimeTarget})
+	base := difficulty.FromWindow(big.NewInt(difficulty.BaseDifficulty), 5, []uint64{difficulty.BlockTimeTarget})
 	minerA := common.BytesToQuantumAddress([]byte("miner-a"))
 	minerB := common.BytesToQuantumAddress([]byte("miner-b"))
 
-	diffA := CalculateMinerDifficulty(base, minerA)
-	diffB := CalculateMinerDifficulty(base, minerB)
+	diffA := difficulty.ForMiner(base, minerA)
+	diffB := difficulty.ForMiner(base, minerB)
 
 	assert.NotEqual(t, 0, diffA.Cmp(diffB))
-	assert.Equal(t, base, NormalizeDifficulty(diffA))
-	assert.Equal(t, base, NormalizeDifficulty(diffB))
-	assert.Equal(t, 0, TargetForDifficulty(diffA).Cmp(TargetForDifficulty(diffB)))
+	assert.Equal(t, base, difficulty.Normalize(diffA))
+	assert.Equal(t, base, difficulty.Normalize(diffB))
+	assert.Equal(t, 0, difficulty.Target(diffA).Cmp(difficulty.Target(diffB)))
 }
 
 func TestCalculateExpectedDifficultyForMinerUsesMinerSuffix(t *testing.T) {
@@ -66,21 +67,21 @@ func TestCalculateExpectedDifficultyForMinerUsesMinerSuffix(t *testing.T) {
 	minerA := common.BytesToQuantumAddress([]byte("miner-a"))
 	minerB := common.BytesToQuantumAddress([]byte("miner-b"))
 
-	diffA := engine.CalculateExpectedDifficultyForMiner(5, 1000, 1000+BlockTimeTarget, minerA)
-	diffB := engine.CalculateExpectedDifficultyForMiner(5, 1000, 1000+BlockTimeTarget, minerB)
+	diffA := engine.CalculateExpectedDifficultyForMiner(5, 1000, 1000+difficulty.BlockTimeTarget, minerA)
+	diffB := engine.CalculateExpectedDifficultyForMiner(5, 1000, 1000+difficulty.BlockTimeTarget, minerB)
 
 	assert.NotEqual(t, 0, diffA.Cmp(diffB))
-	assert.Equal(t, engine.CalculateExpectedDifficulty(5, 1000, 1000+BlockTimeTarget), NormalizeDifficulty(diffA))
-	assert.Equal(t, engine.CalculateExpectedDifficulty(5, 1000, 1000+BlockTimeTarget), NormalizeDifficulty(diffB))
+	assert.Equal(t, engine.CalculateExpectedDifficulty(5, 1000, 1000+difficulty.BlockTimeTarget), difficulty.Normalize(diffA))
+	assert.Equal(t, engine.CalculateExpectedDifficulty(5, 1000, 1000+difficulty.BlockTimeTarget), difficulty.Normalize(diffB))
 }
 
 func TestDisplayDifficultyKeepsMinerSpecificValue(t *testing.T) {
-	base := CalculateDifficultyFromWindow(big.NewInt(BaseDifficulty), 7, []uint64{BlockTimeTarget})
+	base := difficulty.FromWindow(big.NewInt(difficulty.BaseDifficulty), 7, []uint64{difficulty.BlockTimeTarget})
 	miner := common.BytesToQuantumAddress([]byte("display-miner"))
-	diff := CalculateMinerDifficulty(base, miner)
+	diff := difficulty.ForMiner(base, miner)
 
-	assert.Equal(t, diff.String(), DisplayDifficulty(diff))
-	assert.NotEqual(t, NormalizeDifficulty(diff).String(), DisplayDifficulty(diff))
+	assert.Equal(t, diff.String(), difficulty.Display(diff))
+	assert.NotEqual(t, difficulty.Normalize(diff).String(), difficulty.Display(diff))
 }
 
 func TestAutoRegisterIfEligible(t *testing.T) {
@@ -144,7 +145,7 @@ func TestAnyMinerCanMineAndVerifyBlock(t *testing.T) {
 			Root:       common.BytesToHash([]byte("root")),
 			TxHash:     common.BytesToHash([]byte("txs")),
 			Number:     uint64(i + 1),
-			Difficulty: big.NewInt(MinDifficulty),
+			Difficulty: big.NewInt(difficulty.MinDifficulty),
 			Time:       uint64(i + 1),
 			Extra:      []byte("ANTDChain-PoW"),
 		}
@@ -164,7 +165,7 @@ func TestMineBlockReturnsWhenContextCanceled(t *testing.T) {
 		Root:       common.BytesToHash([]byte("root")),
 		TxHash:     common.BytesToHash([]byte("txs")),
 		Number:     1,
-		Difficulty: big.NewInt(MaxDifficulty),
+		Difficulty: big.NewInt(difficulty.MaxDifficulty),
 		Time:       1,
 		Extra:      []byte("ANTDChain-PoW"),
 	}

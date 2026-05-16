@@ -21,6 +21,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/antdc/vm"
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 )
 
 // BlockTemplate represents a mining template
@@ -66,9 +67,9 @@ func powHeaderFromBlockHeader(header *block.Header) (*pow.BlockHeader, error) {
 		return nil, errors.New("block header number is nil")
 	}
 
-	difficulty := big.NewInt(pow.MinDifficulty)
+	diff := big.NewInt(difficulty.MinDifficulty)
 	if header.Difficulty != nil {
-		difficulty = new(big.Int).Set(header.Difficulty)
+		diff = new(big.Int).Set(header.Difficulty)
 	}
 
 	return &pow.BlockHeader{
@@ -77,7 +78,7 @@ func powHeaderFromBlockHeader(header *block.Header) (*pow.BlockHeader, error) {
 		Root:       header.Root,
 		TxHash:     header.TxHash,
 		Number:     header.Number.Uint64(),
-		Difficulty: difficulty,
+		Difficulty: diff,
 		Time:       header.Time,
 		Extra:      header.GetExtraData(),
 		Nonce:      [8]byte(header.Nonce),
@@ -85,8 +86,8 @@ func powHeaderFromBlockHeader(header *block.Header) (*pow.BlockHeader, error) {
 	}, nil
 }
 
-func targetHexForDifficulty(difficulty *big.Int) string {
-	target := pow.TargetForDifficulty(difficulty)
+func targetHexForDifficulty(value *big.Int) string {
+	target := difficulty.Target(value)
 	return fmt.Sprintf("%064x", target)
 }
 
@@ -231,8 +232,8 @@ func (bc *Blockchain) CreatePoSBlock(miner common.QuantumAddress) (*block.Block,
 
 	// Enforce the network target block time.
 	currentTime := uint64(time.Now().Unix())
-	if currentTime-parent.Header.Time < pow.TargetBlockTimeSeconds {
-		wait := pow.TargetBlockTimeSeconds - (currentTime - parent.Header.Time)
+	if currentTime-parent.Header.Time < difficulty.TargetBlockTimeSeconds {
+		wait := difficulty.TargetBlockTimeSeconds - (currentTime - parent.Header.Time)
 		log.Printf("[miner] Waiting %d seconds for proper block timing...", wait)
 		time.Sleep(time.Duration(wait) * time.Second)
 		currentTime = uint64(time.Now().Unix())

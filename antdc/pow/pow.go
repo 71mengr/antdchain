@@ -15,34 +15,25 @@ import (
 	"time"
 
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
-	BlockTimeTarget                  = 3 * 60 // seconds per block
-	TargetBlockTimeSeconds           = BlockTimeTarget
-	DifficultyAdjustment             = 100       // blocks between retargets
-	MaxDifficulty                    = 1_000_000 // arbitrary cap
-	MinDifficulty                    = 1
+	BlockTimeTarget                  = difficulty.BlockTimeTarget
+	TargetBlockTimeSeconds           = difficulty.TargetBlockTimeSeconds
+	DifficultyAdjustment             = difficulty.AdjustmentWindow
+	MaxDifficulty                    = difficulty.MaxDifficulty
+	MinDifficulty                    = difficulty.MinDifficulty
 	MaxFutureBlockTime               = 30 // seconds of clock drift allowed
-	BaseDifficulty                   = 1000
+	BaseDifficulty                   = difficulty.BaseDifficulty
+	MinerDifficultyOffsetBits        = difficulty.MinerOffsetBits
 	RotatingKingHashrateBoostPercent = 50
-
-	// MinerDifficultyOffsetBits reserves enough space to append a miner-specific
-	// address suffix to the consensus difficulty.  The work target is still based
-	// on the normalized base difficulty, but the full header difficulty becomes
-	// unique for each miner competing at the same height.
-	MinerDifficultyOffsetBits = common.QuantumAddressLength * 8
 )
 
 var (
 	ErrInvalidNonce        = errors.New("invalid nonce")
 	ErrBlockTooFarInFuture = errors.New("block timestamp too far in future")
-
-	minerDifficultyDomain = new(big.Int).Add(
-		new(big.Int).Lsh(big.NewInt(1), MinerDifficultyOffsetBits),
-		big.NewInt(1),
-	)
 )
 
 // ─── Prometheus metrics ─────────────────────────────────────────────────────
@@ -108,7 +99,7 @@ func (p *PoW) GetDifficulty() *big.Int {
 func (p *PoW) SetDifficulty(diff *big.Int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.difficulty = normalizeDifficulty(diff)
+	p.difficulty = difficulty.Normalize(diff)
 	difficultyGauge.Set(float64(p.difficulty.Int64()))
 }
 
@@ -116,19 +107,13 @@ func (p *PoW) SetDifficulty(diff *big.Int) {
 func (p *PoW) GetTarget() *big.Int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return targetForDifficulty(p.difficulty)
+	return difficulty.Target(p.difficulty)
 }
 
 // TargetForDifficulty returns the mining target for either a legacy base
 // difficulty or a miner-specific full difficulty.
-func TargetForDifficulty(difficulty *big.Int) *big.Int {
-	return targetForDifficulty(difficulty)
-}
-
-func targetForDifficulty(difficulty *big.Int) *big.Int {
-	difficulty = normalizeDifficulty(difficulty)
-	maxTarget := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
-	return new(big.Int).Div(maxTarget, difficulty)
+func TargetForDifficulty(value *big.Int) *big.Int {
+	return difficulty.Target(value)
 }
 
 // CalculateExpectedDifficulty predicts the next base difficulty without mutating engine state.
@@ -137,12 +122,12 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
 	defer p.mu.RUnlock()
 
 	window := append([]uint64(nil), p.blockTimes...)
-	delta := elapsedBlockTime(parentTime, currentTime)
+	delta := difficulty.ElapsedBlockTime(parentTime, currentTime)
 	window = append(window, delta)
 	if len(window) > DifficultyAdjustment {
 		window = window[1:]
 	}
-	return CalculateDifficultyFromWindow(new(big.Int).Set(p.difficulty), height, window)
+	return difficulty.FromWindow(new(big.Int).Set(p.difficulty), height, window)
 }
 
 // CalculateExpectedDifficultyForMiner predicts the full consensus difficulty for
@@ -151,7 +136,7 @@ func (p *PoW) CalculateExpectedDifficulty(height uint64, parentTime, currentTime
 // suffix makes simultaneous candidates at the same height miner-distinct.
 func (p *PoW) CalculateExpectedDifficultyForMiner(height uint64, parentTime, currentTime uint64, miner common.QuantumAddress) *big.Int {
 	base := p.CalculateExpectedDifficulty(height, parentTime, currentTime)
-	return CalculateMinerDifficulty(base, miner)
+	return difficulty.ForMiner(base, miner)
 }
 
 // CalculateMinerDifficulty appends a deterministic miner-specific suffix to a
@@ -159,48 +144,27 @@ func (p *PoW) CalculateExpectedDifficultyForMiner(height uint64, parentTime, cur
 // 20-byte QuantumAddress space, two different miners cannot produce the same
 // full difficulty for the same base difficulty.
 func CalculateMinerDifficulty(baseDifficulty *big.Int, miner common.QuantumAddress) *big.Int {
-	base := normalizeDifficulty(baseDifficulty)
-	minerOffset := new(big.Int).SetBytes(miner.Bytes())
-	minerOffset.Add(minerOffset, big.NewInt(1))
-
-	full := new(big.Int).Mul(base, minerDifficultyDomain)
-	full.Add(full, minerOffset)
-	return full
+	return difficulty.ForMiner(baseDifficulty, miner)
 }
 
 // NormalizeDifficulty strips any miner-specific suffix and clamps the result to
 // the valid network/base difficulty range.
-func NormalizeDifficulty(difficulty *big.Int) *big.Int {
-	return normalizeDifficulty(difficulty)
+func NormalizeDifficulty(value *big.Int) *big.Int {
+	return difficulty.Normalize(value)
 }
 
 // DisplayDifficulty returns the exact header difficulty for user-facing output.
 // It intentionally keeps the miner-specific suffix so competing miners at the
 // same height do not appear to have the same difficulty.
-func DisplayDifficulty(difficulty *big.Int) string {
-	if difficulty == nil || difficulty.Sign() <= 0 {
-		return "0"
-	}
-	return difficulty.String()
-}
-
-func normalizeDifficulty(difficulty *big.Int) *big.Int {
-	if difficulty == nil || difficulty.Sign() <= 0 {
-		return big.NewInt(MinDifficulty)
-	}
-
-	normalized := new(big.Int).Set(difficulty)
-	if normalized.Cmp(minerDifficultyDomain) >= 0 {
-		normalized.Div(normalized, minerDifficultyDomain)
-	}
-	return clampDifficulty(normalized)
+func DisplayDifficulty(value *big.Int) string {
+	return difficulty.Display(value)
 }
 
 // CalculateDifficultyFromWindow calculates difficulty from a base difficulty and observed block times.
 // The returned difficulty moves for every non-genesis height so consecutive
 // blocks never inherit an unchanged constant difficulty.
 func CalculateDifficultyFromWindow(baseDifficulty *big.Int, height uint64, blockTimes []uint64) *big.Int {
-	return computeAdjustedDifficulty(normalizeDifficulty(baseDifficulty), height, blockTimes)
+	return difficulty.FromWindow(baseDifficulty, height, blockTimes)
 }
 
 // AdjustDifficulty recalculates difficulty every DifficultyAdjustment blocks.
@@ -209,13 +173,13 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 	defer p.mu.Unlock()
 
 	// Record block time for moving average
-	delta := elapsedBlockTime(parentTime, currentTime)
+	delta := difficulty.ElapsedBlockTime(parentTime, currentTime)
 	p.blockTimes = append(p.blockTimes, delta)
 	if len(p.blockTimes) > DifficultyAdjustment {
 		p.blockTimes = p.blockTimes[1:]
 	}
 
-	adjusted := CalculateDifficultyFromWindow(p.difficulty, height, p.blockTimes)
+	adjusted := difficulty.FromWindow(p.difficulty, height, p.blockTimes)
 	if adjusted.Cmp(p.difficulty) == 0 {
 		return p.difficulty
 	}
@@ -237,71 +201,6 @@ func (p *PoW) AdjustDifficulty(height uint64, parentTime, currentTime uint64) *b
 	return adjusted
 }
 
-func elapsedBlockTime(parentTime, currentTime uint64) uint64 {
-	if currentTime <= parentTime {
-		return 1
-	}
-	return currentTime - parentTime
-}
-
-func computeAdjustedDifficulty(current *big.Int, height uint64, blockTimes []uint64) *big.Int {
-	if height == 0 || len(blockTimes) == 0 {
-		return clampDifficulty(current)
-	}
-
-	var total uint64
-	for _, t := range blockTimes {
-		total += t
-	}
-	avg := float64(total) / float64(len(blockTimes))
-
-	ratio := float64(BlockTimeTarget) / avg
-	if ratio > 4.0 {
-		ratio = 4.0
-	} else if ratio < 0.25 {
-		ratio = 0.25
-	}
-
-	current = normalizeDifficulty(current)
-	newDiff := new(big.Float).SetInt(current)
-	newDiff.Mul(newDiff, big.NewFloat(ratio))
-	adjusted := new(big.Int)
-	newDiff.Int(adjusted)
-	adjusted = clampDifficulty(adjusted)
-
-	return ensureDifficultyMoves(current, adjusted, avg)
-}
-
-func clampDifficulty(diff *big.Int) *big.Int {
-	if diff == nil || diff.Cmp(big.NewInt(MinDifficulty)) < 0 {
-		return big.NewInt(MinDifficulty)
-	}
-	if diff.Cmp(big.NewInt(MaxDifficulty)) > 0 {
-		return big.NewInt(MaxDifficulty)
-	}
-	return new(big.Int).Set(diff)
-}
-
-func ensureDifficultyMoves(current, adjusted *big.Int, avg float64) *big.Int {
-	current = clampDifficulty(current)
-	adjusted = clampDifficulty(adjusted)
-	if adjusted.Cmp(current) != 0 {
-		return adjusted
-	}
-
-	if avg <= float64(BlockTimeTarget) || current.Cmp(big.NewInt(MinDifficulty)) <= 0 {
-		if current.Cmp(big.NewInt(MaxDifficulty)) < 0 {
-			return new(big.Int).Add(current, big.NewInt(1))
-		}
-		return new(big.Int).Sub(current, big.NewInt(1))
-	}
-
-	if current.Cmp(big.NewInt(MinDifficulty)) > 0 {
-		return new(big.Int).Sub(current, big.NewInt(1))
-	}
-	return new(big.Int).Add(current, big.NewInt(1))
-}
-
 // ── Mining & Verification ──────────────────────────────────────────────────
 
 // MineBlock performs Proof‑of‑Work on the given header.
@@ -311,7 +210,7 @@ func (p *PoW) MineBlock(ctx context.Context, header *BlockHeader) error {
 	if header == nil {
 		return errors.New("block header is nil")
 	}
-	target := targetForDifficulty(header.Difficulty)
+	target := difficulty.Target(header.Difficulty)
 	serialized := header.SerializeForMining()
 	noncePos := len(serialized) - 8
 
@@ -338,7 +237,7 @@ func (p *PoW) Verify(header *BlockHeader) bool {
 	if header == nil {
 		return false
 	}
-	target := targetForDifficulty(header.Difficulty)
+	target := difficulty.Target(header.Difficulty)
 	serialized := header.SerializeForMining()
 	hash := common.ComputeHash(serialized)
 	if hash != header.MixDigest {

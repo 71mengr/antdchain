@@ -13,6 +13,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/rotatingking"
 	"github.com/antdaza/antdchain/antdc/state"
 	"github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/difficulty"
 )
 
 // Constants
@@ -23,7 +24,7 @@ var (
 	genesisPremine       = new(big.Int).Mul(big.NewInt(60_000_000), big.NewInt(1e18)) // 60M ANTD premined at genesis
 
 	// Halving parameters derived from the network target block time.
-	secondsPerBlock  = uint64(pow.TargetBlockTimeSeconds)
+	secondsPerBlock  = uint64(difficulty.TargetBlockTimeSeconds)
 	blocksPerMinute  = float64(60) / float64(secondsPerBlock)
 	blocksPerHour    = uint64(60*60) / secondsPerBlock
 	blocksPerDay     = uint64(24*60*60) / secondsPerBlock

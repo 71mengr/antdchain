@@ -28,6 +28,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/tx"
 	"github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/common/hexutil"
+	"github.com/antdaza/antdchain/difficulty"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -554,9 +555,9 @@ func mineBlockProofOfWork(ctx context.Context, engine *pow.PoW, header *block.He
 		return errors.New("block header is nil")
 	}
 
-	difficulty := big.NewInt(pow.MinDifficulty)
+	diff := big.NewInt(difficulty.MinDifficulty)
 	if header.Difficulty != nil {
-		difficulty = new(big.Int).Set(header.Difficulty)
+		diff = new(big.Int).Set(header.Difficulty)
 	}
 
 	powHeader := &pow.BlockHeader{
@@ -565,7 +566,7 @@ func mineBlockProofOfWork(ctx context.Context, engine *pow.PoW, header *block.He
 		Root:       header.Root,
 		TxHash:     header.TxHash,
 		Number:     header.Number.Uint64(),
-		Difficulty: difficulty,
+		Difficulty: diff,
 		Time:       header.Time,
 		Extra:      append([]byte(nil), header.Extra...),
 		Nonce:      [8]byte(header.Nonce),
@@ -1175,7 +1176,7 @@ func (ms *PosMiningState) GetNextMiningSlot(bc *chain.Blockchain) (uint64, time.
 	}
 	blocksUntilTurn := uint64(activeStakers)
 	estimatedBlocks := blocksUntilTurn
-	estimatedTime := time.Duration(estimatedBlocks*pow.TargetBlockTimeSeconds) * time.Second
+	estimatedTime := time.Duration(estimatedBlocks*difficulty.TargetBlockTimeSeconds) * time.Second
 	return currentHeight + estimatedBlocks, estimatedTime, nil
 }
 
