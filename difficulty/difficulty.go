@@ -6,7 +6,6 @@ package difficulty
 
 import (
 	"math/big"
-	"sort"
 
 	"github.com/antdaza/antdchain/common"
 )
@@ -25,32 +24,36 @@ const (
 	// Target block time: 2.5 minutes (Dash)
 	BlockTimeTarget        = 150 // seconds (2.5 minutes)
 	TargetBlockTimeSeconds = BlockTimeTarget
-	
+
 	// DGW Constants
-	DGWWindow          = 24   // Dark Gravity Wave window size (Dash uses 24)
-	LWMAWindow         = 60   // LWMA window for smooth adjustments
-	AdjustmentWindow   = 100  // Legacy window (kept for compatibility)
-	
+	DGWWindow        = 24         // Dark Gravity Wave window size (Dash uses 24)
+	LWMAWindow       = 60         // LWMA window for smooth adjustments
+	AdjustmentWindow = LWMAWindow // Keep enough history for both DGW and LWMA
+
 	// Difficulty bounds
-	MaxDifficulty          = new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil) // Max 2^256
-	MinDifficulty          = 1
-	BaseDifficulty         = 131072 // Litecoin's initial difficulty- lol
-	
+	MinDifficulty  = 1
+	BaseDifficulty = 131072 // Litecoin's initial difficulty- lol
+
 	// DigiShield bounds
-	MaxAdjustmentFactor    = 4      // Max 4x difficulty change per block
-	MinAdjustmentFactor    = 0.25   // Min 0.25x difficulty change
-	
+	MaxAdjustmentFactor = 4    // Max 4x difficulty change per block
+	MinAdjustmentFactor = 0.25 // Min 0.25x difficulty change
+
 	// Protection against timestamp manipulation
-	MaxFutureBlockTime     = 15 * 60   // 15 minutes max future
-	MaxPastBlockTime       = 15 * 60   // 15 minutes max past
-	
+	MaxFutureBlockTime = 15 * 60 // 15 minutes max future
+	MaxPastBlockTime   = 15 * 60 // 15 minutes max past
+
 	// Miner offset bits (kept from original)
 	MinerOffsetBits = common.QuantumAddressLength * 8
 )
 
-var minerDomain = new(big.Int).Add(
-	new(big.Int).Lsh(big.NewInt(1), MinerOffsetBits),
-	big.NewInt(1),
+var (
+	// MaxDifficulty caps the normalized network difficulty to the full 256-bit space.
+	MaxDifficulty = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+
+	minerDomain = new(big.Int).Add(
+		new(big.Int).Lsh(big.NewInt(1), MinerOffsetBits),
+		big.NewInt(1),
+	)
 )
 
 // ============================================================================
@@ -63,12 +66,12 @@ func CalculateDifficulty(prevDifficulty *big.Int, height uint64, timestamps []ui
 	if height == 0 {
 		return big.NewInt(BaseDifficulty)
 	}
-	
+
 	// Use DGW for rapid adjustment (Dash style)
 	if height >= DGWWindow {
 		return CalculateDarkGravityWave(prevDifficulty, height, timestamps)
 	}
-	
+
 	// Fallback to LWMA for smoother adjustments during initial chain
 	return CalculateLWMA(prevDifficulty, timestamps)
 }
@@ -79,17 +82,17 @@ func CalculateDarkGravityWave(prevDifficulty *big.Int, height uint64, timestamps
 	if len(timestamps) < DGWWindow {
 		return Clamp(prevDifficulty)
 	}
-	
+
 	// Get the last DGWWindow blocks
 	window := timestamps
 	if len(window) > DGWWindow {
 		window = window[len(window)-DGWWindow:]
 	}
-	
+
 	// Calculate average block time over the window
 	var totalTime uint64
 	for i := 1; i < len(window); i++ {
-		diff := window[i] - window[i-1]
+		diff := ElapsedBlockTime(window[i-1], window[i])
 		// Clamp to reasonable bounds
 		if diff > MaxFutureBlockTime {
 			diff = MaxFutureBlockTime
@@ -99,33 +102,30 @@ func CalculateDarkGravityWave(prevDifficulty *big.Int, height uint64, timestamps
 		}
 		totalTime += diff
 	}
-	
+
 	avgTime := float64(totalTime) / float64(len(window)-1)
-	
-	// Calculate target time sum (expected total time)
-	targetTotal := float64(BlockTimeTarget) * float64(len(window)-1)
-	
+
 	// Calculate ratio with bounds (DigiShield style)
-	ratio := targetTotal / avgTime
+	ratio := float64(BlockTimeTarget) / avgTime
 	if ratio > MaxAdjustmentFactor {
 		ratio = MaxAdjustmentFactor
 	}
 	if ratio < MinAdjustmentFactor {
 		ratio = MinAdjustmentFactor
 	}
-	
+
 	// Calculate new difficulty
 	currentDiff := Normalize(prevDifficulty)
 	newDiff := new(big.Float).SetInt(currentDiff)
 	newDiff.Mul(newDiff, big.NewFloat(ratio))
-	
+
 	result := new(big.Int)
 	newDiff.Int(result)
-	
+
 	// Apply additional smoothing
 	result = applyDigiShield(result, currentDiff, ratio)
 	result = Clamp(result)
-	
+
 	// Ensure difficulty changes (prevents stuck difficulty)
 	return ensureDifficultyChanges(currentDiff, result, avgTime)
 }
@@ -137,36 +137,34 @@ func CalculateLWMA(prevDifficulty *big.Int, timestamps []uint64) *big.Int {
 		// Not enough blocks, use simple average
 		return CalculateSimpleAverage(prevDifficulty, timestamps)
 	}
-	
+
 	// Use last LWMAWindow blocks
 	window := timestamps
 	if len(window) > LWMAWindow {
 		window = window[len(window)-LWMAWindow:]
 	}
-	
+
 	var weightedSum float64
 	var weightSum float64
-	totalWeight := 0
-	
+
 	// Calculate weighted average (more weight to recent blocks)
 	for i := 1; i < len(window); i++ {
-		blockTime := window[i] - window[i-1]
+		blockTime := ElapsedBlockTime(window[i-1], window[i])
 		if blockTime > MaxFutureBlockTime {
 			blockTime = MaxFutureBlockTime
 		}
 		if blockTime < 1 {
 			blockTime = 1
 		}
-		
+
 		// Weight increases linearly (most recent gets highest weight)
 		weight := i
 		weightedSum += float64(blockTime) * float64(weight)
 		weightSum += float64(weight)
-		totalWeight += weight
 	}
-	
+
 	avgTime := weightedSum / weightSum
-	
+
 	// Calculate ratio with bounds
 	ratio := float64(BlockTimeTarget) / avgTime
 	if ratio > MaxAdjustmentFactor {
@@ -175,16 +173,16 @@ func CalculateLWMA(prevDifficulty *big.Int, timestamps []uint64) *big.Int {
 	if ratio < MinAdjustmentFactor {
 		ratio = MinAdjustmentFactor
 	}
-	
+
 	// Apply ratio to difficulty
 	currentDiff := Normalize(prevDifficulty)
 	newDiff := new(big.Float).SetInt(currentDiff)
 	newDiff.Mul(newDiff, big.NewFloat(ratio))
-	
+
 	result := new(big.Int)
 	newDiff.Int(result)
-	
-	return Clamp(result)
+
+	return ensureDifficultyChanges(currentDiff, Clamp(result), avgTime)
 }
 
 // CalculateSimpleAverage - Simple average for early chain
@@ -192,10 +190,10 @@ func CalculateSimpleAverage(prevDifficulty *big.Int, timestamps []uint64) *big.I
 	if len(timestamps) < 2 {
 		return Clamp(prevDifficulty)
 	}
-	
+
 	var totalTime uint64
 	for i := 1; i < len(timestamps); i++ {
-		diff := timestamps[i] - timestamps[i-1]
+		diff := ElapsedBlockTime(timestamps[i-1], timestamps[i])
 		if diff > MaxFutureBlockTime {
 			diff = MaxFutureBlockTime
 		}
@@ -204,25 +202,25 @@ func CalculateSimpleAverage(prevDifficulty *big.Int, timestamps []uint64) *big.I
 		}
 		totalTime += diff
 	}
-	
+
 	avgTime := float64(totalTime) / float64(len(timestamps)-1)
 	ratio := float64(BlockTimeTarget) / avgTime
-	
+
 	if ratio > MaxAdjustmentFactor {
 		ratio = MaxAdjustmentFactor
 	}
 	if ratio < MinAdjustmentFactor {
 		ratio = MinAdjustmentFactor
 	}
-	
+
 	currentDiff := Normalize(prevDifficulty)
 	newDiff := new(big.Float).SetInt(currentDiff)
 	newDiff.Mul(newDiff, big.NewFloat(ratio))
-	
+
 	result := new(big.Int)
 	newDiff.Int(result)
-	
-	return Clamp(result)
+
+	return ensureDifficultyChanges(currentDiff, Clamp(result), avgTime)
 }
 
 // ============================================================================
@@ -240,7 +238,7 @@ func applyDigiShield(newDiff, oldDiff *big.Int, ratio float64) *big.Int {
 			return maxDiff
 		}
 	}
-	
+
 	if ratio < MinAdjustmentFactor {
 		// Cap at min adjustment
 		minDiff := new(big.Int).Div(oldDiff, big.NewInt(int64(1/MinAdjustmentFactor)))
@@ -248,7 +246,7 @@ func applyDigiShield(newDiff, oldDiff *big.Int, ratio float64) *big.Int {
 			return minDiff
 		}
 	}
-	
+
 	return newDiff
 }
 
@@ -258,25 +256,25 @@ func KimotoGravityWell(timestamps []uint64) float64 {
 	if len(timestamps) < 12 {
 		return 1.0
 	}
-	
+
 	// Take last 12 blocks for quick response
 	window := timestamps[len(timestamps)-12:]
-	
+
 	var totalDeviation float64
 	for i := 1; i < len(window); i++ {
-		blockTime := float64(window[i] - window[i-1])
+		blockTime := float64(ElapsedBlockTime(window[i-1], window[i]))
 		if blockTime < 1 {
 			blockTime = 1
 		}
 		if blockTime > float64(MaxFutureBlockTime) {
 			blockTime = float64(MaxFutureBlockTime)
 		}
-		
+
 		// Calculate deviation from target
 		deviation := (blockTime - float64(BlockTimeTarget)) / float64(BlockTimeTarget)
 		totalDeviation += deviation * deviation
 	}
-	
+
 	// Higher deviation = more aggressive adjustment
 	avgDeviation := totalDeviation / float64(len(window)-1)
 	return 1.0 + avgDeviation
@@ -300,7 +298,7 @@ func ForMiner(baseDifficulty *big.Int, miner common.QuantumAddress) *big.Int {
 	base := Normalize(baseDifficulty)
 	minerOffset := new(big.Int).SetBytes(miner.Bytes())
 	minerOffset.Add(minerOffset, big.NewInt(1))
-	
+
 	full := new(big.Int).Mul(base, minerDomain)
 	full.Add(full, minerOffset)
 	return full
@@ -311,7 +309,7 @@ func Normalize(value *big.Int) *big.Int {
 	if value == nil || value.Sign() <= 0 {
 		return big.NewInt(MinDifficulty)
 	}
-	
+
 	normalized := new(big.Int).Set(value)
 	if normalized.Cmp(minerDomain) >= 0 {
 		normalized.Div(normalized, minerDomain)
@@ -330,15 +328,38 @@ func Display(value *big.Int) string {
 // FromWindow calculates difficulty using DGW/LWMA
 // Legacy function kept for compatibility
 func FromWindow(baseDifficulty *big.Int, height uint64, blockTimes []uint64) *big.Int {
+	return CalculateDifficultyFromDeltas(baseDifficulty, height, blockTimes)
+}
+
+// CalculateDifficultyFromDeltas adapts legacy elapsed block-time windows to the
+// timestamp-oriented DGW/LWMA calculators. The synthetic timestamps preserve each
+// observed interval while keeping callers that only track deltas deterministic.
+func CalculateDifficultyFromDeltas(baseDifficulty *big.Int, height uint64, blockTimes []uint64) *big.Int {
 	if height == 0 {
 		return big.NewInt(BaseDifficulty)
 	}
-	
-	// Convert block times to timestamps format
-	timestamps := make([]uint64, len(blockTimes))
-	copy(timestamps, blockTimes)
-	
+	return CalculateDifficulty(baseDifficulty, height, timestampsFromDeltas(blockTimes))
+}
+
+// CalculateDifficultyFromTimestamps calculates the next difficulty from an
+// ordered chain timestamp window. It is the preferred integration point for
+// consensus validation because DGW and LWMA both operate on block timestamps.
+func CalculateDifficultyFromTimestamps(baseDifficulty *big.Int, height uint64, timestamps []uint64) *big.Int {
 	return CalculateDifficulty(baseDifficulty, height, timestamps)
+}
+
+func timestampsFromDeltas(blockTimes []uint64) []uint64 {
+	timestamps := make([]uint64, 0, len(blockTimes)+1)
+	timestamps = append(timestamps, 0)
+	var elapsed uint64
+	for _, blockTime := range blockTimes {
+		if blockTime == 0 {
+			blockTime = 1
+		}
+		elapsed += blockTime
+		timestamps = append(timestamps, elapsed)
+	}
+	return timestamps
 }
 
 // ElapsedBlockTime returns the positive observed time between parent and current
@@ -355,16 +376,16 @@ func Clamp(value *big.Int) *big.Int {
 	if value == nil {
 		return big.NewInt(MinDifficulty)
 	}
-	
+
 	if value.Cmp(big.NewInt(MinDifficulty)) < 0 {
 		return big.NewInt(MinDifficulty)
 	}
-	
+
 	// Check max difficulty (protect against overflow)
 	if MaxDifficulty != nil && value.Cmp(MaxDifficulty) > 0 {
 		return new(big.Int).Set(MaxDifficulty)
 	}
-	
+
 	return new(big.Int).Set(value)
 }
 
@@ -373,20 +394,20 @@ func ensureDifficultyChanges(current, adjusted *big.Int, avgTime float64) *big.I
 	if adjusted.Cmp(current) != 0 {
 		return adjusted
 	}
-	
+
 	// If no change but blocks are too fast, increase difficulty
 	if avgTime <= float64(BlockTimeTarget) && current.Cmp(big.NewInt(MinDifficulty)) > 0 {
-		if current.Cmp(big.NewInt(MaxDifficulty.Int64())) < 0 {
-			return new(big.Int).Add(current, big.NewInt(1))
+		if current.Cmp(MaxDifficulty) < 0 {
+			return Clamp(new(big.Int).Add(current, big.NewInt(1)))
 		}
-		return new(big.Int).Sub(current, big.NewInt(1))
+		return current
 	}
-	
+
 	// If no change but blocks are too slow, decrease difficulty
 	if avgTime > float64(BlockTimeTarget) && current.Cmp(big.NewInt(MinDifficulty)) > 0 {
 		return new(big.Int).Sub(current, big.NewInt(1))
 	}
-	
+
 	return adjusted
 }
 
@@ -400,41 +421,41 @@ func CalculateASERT(prevDifficulty *big.Int, height uint64, timestamps []uint64,
 	if len(timestamps) < 2 {
 		return Clamp(prevDifficulty)
 	}
-	
+
 	// Use the full timestamp range
 	startTime := timestamps[0]
 	endTime := timestamps[len(timestamps)-1]
-	
+
 	// Calculate actual time elapsed
-	timeElapsed := float64(endTime - startTime)
+	timeElapsed := float64(ElapsedBlockTime(startTime, endTime))
 	if timeElapsed < 1 {
 		timeElapsed = 1
 	}
-	
+
 	// Expected time elapsed
 	expectedElapsed := float64(len(timestamps)-1) * targetInterval
-	
+
 	// Calculate ratio with half-life of 24 hours
 	halfLife := 24.0 * 3600.0 // 24 hours in seconds
 	ratio := timeElapsed / expectedElapsed
-	
+
 	// ASERT formula: new_diff = old_diff * 2^(time_ratio / half_life)
 	exponent := (timeElapsed - expectedElapsed) / halfLife
 	multiplier := new(big.Float).SetFloat64(1.0)
-	
+
 	if exponent > 0 {
 		multiplier.SetFloat64(1.0 + (exponent / 10.0))
 	} else if exponent < 0 {
 		multiplier.SetFloat64(1.0 - (-exponent / 10.0))
 	}
-	
+
 	currentDiff := Normalize(prevDifficulty)
 	newDiff := new(big.Float).SetInt(currentDiff)
 	newDiff.Mul(newDiff, multiplier)
-	
+
 	result := new(big.Int)
 	newDiff.Int(result)
-	
+
 	// Apply bounds
 	if ratio > MaxAdjustmentFactor {
 		ratio = MaxAdjustmentFactor
@@ -442,7 +463,7 @@ func CalculateASERT(prevDifficulty *big.Int, height uint64, timestamps []uint64,
 	if ratio < MinAdjustmentFactor {
 		ratio = MinAdjustmentFactor
 	}
-	
+
 	return Clamp(result)
 }
 

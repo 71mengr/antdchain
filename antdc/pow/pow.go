@@ -23,13 +23,14 @@ const (
 	BlockTimeTarget                  = difficulty.BlockTimeTarget
 	TargetBlockTimeSeconds           = difficulty.TargetBlockTimeSeconds
 	DifficultyAdjustment             = difficulty.AdjustmentWindow
-	MaxDifficulty                    = difficulty.MaxDifficulty
 	MinDifficulty                    = difficulty.MinDifficulty
 	MaxFutureBlockTime               = 30 // seconds of clock drift allowed
 	BaseDifficulty                   = difficulty.BaseDifficulty
 	MinerDifficultyOffsetBits        = difficulty.MinerOffsetBits
 	RotatingKingHashrateBoostPercent = 50
 )
+
+var MaxDifficulty = difficulty.MaxDifficulty
 
 var (
 	ErrInvalidNonce        = errors.New("invalid nonce")

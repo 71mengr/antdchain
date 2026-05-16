@@ -165,7 +165,7 @@ func TestMineBlockReturnsWhenContextCanceled(t *testing.T) {
 		Root:       common.BytesToHash([]byte("root")),
 		TxHash:     common.BytesToHash([]byte("txs")),
 		Number:     1,
-		Difficulty: big.NewInt(difficulty.MaxDifficulty),
+		Difficulty: new(big.Int).Set(difficulty.MaxDifficulty),
 		Time:       1,
 		Extra:      []byte("ANTDChain-PoW"),
 	}

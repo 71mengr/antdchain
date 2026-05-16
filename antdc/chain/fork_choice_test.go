@@ -13,7 +13,6 @@ import (
 
 	"github.com/antdaza/antdchain/antdc/block"
 	"github.com/antdaza/antdchain/antdc/chain/db"
-	"github.com/antdaza/antdchain/antdc/pow"
 	"github.com/antdaza/antdchain/common"
 	"github.com/antdaza/antdchain/difficulty"
 	"github.com/hashicorp/golang-lru"

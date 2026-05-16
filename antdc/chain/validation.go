@@ -328,30 +328,36 @@ func (bc *Blockchain) calculateExpectedDifficultyFromChainState(b *block.Block, 
 		return bc.pow.CalculateExpectedDifficulty(height, parent.Header.Time, b.Header.Time)
 	}
 
-	window := make([]uint64, 0, difficulty.AdjustmentWindow)
-	curr := parent
-	for len(window) < difficulty.AdjustmentWindow-1 && curr != nil && curr.Header != nil && curr.Header.Number.Uint64() > 0 {
+	timestampWindow := bc.collectDifficultyTimestamps(parent, b.Header.Time)
+	baseDifficulty := difficulty.CalculateDifficultyFromTimestamps(
+		new(big.Int).Set(parent.Header.Difficulty),
+		height,
+		timestampWindow,
+	)
+	return difficulty.ForMiner(baseDifficulty, b.Header.Coinbase)
+}
+
+func (bc *Blockchain) collectDifficultyTimestamps(parent *block.Block, candidateTime uint64) []uint64 {
+	blocks := make([]*block.Block, 0, difficulty.AdjustmentWindow)
+	for curr := parent; curr != nil && curr.Header != nil && len(blocks) < difficulty.AdjustmentWindow; {
+		blocks = append(blocks, curr)
+		if curr.Header.Number == nil || curr.Header.Number.Sign() == 0 {
+			break
+		}
+
 		ancestor, err := bc.GetBlockByHash(curr.Header.ParentHash)
 		if err != nil || ancestor == nil || ancestor.Header == nil {
 			break
 		}
-
-		delta := curr.Header.Time - ancestor.Header.Time
-		if delta == 0 {
-			delta = 1
-		}
-		window = append(window, delta)
 		curr = ancestor
 	}
 
-	delta := b.Header.Time - parent.Header.Time
-	if delta == 0 {
-		delta = 1
+	timestamps := make([]uint64, 0, len(blocks)+1)
+	for i := len(blocks) - 1; i >= 0; i-- {
+		timestamps = append(timestamps, blocks[i].Header.Time)
 	}
-	window = append(window, delta)
-
-	baseDifficulty := difficulty.FromWindow(new(big.Int).Set(parent.Header.Difficulty), height, window)
-	return difficulty.ForMiner(baseDifficulty, b.Header.Coinbase)
+	timestamps = append(timestamps, candidateTime)
+	return timestamps
 }
 
 // validateProofOfWork verifies the block nonce/mix digest satisfy the header difficulty.

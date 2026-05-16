@@ -28,9 +28,9 @@ const (
 	MaxUncles            = 2                                 // Maximum uncle blocks
 	MaxExtraDataSize     = 256                               // Maximum block header extra data size in bytes
 	BloomByteLength      = 1 << 8                            // Bloom filter length: 256 bytes
-	BlockTimeTarget      = difficulty.TargetBlockTimeSeconds // 3 minute target block time
+	BlockTimeTarget      = difficulty.TargetBlockTimeSeconds // 2.5 minute target block time
 	FutureBlockThreshold = 30                                // Reject blocks more than 30 seconds in future
-	DifficultyAdjustment = 1 << 10                           // Difficulty adjustment divisor
+	DifficultyAdjustment = difficulty.AdjustmentWindow       // DGW/LWMA difficulty window
 )
 
 var (
