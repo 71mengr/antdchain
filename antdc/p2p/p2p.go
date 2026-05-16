@@ -2344,12 +2344,109 @@ func (n *Node) triggerSync() {
 	}
 }
 
+func (n *Node) prepareFastSyncAncestor(peerID peer.ID, localHeight uint64) (uint64, error) {
+	if localHeight == 0 {
+		return 0, nil
+	}
+
+	localTip := n.chain.GetBlock(localHeight)
+	if localTip == nil {
+		return 0, fmt.Errorf("local tip block at height %d not found", localHeight)
+	}
+
+	ctx, cancel := context.WithTimeout(n.ctx, 8*time.Second)
+	peerTip, err := n.requestBlockWithContext(ctx, peerID, localHeight)
+	cancel()
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify peer %s at local height %d before sync: %w",
+			peerID.String()[:12], localHeight, err)
+	}
+	if peerTip == nil || peerTip.Header == nil {
+		return 0, fmt.Errorf("peer %s returned nil block at local height %d", peerID.String()[:12], localHeight)
+	}
+
+	if localTip.Hash() == peerTip.Hash() {
+		return localHeight, nil
+	}
+
+	n.logger.Warnf("FAST SYNC: peer %s diverged at local height %d (local=%s peer=%s); finding common ancestor",
+		peerID.String()[:12], localHeight, localTip.Hash().String()[:8], peerTip.Hash().String()[:8])
+
+	ancestorHeight, err := n.findCommonAncestorByHash(peerID, localHeight)
+	if err != nil {
+		return 0, err
+	}
+
+	return ancestorHeight, nil
+}
+
+func (n *Node) findCommonAncestorByHash(peerID peer.ID, maxHeight uint64) (uint64, error) {
+	var commonAncestor uint64
+	low := uint64(0)
+	high := maxHeight
+
+	for low <= high {
+		mid := low + (high-low)/2
+		matches, err := n.peerBlockMatchesLocal(peerID, mid)
+		if err != nil {
+			return 0, err
+		}
+
+		if matches {
+			commonAncestor = mid
+			low = mid + 1
+			continue
+		}
+
+		if mid == 0 {
+			return 0, fmt.Errorf("peer %s does not share genesis block", peerID.String()[:12])
+		}
+		high = mid - 1
+	}
+
+	return commonAncestor, nil
+}
+
+func (n *Node) peerBlockMatchesLocal(peerID peer.ID, height uint64) (bool, error) {
+	local := n.chain.GetBlock(height)
+	if local == nil {
+		return false, fmt.Errorf("local block at height %d not found while finding common ancestor", height)
+	}
+
+	ctx, cancel := context.WithTimeout(n.ctx, 8*time.Second)
+	peerBlock, err := n.requestBlockWithContext(ctx, peerID, height)
+	cancel()
+	if err != nil {
+		return false, fmt.Errorf("failed to fetch peer %s block at height %d while finding common ancestor: %w",
+			peerID.String()[:12], height, err)
+	}
+	if peerBlock == nil || peerBlock.Header == nil {
+		return false, fmt.Errorf("peer %s returned nil block at height %d while finding common ancestor",
+			peerID.String()[:12], height)
+	}
+
+	return local.Hash() == peerBlock.Hash(), nil
+}
+
 func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 	localHeight := n.currentHeight()
 
 	if targetHeight <= localHeight {
 		n.logger.Debugf("Sync target %d not ahead of local %d", targetHeight, localHeight)
 		return nil
+	}
+
+	ancestorHeight, err := n.prepareFastSyncAncestor(peerID, localHeight)
+	if err != nil {
+		return err
+	}
+	if ancestorHeight < localHeight {
+		n.logger.Warnf("FAST SYNC: rolling back divergent local chain from height %d to common ancestor %d",
+			localHeight, ancestorHeight)
+		if err := n.chain.TruncateTo(ancestorHeight); err != nil {
+			return fmt.Errorf("failed to truncate divergent chain to common ancestor %d: %w", ancestorHeight, err)
+		}
+		localHeight = ancestorHeight
 	}
 
 	blocksNeeded := targetHeight - localHeight
@@ -2426,10 +2523,17 @@ func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 		for {
 			if block, ok := fetchedBlocks[nextHeight]; ok {
 				if err := n.chain.AddBlock(block); err != nil {
-					if !strings.Contains(err.Error(), "already") &&
-						!strings.Contains(err.Error(), "known") {
-						n.logger.Warnf("Failed to add block %d: %v", nextHeight, err)
+					if strings.Contains(err.Error(), "already") || strings.Contains(err.Error(), "known") {
+						delete(fetchedBlocks, nextHeight)
+						nextHeight++
+						continue
 					}
+					if ancestorHeight, ok := parseParentBranchMissingAncestor(err); ok {
+						return fmt.Errorf("sync detected divergent parent branch near ancestor height %d while adding block %d: %w",
+							ancestorHeight, nextHeight, err)
+					}
+					n.logger.Warnf("Failed to add block %d: %v", nextHeight, err)
+					break
 				} else {
 					n.logger.Infof("✅ Synced block %d (parallel fetch)", nextHeight)
 				}
@@ -3147,6 +3251,9 @@ func (n *Node) syncIfBehind(pid peer.ID) {
 
 	finalHeight := n.currentHeight()
 	if finalHeight >= peerHeight {
+		if n.continueSyncWithHigherPeer(finalHeight, pid) {
+			return
+		}
 		n.chain.StopSync()
 		if isGenesis {
 			n.logger.Warnf("✅ GENESIS FAST SYNC COMPLETE: Now at height %d", finalHeight)
