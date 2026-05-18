@@ -2,11 +2,10 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repository root
 // for more information.
 
-package blockchain
+package chain
 
 import (
-	"encoding/binary"
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"os"

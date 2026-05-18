@@ -2,13 +2,13 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repository root
 // for more information.
 
-package blockchain
+package chain
 
 import (
-	"container/list"
+	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"math/big"
 	"sync"
 	"time"
 
@@ -30,7 +30,7 @@ import (
 
 const (
 	// Bitcoin-style reorg constants
-	MaxReorgDepth           = 6    // Maximum blocks to reorganize (Bitcoin: 6)
+	ManagerMaxReorgDepth    = 6    // Maximum blocks to reorganize (Bitcoin: 6)
 	MaxForkBlocks           = 1000 // Maximum blocks to consider in fork
 	MinWorkForReorg         = 3    // Minimum work difference to trigger reorg (blocks)
 	
@@ -180,7 +180,7 @@ func (rm *ReorgManager) ProcessNewBlock(blk *block.Block, fromPeer string) error
 	}
 	
 	// Check if block connects to an orphan we have
-	if orphan, exists := rm.orphanPool[blk.Header.ParentHash]; exists {
+	if _, exists := rm.orphanPool[blk.Header.ParentHash]; exists {
 		rm.logger.Debugf("Block connects to orphan parent %s", blk.Header.ParentHash.String()[:12])
 		rm.addOrphanBlock(blk, fromPeer)
 		return rm.tryResolveOrphans(blk.Header.ParentHash)
@@ -375,8 +375,8 @@ func (rm *ReorgManager) performReorg(fork *ChainFork) error {
 		fork.ForkHeight, len(fork.ActiveChain), len(fork.CandidateChain))
 	
 	// Validate reorg depth
-	if len(fork.ActiveChain) > MaxReorgDepth {
-		rm.logger.Warnf("Reorg depth %d exceeds maximum %d", len(fork.ActiveChain), MaxReorgDepth)
+	if len(fork.ActiveChain) > ManagerMaxReorgDepth {
+		rm.logger.Warnf("Reorg depth %d exceeds maximum %d", len(fork.ActiveChain), ManagerMaxReorgDepth)
 		return ErrReorgDepthExceeded
 	}
 	
