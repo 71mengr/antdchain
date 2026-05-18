@@ -34,6 +34,7 @@ import (
 	"github.com/cockroachdb/pebble"
 
 	"github.com/hashicorp/golang-lru"
+	"github.com/sirupsen/logrus"
 )
 
 // Constants for initialization
@@ -43,8 +44,33 @@ const (
 	ContinuityCheckDepth  = 10   // Check only last 10 blocks for continuity
 )
 
+// PruneConfig controls optional blockchain pruning.
+type PruneConfig struct {
+	Enabled bool
+	Depth   uint64
+	Mode    string
+}
+
+// DefaultPruneConfig returns the default pruning configuration.
+func DefaultPruneConfigValue() PruneConfig {
+	return PruneConfig{Enabled: false, Depth: DefaultPruneDepth, Mode: PruneModeDisabled}
+}
+
+// NewBlockchainWithConfig creates a blockchain with explicit pruning settings.
+func NewBlockchainWithConfig(statePath string, miner common.QuantumAddress, pruneCfg PruneConfig) (*Blockchain, error) {
+	bc, err := newBlockchain(statePath, miner, pruneCfg)
+	if err != nil {
+		return nil, err
+	}
+	return bc, nil
+}
+
 // NewBlockchain creates a new blockchain instance with database-first design
 func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, error) {
+	return newBlockchain(statePath, miner, DefaultPruneConfigValue())
+}
+
+func newBlockchain(statePath string, miner common.QuantumAddress, pruneCfg PruneConfig) (*Blockchain, error) {
 	initStart := time.Now()
 	log.Printf("[blockchain] Initializing blockchain from: %s", statePath)
 	minerQuantum, err := chaincommon.NewQuantumAddressFromBytes(miner.Bytes())
@@ -236,6 +262,7 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		reorgDepth:          atomic.Uint64{},
 		ancientStore:        nil,
 		finalizedHeight:     atomic.Uint64{},
+		logger:              logrus.New(),
 		orphanBlocks:        make(map[common.Hash]*orphanBlock),
 	}
 
@@ -350,6 +377,34 @@ func NewBlockchain(statePath string, miner common.QuantumAddress) (*Blockchain, 
 		// Start periodic sync
 		go startPeriodicRotatingKingSync(bc, 30*time.Second)
 		log.Printf("[blockchain] Rotating king manager initialized")
+	}
+
+	// ====================
+	// INITIALIZE PRUNE AND REORG MANAGERS
+	// ====================
+	reorgLogger := logrus.New()
+	reorgLogger.SetLevel(logrus.InfoLevel)
+	bc.reorgManager = NewReorgManager(&reorgChainAdapter{bc: bc}, reorgLogger)
+	bc.reorgManager.Start()
+
+	if pruneCfg.Depth == 0 {
+		pruneCfg.Depth = DefaultPruneDepth
+	}
+	if pruneCfg.Enabled {
+		pruneLogger := logrus.New()
+		pruneLogger.SetLevel(logrus.InfoLevel)
+		pm, err := NewPruneManager(&pruneBlockProvider{bc: bc}, bc, filepath.Join(statePath, "chain"), pruneCfg.Depth, pruneLogger)
+		if err != nil {
+			bc.Close()
+			return nil, fmt.Errorf("failed to initialize prune manager: %w", err)
+		}
+		if pruneCfg.Mode == PruneModeManual {
+			pm.pruneMode = PruneModeManual
+		}
+		bc.pruneManager = pm
+		if pruneCfg.Mode != PruneModeManual {
+			bc.pruneManager.Start()
+		}
 	}
 
 	// ====================

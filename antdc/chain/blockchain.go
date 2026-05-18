@@ -84,38 +84,41 @@ var (
 
 // Blockchain represents the main blockchain structure with database-first design
 type Blockchain struct {
-	mu                  sync.RWMutex
-	db                  *db.ChainDB
-	latest              atomic.Pointer[block.Block] // Atomic pointer for latest block
-	state               *state.State
-	stakingManager      *staking.StakingManager
-	txPool              *TxPool
-	pow                 *pow.PoW
-	checkpoints         *checkpoints.Checkpoints
-	checkpointManager   *checkpoints.Checkpoints
-	statePath           string
-	rewardDistributor   *reward.RewardDistributor
-	governance          interface{}
-	stateMu             sync.Mutex
-	minConfirmations    uint64
-	monitor             *monitoring.SupplyMonitor
-	blockSubmitMu       sync.Mutex
-	rotatingKingManager reward.RotatingKingManager
-	syncing             atomic.Bool
-	syncTarget          atomic.Uint64
-	syncCooldownUntilNs atomic.Int64
-	syncMu              sync.RWMutex
-	p2pBroadcaster      rotatingking.P2PBroadcaster
-	logger              *logrus.Logger
-	blockByNumberCache  *lru.Cache // Cache for number → block (hot path only)
-	blockByHashCache    *lru.Cache // Cache for hash → block (hot path only)
-	cacheMu             sync.RWMutex
-	lastCanonicalHeight atomic.Uint64 // Cached latest height for fast access
-	reorgDepth          atomic.Uint64 // Maximum reorg depth allowed
-	ancientStore        *AncientStore // For pruning old blocks
-	finalizedHeight     atomic.Uint64 // Height considered finalized (no reorg beyond this)
-	orphanMu            sync.RWMutex
-	orphanBlocks        map[common.Hash]*orphanBlock
+	mu                   sync.RWMutex
+	db                   *db.ChainDB
+	latest               atomic.Pointer[block.Block] // Atomic pointer for latest block
+	state                *state.State
+	stakingManager       *staking.StakingManager
+	txPool               *TxPool
+	pow                  *pow.PoW
+	checkpoints          *checkpoints.Checkpoints
+	checkpointManager    *checkpoints.Checkpoints
+	statePath            string
+	rewardDistributor    *reward.RewardDistributor
+	governance           interface{}
+	stateMu              sync.Mutex
+	minConfirmations     uint64
+	monitor              *monitoring.SupplyMonitor
+	blockSubmitMu        sync.Mutex
+	rotatingKingManager  reward.RotatingKingManager
+	syncing              atomic.Bool
+	syncTarget           atomic.Uint64
+	syncCooldownUntilNs  atomic.Int64
+	syncMu               sync.RWMutex
+	p2pBroadcaster       rotatingking.P2PBroadcaster
+	logger               *logrus.Logger
+	blockByNumberCache   *lru.Cache // Cache for number → block (hot path only)
+	blockByHashCache     *lru.Cache // Cache for hash → block (hot path only)
+	cacheMu              sync.RWMutex
+	lastCanonicalHeight  atomic.Uint64 // Cached latest height for fast access
+	reorgDepth           atomic.Uint64 // Maximum reorg depth allowed
+	ancientStore         *AncientStore // For pruning old blocks
+	finalizedHeight      atomic.Uint64 // Height considered finalized (no reorg beyond this)
+	pruneManager         *PruneManager // Background block pruning manager
+	reorgManager         *ReorgManager // Background chain reorganization manager
+	processingReorgBlock atomic.Bool   // Guards internal reorg manager block insertion
+	orphanMu             sync.RWMutex
+	orphanBlocks         map[common.Hash]*orphanBlock
 }
 
 // AncientStore handles storage of ancient (pruned) blocks
@@ -786,6 +789,13 @@ func (bc *Blockchain) Close() error {
 	bc.stateMu.Lock()
 	defer bc.stateMu.Unlock()
 
+	if bc.pruneManager != nil {
+		bc.pruneManager.Stop()
+	}
+	if bc.reorgManager != nil {
+		bc.reorgManager.Stop()
+	}
+
 	// Close rotating king manager
 	if bc.rotatingKingManager != nil {
 		if closer, ok := bc.rotatingKingManager.(interface{ Close() error }); ok {
@@ -801,6 +811,11 @@ func (bc *Blockchain) Close() error {
 	}
 	if bc.state != nil {
 		bc.state.Close()
+	}
+	if bc.db != nil {
+		if err := bc.db.Close(); err != nil {
+			log.Printf("[blockchain] Failed to close chain database: %v", err)
+		}
 	}
 
 	log.Println("Blockchain shut down")

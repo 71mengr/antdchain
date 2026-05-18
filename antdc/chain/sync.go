@@ -21,6 +21,13 @@ import (
 
 // AddBlock adds a new block to the blockchain with proper fork handling
 func (bc *Blockchain) AddBlock(b *block.Block) error {
+	if bc != nil && bc.reorgManager != nil && !bc.processingReorgBlock.Load() {
+		return bc.reorgManager.ProcessNewBlock(b, "local")
+	}
+	return bc.addBlockInternal(b)
+}
+
+func (bc *Blockchain) addBlockInternal(b *block.Block) error {
 	if b == nil || b.Header == nil {
 		return errors.New("nil block or header")
 	}

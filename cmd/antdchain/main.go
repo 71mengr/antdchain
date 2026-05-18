@@ -155,6 +155,71 @@ func (ws *WebServer) handleIndex(w http.ResponseWriter, r *http.Request) {
     `)
 }
 
+var PruneCommands = &cli.Command{
+	Name:  "prune",
+	Usage: "Prune and reorg status commands",
+	Subcommands: []*cli.Command{
+		{
+			Name:  "status",
+			Usage: "Show pruning status",
+			Action: func(c *cli.Context) error {
+				dataDir := c.String("data-dir")
+				if dataDir == "" {
+					dataDir = getDefaultDataDir()
+				}
+				bc, err := chain.NewBlockchainWithConfig(filepath.Join(dataDir, "state"), common.QuantumAddress{}, chain.PruneConfig{Enabled: c.Bool("prune"), Depth: c.Uint64("prune-depth"), Mode: c.String("prune-mode")})
+				if err != nil {
+					return err
+				}
+				defer bc.Close()
+				return json.NewEncoder(os.Stdout).Encode(bc.PruneStatus())
+			},
+		},
+		{
+			Name:  "run",
+			Usage: "Run a manual prune pass",
+			Action: func(c *cli.Context) error {
+				dataDir := c.String("data-dir")
+				if dataDir == "" {
+					dataDir = getDefaultDataDir()
+				}
+				bc, err := chain.NewBlockchainWithConfig(filepath.Join(dataDir, "state"), common.QuantumAddress{}, chain.PruneConfig{Enabled: true, Depth: c.Uint64("prune-depth"), Mode: chain.PruneModeManual})
+				if err != nil {
+					return err
+				}
+				defer bc.Close()
+				if err := bc.PruneNow(); err != nil {
+					return err
+				}
+				return json.NewEncoder(os.Stdout).Encode(bc.PruneStatus())
+			},
+		},
+	},
+}
+
+var ReorgCommands = &cli.Command{
+	Name:  "reorg",
+	Usage: "Reorganization status commands",
+	Subcommands: []*cli.Command{
+		{
+			Name:  "status",
+			Usage: "Show reorganization status",
+			Action: func(c *cli.Context) error {
+				dataDir := c.String("data-dir")
+				if dataDir == "" {
+					dataDir = getDefaultDataDir()
+				}
+				bc, err := chain.NewBlockchainWithConfig(filepath.Join(dataDir, "state"), common.QuantumAddress{}, chain.PruneConfig{Enabled: false})
+				if err != nil {
+					return err
+				}
+				defer bc.Close()
+				return json.NewEncoder(os.Stdout).Encode(bc.ReorgStatus())
+			},
+		},
+	},
+}
+
 var CheckpointCommands = &cli.Command{
 	Name:  "checkpoint",
 	Usage: "Checkpoint management commands",
@@ -411,10 +476,15 @@ func main() {
 			&cli.StringFlag{Name: "rpc-ssl-key", Value: "", Usage: "SSL private key file"},
 			&cli.BoolFlag{Name: "rpc-ssl", Value: false, Usage: "Enable HTTPS for RPC"},
 			&cli.StringFlag{Name: "rpc-host", Value: "0.0.0.0", Usage: "RPC host to bind"},
+			&cli.BoolFlag{Name: "prune", Value: false, Usage: "Enable automatic block pruning"},
+			&cli.Uint64Flag{Name: "prune-depth", Value: chain.DefaultPruneDepth, Usage: "Number of recent blocks to retain when pruning"},
+			&cli.StringFlag{Name: "prune-mode", Value: chain.PruneModeAuto, Usage: "Pruning mode: auto, manual, or disabled"},
 		},
 		Commands: []*cli.Command{
 			king.KingCommands,
 			CheckpointCommands,
+			PruneCommands,
+			ReorgCommands,
 		},
 		Action: runNode,
 	}
@@ -767,7 +837,7 @@ func runNode(c *cli.Context) error {
 	chain.EnsureGenesisBlock(statePath, common.BytesToQuantumAddress(tempWallet.Address().Bytes()))
 
 	// Create blockchain
-	bc, err := chain.NewBlockchain(statePath, common.BytesToQuantumAddress(tempWallet.Address().Bytes()))
+	bc, err := chain.NewBlockchainWithConfig(statePath, common.BytesToQuantumAddress(tempWallet.Address().Bytes()), chain.PruneConfig{Enabled: c.Bool("prune") && c.String("prune-mode") != chain.PruneModeDisabled, Depth: c.Uint64("prune-depth"), Mode: c.String("prune-mode")})
 	if err != nil {
 		logger.Fatal("Blockchain initialization failed:", err)
 	}
