@@ -1146,7 +1146,7 @@ func (n *Node) backfillMissingParents(peerID peer.ID, neededHeight uint64, expec
 			return fmt.Errorf("backfill failed at %d: %w", h, err)
 		}
 
-		if err := n.chain.AddBlock(blk); err != nil {
+		if err := n.addPeerBlock(blk, peerID.String()); err != nil {
 			return fmt.Errorf("failed to add backfill block %d: %w", h, err)
 		}
 
@@ -2522,7 +2522,7 @@ func (n *Node) syncMissingBlocks(peerID peer.ID, targetHeight uint64) error {
 		nextHeight := n.currentHeight() + 1
 		for {
 			if block, ok := fetchedBlocks[nextHeight]; ok {
-				if err := n.chain.AddBlock(block); err != nil {
+				if err := n.addPeerBlock(block, "p2p:sync"); err != nil {
 					if strings.Contains(err.Error(), "already") || strings.Contains(err.Error(), "known") {
 						delete(fetchedBlocks, nextHeight)
 						nextHeight++
@@ -2954,6 +2954,20 @@ func p2pProofQualityHash(b *block.Block) common.Hash {
 	return b.Hash()
 }
 
+type reorgBlockProcessor interface {
+	ProcessRemoteBlock(*block.Block, string) error
+}
+
+func (n *Node) addPeerBlock(blk *block.Block, source string) error {
+	if n != nil && n.chain != nil {
+		if processor, ok := n.chain.(reorgBlockProcessor); ok {
+			return processor.ProcessRemoteBlock(blk, source)
+		}
+		return n.chain.AddBlock(blk)
+	}
+	return errors.New("nil p2p chain")
+}
+
 func (n *Node) processBlock(blk *block.Block) error {
 	if blk == nil || blk.Header == nil {
 		return errors.New("nil block or header")
@@ -2993,7 +3007,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 			return err
 		}
 
-		err := n.chain.AddBlock(blk)
+		err := n.addPeerBlock(blk, "p2p:gossip")
 
 		if err == nil {
 			n.logger.Infof("Added block %d via gossip (direct extension)", num)
@@ -3065,7 +3079,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 
 		n.logger.Warnf("Same-height fork at height %d (ours: %s, theirs: %s); comparing %d known mined candidates before chain fork-choice",
 			num, existing.Hash().String()[:8], hash.String()[:8], n.minedBlockCandidateCount(num))
-		if err := n.chain.AddBlock(blk); err != nil {
+		if err := n.addPeerBlock(blk, "p2p:gossip-fork"); err != nil {
 			n.rememberOrphanBlock(blk, fmt.Sprintf("selected fork rejected: %v", err))
 			return fmt.Errorf("fork block rejected at height %d: %w", num, err)
 		}
@@ -3092,7 +3106,7 @@ func (n *Node) processBlock(blk *block.Block) error {
 		if err := n.validateMinedBlockProposal(blk); err != nil {
 			return err
 		}
-		err := n.chain.AddBlock(blk)
+		err := n.addPeerBlock(blk, "p2p:sync-gossip")
 		if err != nil {
 			if strings.Contains(err.Error(), "already") ||
 				strings.Contains(err.Error(), "known") {
