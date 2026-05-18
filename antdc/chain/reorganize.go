@@ -172,6 +172,18 @@ func (rm *ReorgManager) ProcessNewBlock(blk *block.Block, fromPeer string) error
 		return nil
 	}
 	
+	// Check if we already have a different canonical block at this height.
+	// This is the classic same-height mining race: two miners found distinct
+	// blocks for the same parent/height. Resolve it immediately by comparing
+	// cumulative work and only reorg when the candidate branch has more work.
+	existingBlock, err := rm.chain.GetBlock(height)
+	if err == nil && existingBlock != nil && existingBlock.Hash() != hash {
+		rm.logger.Warnf("�� FORK DETECTED at height %d: existing=%s new=%s",
+			height, existingBlock.Hash().String()[:12], hash.String()[:12])
+
+		return rm.handleSameHeightFork(blk, existingBlock, height)
+	}
+
 	// Check if block connects to current tip
 	currentTip := rm.chain.CurrentTip()
 	if blk.Header.ParentHash == currentTip {
@@ -285,6 +297,82 @@ func (rm *ReorgManager) handlePotentialFork(blk *block.Block, parent *block.Bloc
 	rm.activeForks[forkHeight] = fork
 	rm.mu.Unlock()
 	
+	return nil
+}
+
+// handleSameHeightFork resolves two different blocks competing for the same canonical height.
+func (rm *ReorgManager) handleSameHeightFork(candidateBlock, existingBlock *block.Block, height uint64) error {
+	if height == 0 {
+		rm.logger.Warn("Ignoring same-height fork at genesis height")
+		return nil
+	}
+
+	parent, err := rm.chain.GetBlockByHash(candidateBlock.Header.ParentHash)
+	if err != nil || parent == nil {
+		rm.logger.Warnf("Same-height fork candidate %s is orphaned; missing parent %s",
+			candidateBlock.Hash().String()[:12], candidateBlock.Header.ParentHash.String()[:12])
+		rm.addOrphanBlock(candidateBlock, "same-height-fork")
+		return nil
+	}
+
+	currentTipHash := rm.chain.CurrentTip()
+	currentTipBlock, err := rm.chain.GetBlockByHash(currentTipHash)
+	if err != nil || currentTipBlock == nil {
+		return fmt.Errorf("failed to load current tip %s: %w", currentTipHash.String()[:12], err)
+	}
+
+	forkHeight, err := rm.findForkPoint(parent, currentTipBlock)
+	if err != nil {
+		rm.logger.Warnf("Failed to find same-height fork ancestor: %v", err)
+		rm.addOrphanBlock(candidateBlock, "same-height-fork")
+		return nil
+	}
+
+	candidateChain, err := rm.buildCandidateChain(candidateBlock, forkHeight)
+	if err != nil {
+		rm.logger.Warnf("Failed to build same-height candidate chain: %v", err)
+		return nil
+	}
+
+	activeChain, err := rm.buildActiveChain(currentTipBlock, forkHeight)
+	if err != nil {
+		rm.logger.Warnf("Failed to build same-height active chain: %v", err)
+		return nil
+	}
+
+	fork := &ChainFork{
+		ForkHeight:     forkHeight,
+		ActiveChain:    activeChain,
+		CandidateChain: candidateChain,
+		ActiveWork:     rm.calculateChainWork(activeChain),
+		CandidateWork:  rm.calculateChainWork(candidateChain),
+		DetectedAt:     time.Now(),
+	}
+
+	if baseWork, err := rm.chain.GetCumulativeWork(forkHeight); err == nil {
+		fork.ActiveWork = new(big.Int).Add(baseWork, fork.ActiveWork)
+		fork.CandidateWork = new(big.Int).Add(new(big.Int).Set(baseWork), fork.CandidateWork)
+	} else {
+		rm.logger.Debugf("Failed to load base cumulative work at fork height %d: %v", forkHeight, err)
+	}
+
+	rm.logger.Warnf("Same-height fork work comparison at height %d: active=%s candidate=%s existing=%s candidate=%s",
+		height, fork.ActiveWork.String(), fork.CandidateWork.String(),
+		existingBlock.Hash().String()[:12], candidateBlock.Hash().String()[:12])
+
+	if fork.CandidateWork.Cmp(fork.ActiveWork) > 0 {
+		rm.logger.Warnf("⛓️ SAME-HEIGHT REORGANIZATION NEEDED: candidate work %s > active work %s",
+			fork.CandidateWork.String(), fork.ActiveWork.String())
+		return rm.performReorg(fork)
+	}
+
+	rm.logger.Infof("Keeping existing chain at height %d: candidate work %s <= active work %s",
+		height, fork.CandidateWork.String(), fork.ActiveWork.String())
+
+	rm.mu.Lock()
+	rm.activeForks[forkHeight] = fork
+	rm.mu.Unlock()
+
 	return nil
 }
 
@@ -619,7 +707,7 @@ func (rm *ReorgManager) GetReorgStatus() map[string]interface{} {
 		"max_reorg_depth_observed": rm.maxReorgDepthObserved,
 		"orphan_pool_size":         len(rm.orphanPool),
 		"active_forks":             len(rm.activeForks),
-		"max_reorg_depth":          MaxReorgDepth,
+		"max_reorg_depth":          ManagerMaxReorgDepth,
 	}
 	
 	return status
