@@ -246,6 +246,13 @@ func (bc *Blockchain) ReorgStatus() map[string]interface{} {
 	}
 	return bc.reorgManager.GetReorgStatus()
 }
+func (bc *Blockchain) ProcessRemoteBlock(blk *block.Block, fromPeer string) error {
+	if bc != nil && bc.reorgManager != nil && !bc.processingReorgBlock.Load() {
+		return bc.reorgManager.ProcessNewBlock(blk, fromPeer)
+	}
+	return bc.addBlockInternal(blk)
+}
+
 func (bc *Blockchain) PruneNow() error {
 	if bc == nil || bc.pruneManager == nil {
 		return fmt.Errorf("prune manager is not enabled")
