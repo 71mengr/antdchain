@@ -18,7 +18,7 @@ import (
 	"github.com/antdaza/antdchain/antdc/reward"
 	"github.com/antdaza/antdchain/antdc/rotatingking"
 	"github.com/antdaza/antdchain/antdc/tx"
-        "github.com/antdaza/antdchain/common"
+	"github.com/antdaza/antdchain/common"
 
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
@@ -66,22 +66,25 @@ const (
 	MaxBlocksPerPeerPerSec = 50
 	MaxTxPerPeerPerSecond  = 100
 	MaxTxPerPeerBurst      = 500
-	
+
 	// FASTER DISCOVERY
-	DefaultMaxPeers        = 100
-	MaxDirectPushBytes     = 4 << 20
-	MaxConfigStreamBytes   = 64 << 10
-	MaxSyncResponseBytes   = 16 << 20
-	MaxConnsPerPeer        = 3
-	DBSyncPeerTimeout      = 15 * time.Second
+	DefaultMaxPeers          = 100
+	MaxDirectPushBytes       = 4 << 20
+	MaxBootstrapPushPeers    = 16
+	MaxRelayPushPeers        = 64
+	BlockSeenTTL             = 5 * time.Minute
+	MaxConfigStreamBytes     = 64 << 10
+	MaxSyncResponseBytes     = 16 << 20
+	MaxConnsPerPeer          = 3
+	DBSyncPeerTimeout        = 15 * time.Second
 	DBSyncMaxPeersPerAttempt = 3
-	DefaultNetworkNamespace = "antdchain"
-	
+	DefaultNetworkNamespace  = "antdchain"
+
 	// ULTRA-FAST SYNC INTERVALS
-	FastSyncCheckInterval   = 2 * time.Second  
-	PeriodicSyncInterval    = 15 * time.Second
-	ConfigCheckInterval     = 10 * time.Second
-	
+	FastSyncCheckInterval = 2 * time.Second
+	PeriodicSyncInterval  = 15 * time.Second
+	ConfigCheckInterval   = 10 * time.Second
+
 	// BLOCK ANNOUNCEMENT PRIORITY
 	MinedBlockAnnouncePriority = true // Direct push immediately
 	BlockAnnounceRetries       = 3    // Retry failed announces
@@ -184,7 +187,7 @@ type Config struct {
 	MaxPeers          int           // Maximum number of connected peers
 	MinPeers          int           // Minimum peers before discovery
 	ConnectionTimeout time.Duration // Timeout for connections
-	NetworkNamespace string        // Namespace for protocols, topics, and discovery
+	NetworkNamespace  string        // Namespace for protocols, topics, and discovery
 	LogLevel          string        // Log level
 	LogOutput         io.Writer     // Optional writer for logs
 	Context           context.Context
@@ -201,7 +204,7 @@ func DefaultConfig() Config {
 		MaxPeers:          DefaultMaxPeers,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
-		NetworkNamespace: DefaultNetworkNamespace,
+		NetworkNamespace:  DefaultNetworkNamespace,
 		LogLevel:          defaultP2PLogLevel(),
 	}
 }
@@ -215,7 +218,6 @@ func defaultP2PLogLevel() string {
 
 	return "error"
 }
-
 
 func normalizeNetworkNamespace(namespace string) string {
 	namespace = strings.TrimSpace(namespace)
@@ -257,18 +259,18 @@ type orphanBlockEntry struct {
 }
 
 type Node struct {
-	host      host.Host
-	pubsub    *pubsub.PubSub
-	topic     *pubsub.Topic
-	sub       *pubsub.Subscription
-	chain     Chain
-	logger    *logrus.Logger
-	mu        sync.RWMutex
-	publishMu sync.RWMutex
-	processMu sync.Mutex
-	syncMu    sync.Mutex
-	orphanPool   map[common.Hash]orphanBlockEntry
-	orphanPoolMu sync.Mutex
+	host           host.Host
+	pubsub         *pubsub.PubSub
+	topic          *pubsub.Topic
+	sub            *pubsub.Subscription
+	chain          Chain
+	logger         *logrus.Logger
+	mu             sync.RWMutex
+	publishMu      sync.RWMutex
+	processMu      sync.Mutex
+	syncMu         sync.Mutex
+	orphanPool     map[common.Hash]orphanBlockEntry
+	orphanPoolMu   sync.Mutex
 	synced         bool
 	syncHeight     uint64
 	ctx            context.Context
@@ -280,9 +282,13 @@ type Node struct {
 	blockPerPeerMu sync.RWMutex
 	cfg            Config
 
-	knownTxs      map[common.Hash]time.Time
-	knownTxsMu    sync.RWMutex
-	knownTxsLimit int
+	knownTxs       map[common.Hash]time.Time
+	knownTxsMu     sync.RWMutex
+	knownTxsLimit  int
+	knownBlocks    map[common.Hash]time.Time
+	knownBlocksMu  sync.RWMutex
+	knownBlocksCap int
+	bootstrapPeers map[peer.ID]struct{}
 
 	lastSyncTime time.Time
 	syncAttempts int
@@ -395,6 +401,24 @@ func parseBootstrapPeers(addrs []string, logger *logrus.Logger) []peer.AddrInfo 
 	return peers
 }
 
+func bootstrapPeerSet(addrs []string, logger *logrus.Logger) map[peer.ID]struct{} {
+	peers := parseBootstrapPeers(addrs, logger)
+	set := make(map[peer.ID]struct{}, len(peers))
+	for _, pi := range peers {
+		set[pi.ID] = struct{}{}
+	}
+	return set
+}
+
+func (n *Node) isBootstrapPeer(pid peer.ID) bool {
+	if n == nil || pid == "" {
+		return false
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	_, ok := n.bootstrapPeers[pid]
+	return ok
+}
 
 func configuredExternalIP() string {
 	for _, envName := range []string{"ANTD_EXTERNAL_IP", "ANTDCHAIN_EXTERNAL_IP"} {
@@ -613,11 +637,17 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 	msg := make([]byte, 1+len(data))
 	msg[0] = msgTypeBlock
 	copy(msg[1:], data)
+	n.markBlockSeen(b.Hash())
+
+	// Send to bootstrap peers before regular GossipSub so seeds can fan the
+	// block out to their attached peers immediately instead of waiting for mesh
+	// scoring/heartbeat convergence.
+	go n.directPushBootstrapBlock(b, msg)
 
 	// OPTIMIZATION: Publish with shorter timeout for faster propagation
 	publishCtx, cancel := context.WithTimeout(n.ctx, 2*time.Second) // Reduced from 5s
 	defer cancel()
-	
+
 	if err := n.topic.Publish(publishCtx, msg); err != nil {
 		n.logger.Warnf("GossipSub publish failed: %v", err)
 		// Don't fail - still try direct push
@@ -638,7 +668,7 @@ func (n *Node) BroadcastBlock(b *block.Block) error {
 
 func (n *Node) directPushBlockWithRetry(b *block.Block, msg []byte, retries int) {
 	for i := 0; i < retries; i++ {
-		count := n.directPushMessage(msg, 50) // Push to up to 50 peers immediately
+		count := n.directPushMessage(msg, 50, nil) // Push to up to 50 peers immediately
 		if count > 0 {
 			n.logger.Debugf("Direct-pushed block %d to %d peers (attempt %d/%d)",
 				b.Header.Number.Uint64(), count, i+1, retries)
@@ -650,9 +680,37 @@ func (n *Node) directPushBlockWithRetry(b *block.Block, msg []byte, retries int)
 	}
 }
 
+func (n *Node) directPushBootstrapBlock(b *block.Block, msg []byte) {
+	exclude := make(map[peer.ID]struct{})
+	for _, pid := range n.host.Network().Peers() {
+		if !n.isBootstrapPeer(pid) {
+			exclude[pid] = struct{}{}
+		}
+	}
+	count := n.directPushMessage(msg, MaxBootstrapPushPeers, exclude)
+	if count > 0 {
+		n.logger.Debugf("Direct-pushed block %d to %d priority/bootstrap peers", b.Header.Number.Uint64(), count)
+	}
+}
+
+func (n *Node) relayBlockToPeers(b *block.Block, msg []byte, from peer.ID) {
+	if b == nil || b.Header == nil {
+		return
+	}
+	exclude := map[peer.ID]struct{}{}
+	if from != "" {
+		exclude[from] = struct{}{}
+	}
+	count := n.directPushMessage(msg, MaxRelayPushPeers, exclude)
+	if count > 0 {
+		n.logger.Debugf("Relayed block %d to %d peers after receiving from %s",
+			b.Header.Number.Uint64(), count, from.String()[:8])
+	}
+}
+
 // directPushBlock sends block directly to recent peers.
 func (n *Node) directPushBlock(b *block.Block, msg []byte) {
-	count := n.directPushMessage(msg, 15)
+	count := n.directPushMessage(msg, 15, nil)
 	if count > 0 {
 		n.logger.Debugf("Direct-pushed block %d to %d peers", b.Header.Number.Uint64(), count)
 	}
@@ -662,56 +720,56 @@ func (n *Node) directPushBlock(b *block.Block, msg []byte) {
 // GossipSub. This makes wallet-originated transactions visible to peers even
 // when the GossipSub mesh has not fully formed yet.
 func (n *Node) directPushTx(t *tx.Tx, msg []byte) {
-	count := n.directPushMessage(msg, 15)
+	count := n.directPushMessage(msg, 15, nil)
 	if count > 0 {
 		n.logger.Debugf("Direct-pushed tx %s to %d peers", t.Hash().Hex()[:10], count)
 	}
 }
 
-func (n *Node) directPushMessage(msg []byte, limit int) int {
+func (n *Node) directPushMessage(msg []byte, limit int, exclude map[peer.ID]struct{}) int {
 	if n == nil || n.host == nil || n.ctx == nil {
 		return 0
 	}
-	
-	peers := n.host.Network().Peers()
+
+	peers := n.orderedDirectPushPeers(exclude)
 	if len(peers) == 0 {
 		return 0
 	}
-	
+
 	// Limit peers to push to
 	if limit > len(peers) {
 		limit = len(peers)
 	}
-	
+
 	// Use worker pool for parallel direct pushes
 	type pushResult struct {
 		success bool
 	}
-	
+
 	results := make(chan pushResult, limit)
 	var wg sync.WaitGroup
-	
+
 	for i := 0; i < limit && i < len(peers); i++ {
 		pid := peers[i]
 		if pid == n.host.ID() {
 			continue
 		}
-		
+
 		wg.Add(1)
 		go func(p peer.ID) {
 			defer wg.Done()
-			
+
 			// Shorter timeout for faster propagation
 			ctx, cancel := context.WithTimeout(n.ctx, 1*time.Second) // Reduced from 3s
 			defer cancel()
-			
+
 			s, err := n.host.NewStream(ctx, p, n.protocolID("direct"))
 			if err != nil {
 				results <- pushResult{success: false}
 				return
 			}
 			defer s.Close()
-			
+
 			if _, err := s.Write(msg); err != nil {
 				results <- pushResult{success: false}
 				return
@@ -719,18 +777,51 @@ func (n *Node) directPushMessage(msg []byte, limit int) int {
 			results <- pushResult{success: true}
 		}(pid)
 	}
-	
+
 	// Wait for all pushes to complete
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
-	
+
 	count := 0
-	for range results {
-		count++
+	for result := range results {
+		if result.success {
+			count++
+		}
 	}
 	return count
+}
+
+func (n *Node) orderedDirectPushPeers(exclude map[peer.ID]struct{}) []peer.ID {
+	peers := n.host.Network().Peers()
+	if len(peers) == 0 {
+		return nil
+	}
+	ordered := make([]peer.ID, 0, len(peers))
+	appendPeer := func(pid peer.ID) {
+		if pid == n.host.ID() {
+			return
+		}
+		if _, skip := exclude[pid]; skip {
+			return
+		}
+		for _, existing := range ordered {
+			if existing == pid {
+				return
+			}
+		}
+		ordered = append(ordered, pid)
+	}
+	for _, pid := range peers {
+		if n.isBootstrapPeer(pid) {
+			appendPeer(pid)
+		}
+	}
+	for _, pid := range peers {
+		appendPeer(pid)
+	}
+	return ordered
 }
 
 // BroadcastTx — secure, efficient, spam-resistant transaction broadcast
@@ -837,15 +928,48 @@ func (n *Node) BroadcastTx(t *tx.Tx) error {
 
 // Add cleanup function
 func (n *Node) cleanupKnownTxs() {
-    n.knownTxsMu.Lock()
-    defer n.knownTxsMu.Unlock()
-    
-    cutoff := time.Now().Add(-5 * time.Minute)
-    for hash, timestamp := range n.knownTxs {
-        if timestamp.Before(cutoff) {
-            delete(n.knownTxs, hash)
-        }
-    }
+	n.knownTxsMu.Lock()
+	defer n.knownTxsMu.Unlock()
+
+	cutoff := time.Now().Add(-5 * time.Minute)
+	for hash, timestamp := range n.knownTxs {
+		if timestamp.Before(cutoff) {
+			delete(n.knownTxs, hash)
+		}
+	}
+}
+
+func (n *Node) markBlockSeen(hash common.Hash) bool {
+	if n == nil {
+		return false
+	}
+	n.knownBlocksMu.Lock()
+	defer n.knownBlocksMu.Unlock()
+
+	if n.knownBlocks == nil {
+		n.knownBlocks = make(map[common.Hash]time.Time)
+	}
+	now := time.Now()
+	if seenAt, ok := n.knownBlocks[hash]; ok && now.Sub(seenAt) < BlockSeenTTL {
+		return false
+	}
+	n.knownBlocks[hash] = now
+
+	if n.knownBlocksCap <= 0 {
+		n.knownBlocksCap = 20000
+	}
+	if len(n.knownBlocks) > n.knownBlocksCap {
+		cutoff := now.Add(-BlockSeenTTL)
+		for knownHash, seenAt := range n.knownBlocks {
+			if seenAt.Before(cutoff) || len(n.knownBlocks) > n.knownBlocksCap {
+				delete(n.knownBlocks, knownHash)
+			}
+			if len(n.knownBlocks) <= n.knownBlocksCap {
+				break
+			}
+		}
+	}
+	return true
 }
 
 // BroadcastTxForce publishes a transaction even if it was recently broadcast.
@@ -966,6 +1090,10 @@ func (n *Node) handleMessages() {
 				blk.Header.Number.Uint64(), blk.Hash().String()[:12], msg.GetFrom().String()[:8])
 
 			n.rememberMinedBlockCandidate(&blk, msg.GetFrom().String())
+			if n.markBlockSeen(blk.Hash()) {
+				relayMsg := append([]byte(nil), msg.Data...)
+				go n.relayBlockToPeers(&blk, relayMsg, msg.GetFrom())
+			}
 
 			// Immediate sync trigger for missed blocks
 			currentHeight := n.currentHeight()
@@ -1047,11 +1175,11 @@ func (n *Node) triggerSyncWithPeers() {
 func (n *Node) GetPeerHeight(pid peer.ID) (uint64, error) {
 	n.syncMu.Lock()
 	defer n.syncMu.Unlock()
-	
+
 	// Shorter timeout for faster checks
 	ctx, cancel := context.WithTimeout(n.ctx, 3*time.Second) // Reduced from 10s
 	defer cancel()
-	
+
 	s, err := n.host.NewStream(ctx, pid, n.protocolID("sync"))
 	if err != nil {
 		return 0, fmt.Errorf("failed to open stream to %s: %w", pid, err)
@@ -1060,7 +1188,7 @@ func (n *Node) GetPeerHeight(pid peer.ID) (uint64, error) {
 
 	// Set shorter deadline
 	s.SetDeadline(time.Now().Add(3 * time.Second))
-	
+
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 	var req uint64 = math.MaxUint64
 	if err := binary.Write(rw, binary.BigEndian, req); err != nil {
@@ -1074,7 +1202,7 @@ func (n *Node) GetPeerHeight(pid peer.ID) (uint64, error) {
 	}
 
 	localHeight := n.currentHeight()
-	
+
 	// Only log if significant difference
 	if height > localHeight {
 		n.logger.Debugf("Peer %s ahead: %d (we're at %d)", pid.String()[:12], height, localHeight)
@@ -1424,6 +1552,10 @@ func (n *Node) handleDirectPush(s network.Stream) {
 		}
 
 		n.rememberMinedBlockCandidate(&blk, remotePeer.String())
+		if n.markBlockSeen(blk.Hash()) {
+			relayMsg := append([]byte(nil), data...)
+			go n.relayBlockToPeers(&blk, relayMsg, remotePeer)
+		}
 
 		go func() {
 			if err := n.processBlock(&blk); err != nil && !strings.Contains(err.Error(), "already known") {
@@ -1666,7 +1798,7 @@ func NewNode(bc Chain, port int, bootstrap []string) (*Node, error) {
 		MaxPeers:          DefaultMaxPeers,
 		MinPeers:          5,
 		ConnectionTimeout: 30 * time.Second,
-		NetworkNamespace: DefaultNetworkNamespace,
+		NetworkNamespace:  DefaultNetworkNamespace,
 		LogLevel:          defaultP2PLogLevel(),
 	}
 
@@ -1794,23 +1926,26 @@ func NewNodeWithConfig(bc Chain, cfg Config) (*Node, error) {
 	// direct peer connectivity is established before any longer discovery/bootstrap
 	// work can delay startup block sync.
 	node := &Node{
-		host:            h,
-		dht:             nil,
-		chain:           bc,
-		logger:          logger,
-		ctx:             ctx,
-		cancel:          cancel,
-		txPerPeer:       make(map[peer.ID]*rateLimiter),
-		blockPerPeer:    make(map[peer.ID]*rateLimiter),
-		eventPerPeer:    make(map[peer.ID]*rateLimiter),
-		cfg:             cfg,
-		knownTxs:        make(map[common.Hash]time.Time),
-		knownTxsLimit:   10000,
+		host:                 h,
+		dht:                  nil,
+		chain:                bc,
+		logger:               logger,
+		ctx:                  ctx,
+		cancel:               cancel,
+		txPerPeer:            make(map[peer.ID]*rateLimiter),
+		blockPerPeer:         make(map[peer.ID]*rateLimiter),
+		eventPerPeer:         make(map[peer.ID]*rateLimiter),
+		cfg:                  cfg,
+		knownTxs:             make(map[common.Hash]time.Time),
+		knownTxsLimit:        10000,
+		knownBlocks:          make(map[common.Hash]time.Time),
+		knownBlocksCap:       20000,
+		bootstrapPeers:       bootstrapPeerSet(cfg.BootstrapPeers, logger),
 		minedBlockCandidates: make(map[uint64]map[common.Hash]minedBlockCandidate),
-		orphanPool:      make(map[common.Hash]orphanBlockEntry),
-		dbSyncRequests:  make(map[string]*DBSyncRequest),
-		dbSyncResponses: make(map[string]*DBSyncResponse),
-		dbSyncPeers:     make(map[string]*DBSyncStatus),
+		orphanPool:           make(map[common.Hash]orphanBlockEntry),
+		dbSyncRequests:       make(map[string]*DBSyncRequest),
+		dbSyncResponses:      make(map[string]*DBSyncResponse),
+		dbSyncPeers:          make(map[string]*DBSyncStatus),
 		dbSyncMetrics: &DBSyncMetrics{
 			SyncAttempts:    0,
 			SuccessfulSyncs: 0,
@@ -2290,7 +2425,7 @@ func (n *Node) PeriodicSyncCheck() {
 			// Use WaitGroup for parallel checks
 			var mu sync.Mutex
 			var wg sync.WaitGroup
-			
+
 			for _, pid := range peers {
 				wg.Add(1)
 				go func(p peer.ID) {
@@ -2317,7 +2452,6 @@ func (n *Node) PeriodicSyncCheck() {
 		}
 	}
 }
-
 
 func (n *Node) triggerSync() {
 	peers := n.Peers()
@@ -3545,7 +3679,7 @@ func (n *Node) FastSyncCheck() {
 				height uint64
 				err    error
 			}
-			
+
 			results := make(chan peerHeight, len(peers))
 			for _, pid := range peers {
 				go func(p peer.ID) {
@@ -3558,7 +3692,7 @@ func (n *Node) FastSyncCheck() {
 			var bestPeer peer.ID
 			var bestHeight uint64
 			timeout := time.After(2 * time.Second)
-			
+
 			for i := 0; i < len(peers); i++ {
 				select {
 				case result := <-results:
@@ -3578,7 +3712,7 @@ func (n *Node) FastSyncCheck() {
 				if localHeight < 100 {
 					threshold = 1 // Any gap triggers sync for new nodes
 				}
-				
+
 				if gap > threshold {
 					n.logger.Warnf("FAST SYNC: Behind peer %s by %d blocks (threshold=%d)",
 						bestPeer.String()[:12], gap, threshold)
@@ -3695,20 +3829,20 @@ func (n *Node) recordSyncAttempt(pid peer.ID) {
 
 func (n *Node) forceInitialSync() {
 	n.logger.Warn("�� FORCE INITIAL FAST SYNC: Finding best peer")
-	
+
 	// Get all peers in parallel
 	peers := n.Peers()
 	if len(peers) == 0 {
 		n.logger.Warn("No peers available for initial sync")
 		return
 	}
-	
+
 	type peerInfo struct {
 		pid    peer.ID
 		height uint64
 		err    error
 	}
-	
+
 	results := make(chan peerInfo, len(peers))
 	for _, pid := range peers {
 		go func(p peer.ID) {
@@ -3716,10 +3850,10 @@ func (n *Node) forceInitialSync() {
 			results <- peerInfo{pid: p, height: h, err: err}
 		}(pid)
 	}
-	
+
 	var bestPeer peer.ID
 	var bestHeight uint64
-	
+
 	timeout := time.After(3 * time.Second)
 	for i := 0; i < len(peers); i++ {
 		select {
@@ -3732,21 +3866,21 @@ func (n *Node) forceInitialSync() {
 			break
 		}
 	}
-	
+
 	if bestHeight == 0 {
 		n.logger.Warn("No peers with height > 0 found")
 		return
 	}
-	
+
 	localHeight := n.currentHeight()
 	if bestHeight <= localHeight {
 		n.logger.Infof("Already at or ahead of best peer: %d vs %d", localHeight, bestHeight)
 		return
 	}
-	
+
 	n.logger.Warnf("�� FAST INITIAL SYNC: %d → %d with peer %s",
 		localHeight, bestHeight, bestPeer.String()[:12])
-	
+
 	// Direct sync without goroutine - run immediately
 	n.syncIfBehind(bestPeer)
 }
@@ -3956,7 +4090,7 @@ func (n *Node) processDBSyncRequest(req *DBSyncRequest, requester peer.ID) {
 		LatestBlock:  n.currentHeight(),
 		PeerID:       n.host.ID().String(),
 		TargetPeerID: req.PeerID,
-		Status:      "success", // Default status
+		Status:       "success", // Default status
 	}
 
 	// Validate request range
@@ -3993,7 +4127,7 @@ func (n *Node) processDBSyncRequest(req *DBSyncRequest, requester peer.ID) {
 				config := configManager.GetConfig()
 				response.Config = &config
 			} else if addrManager, ok := mgr.(interface {
-			    GetKingAddresses() []common.QuantumAddress
+				GetKingAddresses() []common.QuantumAddress
 			}); ok {
 				// Fallback: create basic config from addresses
 				addresses := addrManager.GetKingAddresses()
@@ -4863,7 +4997,7 @@ func (n *Node) handleConfigSyncRequest(req *DBSyncRequest, requester peer.ID) {
 	}); ok {
 		config = configManager.GetConfig()
 	} else if addrManager, ok := mgr.(interface {
-	GetKingAddresses() []common.QuantumAddress
+		GetKingAddresses() []common.QuantumAddress
 	}); ok {
 		addresses := addrManager.GetKingAddresses()
 		config = rotatingking.RotatingKingConfig{
@@ -6492,24 +6626,24 @@ func (n *Node) BroadcastRotation(event *rotatingking.KingRotationBroadcast) erro
 }
 
 func (n *Node) isImportantAddress(addr common.QuantumAddress) bool {
-    // Pre-parse important addresses
-    mainKing, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
-    if err != nil {
-        // Fallback to zero address if parsing fails (should never happen with valid string)
-        mainKing = common.QuantumAddress{}
-    }
+	// Pre-parse important addresses
+	mainKing, err := common.ParseQuantumAddress("0qANA3c85k94LTyTXLGDdEzmLE32b1qhYZF")
+	if err != nil {
+		// Fallback to zero address if parsing fails (should never happen with valid string)
+		mainKing = common.QuantumAddress{}
+	}
 
-    importantAddresses := []common.QuantumAddress{
-        mainKing,
-        // Add other important addresses here
-    }
+	importantAddresses := []common.QuantumAddress{
+		mainKing,
+		// Add other important addresses here
+	}
 
-    for _, important := range importantAddresses {
-        if addr == important {
-            return true
-        }
-    }
-    return false
+	for _, important := range importantAddresses {
+		if addr == important {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *Node) addressInList(addr common.QuantumAddress, list []common.QuantumAddress) bool {
