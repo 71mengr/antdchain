@@ -1157,10 +1157,13 @@ func (bc *Blockchain) revertToHeight(height uint64) error {
 
 	stateRevertCounter.Inc()
 
-	// Revert state by replaying blocks from genesis.
-	// Close the active LevelDB handle before reopening it; on Windows the open
-	// handle owns the database lock and opening a second handle fails with
-	// "The process cannot access the file because it is being used by another process."
+	bc.stateMu.Lock()
+	defer bc.stateMu.Unlock()
+
+	// Revert state by replaying blocks from a clean genesis state.  Reopening the
+	// same LevelDB path without clearing it replays historical blocks on top of
+	// the current tip state, which corrupts rollback roots and can make emergency
+	// reorg restoration reject the original canonical block.
 	if bc.state != nil {
 		if err := bc.state.Close(); err != nil {
 			return fmt.Errorf("failed to close current state: %w", err)
@@ -1171,6 +1174,11 @@ func (bc *Blockchain) revertToHeight(height uint64) error {
 	newState, err := state.NewState(bc.statePath)
 	if err != nil {
 		return fmt.Errorf("failed to create new state: %w", err)
+	}
+
+	if err := bc.initializeRevertState(newState); err != nil {
+		newState.Close()
+		return err
 	}
 
 	if height > 0 {
@@ -1223,6 +1231,47 @@ func (bc *Blockchain) revertToHeight(height uint64) error {
 	}
 
 	blockHeightGauge.Set(float64(height))
+	return nil
+}
+
+
+func (bc *Blockchain) initializeRevertState(st *state.State) error {
+	if st == nil {
+		return errors.New("state is nil")
+	}
+	if err := st.Clear(); err != nil {
+		return fmt.Errorf("failed to clear state database: %w", err)
+	}
+
+	genesisHash, err := bc.db.GetCanonicalHash(0)
+	if err != nil {
+		return fmt.Errorf("failed to get genesis hash: %w", err)
+	}
+	if genesisHash == (common.Hash{}) {
+		return errors.New("missing canonical genesis hash")
+	}
+	genesis, err := bc.db.ReadBlockByHash(genesisHash)
+	if err != nil {
+		return fmt.Errorf("failed to read genesis block: %w", err)
+	}
+	if genesis == nil || genesis.Header == nil {
+		return errors.New("missing genesis block")
+	}
+
+	mainKing, err := common.ParseQuantumAddress(GenesisMainKing)
+	if err != nil {
+		return fmt.Errorf("invalid genesis main king quantum address: %w", err)
+	}
+	mainKingBalance := new(big.Int)
+	if _, ok := mainKingBalance.SetString(GenesisMainKingBalanceStr, 10); !ok {
+		return errors.New("invalid genesis main king balance")
+	}
+	if err := st.AddBalance(mainKing, mainKingBalance); err != nil {
+		return fmt.Errorf("failed to seed genesis balance: %w", err)
+	}
+	if root := st.Root(); root != genesis.Header.Root {
+		return fmt.Errorf("genesis state root mismatch: rebuilt=%s header=%s", root.Hex(), genesis.Header.Root.Hex())
+	}
 	return nil
 }
 

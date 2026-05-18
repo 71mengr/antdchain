@@ -179,6 +179,21 @@ hasher.Write(kv.Value)
 return common.BytesToHash(hasher.Sum(nil))
 }
 
+
+// Clear removes all non-metadata and metadata keys from the state database.
+func (s *State) Clear() error {
+iter := s.db.NewIterator(nil, nil)
+batch := new(leveldb.Batch)
+for iter.Next() {
+batch.Delete(iter.Key())
+}
+iter.Release()
+if err := iter.Error(); err != nil {
+return err
+}
+return s.db.Write(batch, nil)
+}
+
 // Commit computes and persists the latest state root.
 func (s *State) Commit(blockNumber uint64) (common.Hash, error) {
 root := s.Root()
