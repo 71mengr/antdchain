@@ -12,9 +12,11 @@ import (
 )
 
 type sameHeightTestChain struct {
-	canonical map[uint64]*block.Block
-	byHash    map[common.Hash]*block.Block
-	tipHeight uint64
+	canonical        map[uint64]*block.Block
+	byHash           map[common.Hash]*block.Block
+	tipHeight        uint64
+	failDisconnectAt uint64
+	connectCalls     int
 }
 
 func newSameHeightTestChain(t *testing.T, tip *block.Block) *sameHeightTestChain {
@@ -111,6 +113,7 @@ func (c *sameHeightTestChain) AddBlock(blk *block.Block) error {
 }
 
 func (c *sameHeightTestChain) ConnectBlock(blk *block.Block) error {
+	c.connectCalls++
 	height := blk.Header.Number.Uint64()
 	if height > 0 {
 		parent := c.canonical[height-1]
@@ -127,6 +130,9 @@ func (c *sameHeightTestChain) ConnectBlock(blk *block.Block) error {
 }
 
 func (c *sameHeightTestChain) DisconnectBlock(height uint64) error {
+	if c.failDisconnectAt == height {
+		return fmt.Errorf("forced disconnect failure at height %d", height)
+	}
 	if height == 0 {
 		return fmt.Errorf("cannot disconnect genesis")
 	}
@@ -182,6 +188,38 @@ func TestProcessNewBlockSameHeightForkReorgsToMoreWork(t *testing.T) {
 	}
 	if rm.reorgCount != 1 {
 		t.Fatalf("reorgCount = %d, want 1", rm.reorgCount)
+	}
+}
+
+func TestPerformReorgDoesNotReconnectBlocksThatFailedToDisconnect(t *testing.T) {
+	prefix := testReorgChainPrefix(t, 5)
+	parent := prefix[5]
+	existing := testReorgBlock(t, parent, 6, 1, "miner-1")
+	candidate := testReorgBlock(t, parent, 6, 2, "miner-2")
+	chain := newSameHeightTestChain(t, existing)
+	for height, blk := range prefix {
+		chain.canonical[uint64(height)] = blk
+		chain.byHash[blk.Hash()] = blk
+	}
+	chain.failDisconnectAt = 6
+
+	rm := NewReorgManager(chain, testReorgLogger())
+	fork := &ChainFork{
+		ForkHeight:     5,
+		ActiveChain:    []*block.Block{existing},
+		CandidateChain: []*block.Block{candidate},
+		ActiveWork:     big.NewInt(1),
+		CandidateWork:  big.NewInt(2),
+	}
+
+	if err := rm.performReorg(fork); err == nil {
+		t.Fatal("performReorg() error = nil, want disconnect failure")
+	}
+	if chain.connectCalls != 0 {
+		t.Fatalf("ConnectBlock calls after failed disconnect = %d, want 0", chain.connectCalls)
+	}
+	if got := chain.canonical[6]; got == nil || got.Hash() != existing.Hash() {
+		t.Fatalf("canonical block at height 6 = %v, want existing %s", got, existing.Hash())
 	}
 }
 

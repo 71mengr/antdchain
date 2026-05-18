@@ -1157,38 +1157,39 @@ func (bc *Blockchain) revertToHeight(height uint64) error {
 
 	stateRevertCounter.Inc()
 
-	// Revert state by replaying blocks from genesis
-	// This is simplified - in production you'd want incremental state updates
-	if height == 0 {
-		// Reset state completely
-		newState, err := state.NewState(bc.statePath)
-		if err != nil {
-			return fmt.Errorf("failed to create new state: %w", err)
+	// Revert state by replaying blocks from genesis.
+	// Close the active LevelDB handle before reopening it; on Windows the open
+	// handle owns the database lock and opening a second handle fails with
+	// "The process cannot access the file because it is being used by another process."
+	if bc.state != nil {
+		if err := bc.state.Close(); err != nil {
+			return fmt.Errorf("failed to close current state: %w", err)
 		}
-		bc.state.Close()
-		bc.state = newState
-	} else {
-		// Replay blocks up to target height
-		newState, err := state.NewState(bc.statePath)
-		if err != nil {
-			return fmt.Errorf("failed to create new state: %w", err)
-		}
+		bc.state = nil
+	}
 
+	newState, err := state.NewState(bc.statePath)
+	if err != nil {
+		return fmt.Errorf("failed to create new state: %w", err)
+	}
+
+	if height > 0 {
 		for h := uint64(1); h <= height; h++ {
 			blk, err := bc.getBlockByNumber(h)
 			if err != nil || blk == nil {
+				newState.Close()
 				return fmt.Errorf("failed to get block %d for state replay: %w", h, err)
 			}
 
 			// Execute block on new state
 			if _, err := bc.executeBlockOnState(blk, newState); err != nil {
+				newState.Close()
 				return fmt.Errorf("failed to execute block %d during state replay: %w", h, err)
 			}
 		}
-
-		bc.state.Close()
-		bc.state = newState
 	}
+
+	bc.state = newState
 
 	// Clear caches
 	bc.cacheMu.Lock()
