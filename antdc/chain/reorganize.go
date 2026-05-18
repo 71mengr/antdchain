@@ -176,12 +176,17 @@ func (rm *ReorgManager) ProcessNewBlock(blk *block.Block, fromPeer string) error
 	// This is the classic same-height mining race: two miners found distinct
 	// blocks for the same parent/height. Resolve it immediately by comparing
 	// cumulative work and only reorg when the candidate branch has more work.
-	existingBlock, err := rm.chain.GetBlock(height)
-	if err == nil && existingBlock != nil && existingBlock.Hash() != hash {
-		rm.logger.Warnf("�� FORK DETECTED at height %d: existing=%s new=%s",
-			height, existingBlock.Hash().String()[:12], hash.String()[:12])
+	if rm.chain.HasBlockAtHeight(height) {
+		existingBlock, err := rm.chain.GetBlock(height)
+		if err != nil {
+			return fmt.Errorf("failed to load canonical block at height %d: %w", height, err)
+		}
+		if existingBlock != nil && existingBlock.Hash() != hash {
+			rm.logger.Warnf("�� FORK DETECTED at height %d: existing=%s new=%s",
+				height, existingBlock.Hash().String()[:12], hash.String()[:12])
 
-		return rm.handleSameHeightFork(blk, existingBlock, height)
+			return rm.handleSameHeightFork(blk, existingBlock, height)
+		}
 	}
 
 	// Check if block connects to current tip
@@ -258,14 +263,14 @@ func (rm *ReorgManager) handlePotentialFork(blk *block.Block, parent *block.Bloc
 	}
 	
 	// Build candidate chain
-	candidateChain, err := rm.buildCandidateChain(blk, forkHeight)
+	candidateChain, err := rm.buildChainToFork(blk, forkHeight)
 	if err != nil {
 		rm.logger.Warnf("Failed to build candidate chain: %v", err)
 		return nil
 	}
 	
 	// Build active chain
-	activeChain, err := rm.buildActiveChain(currentTipBlock, forkHeight)
+	activeChain, err := rm.buildChainToFork(currentTipBlock, forkHeight)
 	if err != nil {
 		rm.logger.Warnf("Failed to build active chain: %v", err)
 		return nil
@@ -328,13 +333,13 @@ func (rm *ReorgManager) handleSameHeightFork(candidateBlock, existingBlock *bloc
 		return nil
 	}
 
-	candidateChain, err := rm.buildCandidateChain(candidateBlock, forkHeight)
+	candidateChain, err := rm.buildChainToFork(candidateBlock, forkHeight)
 	if err != nil {
 		rm.logger.Warnf("Failed to build same-height candidate chain: %v", err)
 		return nil
 	}
 
-	activeChain, err := rm.buildActiveChain(currentTipBlock, forkHeight)
+	activeChain, err := rm.buildChainToFork(currentTipBlock, forkHeight)
 	if err != nil {
 		rm.logger.Warnf("Failed to build same-height active chain: %v", err)
 		return nil
@@ -406,26 +411,12 @@ func (rm *ReorgManager) findForkPoint(parent, tip *block.Block) (uint64, error) 
 	return 0, errors.New("no common ancestor found")
 }
 
-// buildCandidateChain builds the chain from fork point to candidate tip
-func (rm *ReorgManager) buildCandidateChain(tip *block.Block, forkHeight uint64) ([]*block.Block, error) {
-	chain := make([]*block.Block, 0)
-	current := tip
-	
-	for current.Header.Number.Uint64() > forkHeight {
-		chain = append([]*block.Block{current}, chain...)
-		
-		parent, err := rm.chain.GetBlockByHash(current.Header.ParentHash)
-		if err != nil {
-			return nil, err
-		}
-		current = parent
+// buildChainToFork builds a chain segment from the fork point to the given tip.
+func (rm *ReorgManager) buildChainToFork(tip *block.Block, forkHeight uint64) ([]*block.Block, error) {
+	if tip == nil || tip.Header == nil {
+		return nil, errors.New("nil chain tip")
 	}
-	
-	return chain, nil
-}
 
-// buildActiveChain builds the chain from fork point to active tip
-func (rm *ReorgManager) buildActiveChain(tip *block.Block, forkHeight uint64) ([]*block.Block, error) {
 	chain := make([]*block.Block, 0)
 	current := tip
 	
@@ -437,6 +428,9 @@ func (rm *ReorgManager) buildActiveChain(tip *block.Block, forkHeight uint64) ([
 			return nil, err
 		}
 		current = parent
+		if current == nil || current.Header == nil {
+			return nil, errors.New("missing parent before fork point")
+		}
 	}
 	
 	return chain, nil
